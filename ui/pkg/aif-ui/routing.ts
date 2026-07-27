@@ -25,6 +25,22 @@ export default [
     meta:      { product: PRODUCT, category: 'apps' }
   },
 
+  // Models page - vLLM recipe catalog (browse)
+  {
+    name:      `c-cluster-${PRODUCT}-${PAGE_TYPES.MODELS}`,
+    path:      `/c/:cluster/${PRODUCT}/${PAGE_TYPES.MODELS}`,
+    component: () => import('./pages/Models.vue'),
+    meta:      { product: PRODUCT, category: 'models' }
+  },
+
+  // Model detail + deploy wizard (id passed via ?id= to allow the "/" in hf ids)
+  {
+    name:      `c-cluster-${PRODUCT}-model-detail`,
+    path:      `/c/:cluster/${PRODUCT}/${PAGE_TYPES.MODELS}/detail`,
+    component: () => import('./pages/ModelDetail.vue'),
+    meta:      { product: PRODUCT, category: 'models' }
+  },
+
 
   // Install flow (step-based wizard)
   {

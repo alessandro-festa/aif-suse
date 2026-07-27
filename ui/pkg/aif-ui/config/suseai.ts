@@ -117,6 +117,7 @@ export const NAVIGATION_ITEMS: NavItem[] = [
 export const PAGE_TYPES = {
   OVERVIEW:     'overview',
   APPS:         'apps',
+  MODELS:       'models',
   INSTALL:      'install',
   MANAGE:       'manage',
   REPOSITORIES: 'repositories',
@@ -150,6 +151,15 @@ export const VIRTUAL_TYPES: VirtualTypeConfig[] = [
     label: 'Apps',
     route: {
       name:   `c-cluster-${PRODUCT}-${PAGE_TYPES.APPS}`,
+      params: { product: PRODUCT, cluster: BLANK_CLUSTER },
+      meta:   { product: PRODUCT }
+    }
+  },
+  {
+    name:  PAGE_TYPES.MODELS,
+    label: 'Models',
+    route: {
+      name:   `c-cluster-${PRODUCT}-${PAGE_TYPES.MODELS}`,
       params: { product: PRODUCT, cluster: BLANK_CLUSTER },
       meta:   { product: PRODUCT }
     }
@@ -196,6 +206,7 @@ export const VIRTUAL_TYPES: VirtualTypeConfig[] = [
 export const NAV_WEIGHTS: Record<string, number> = {
   [PAGE_TYPES.OVERVIEW]:   50,
   [PAGE_TYPES.APPS]:       40,
+  [PAGE_TYPES.MODELS]:     35,
   [PAGE_TYPES.BLUEPRINTS]: 30,
   [PAGE_TYPES.WORKLOADS]:  20,
   [PAGE_TYPES.SETTINGS]:   10,
@@ -203,7 +214,7 @@ export const NAV_WEIGHTS: Record<string, number> = {
 };
 
 // === Basic Types Configuration ===
-export const BASIC_TYPES = [PAGE_TYPES.OVERVIEW, PAGE_TYPES.APPS, PAGE_TYPES.BLUEPRINTS, PAGE_TYPES.WORKLOADS, PAGE_TYPES.SETTINGS, PAGE_TYPES.ABOUT];
+export const BASIC_TYPES = [PAGE_TYPES.OVERVIEW, PAGE_TYPES.APPS, PAGE_TYPES.MODELS, PAGE_TYPES.BLUEPRINTS, PAGE_TYPES.WORKLOADS, PAGE_TYPES.SETTINGS, PAGE_TYPES.ABOUT];
 
 // === Product Metadata ===
 export const PRODUCT_METADATA = {

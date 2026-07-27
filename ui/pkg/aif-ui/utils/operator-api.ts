@@ -83,6 +83,24 @@ export function getCatalog(timeoutMs = 25000): Promise<any> {
     .finally(() => clearTimeout(timer));
 }
 
+// Models catalog (vLLM recipes). Headroom over the operator's outbound fetch budget.
+export function getModels(timeoutMs = 25000): Promise<any> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  return operatorFetch('/api/v1/models', { signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+}
+
+// Verified hardware configurations for one model (resolved on demand by the operator).
+export function getModelConfigs(id: string, timeoutMs = 30000): Promise<any> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  return operatorFetch(`/api/v1/models/configs?id=${ encodeURIComponent(id) }`, { signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+}
+
 export interface ValidateOverride {
   userSecretRef?:  { name: string; key: string } | null;
   tokenSecretRef?: { name: string; key: string } | null;
