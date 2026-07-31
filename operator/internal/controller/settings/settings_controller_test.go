@@ -406,16 +406,16 @@ func TestSettingsController_WiresWellKnownSecretsAndCreatesClusterRepos(t *testi
 		t.Errorf("nvidia-blueprints ClusterRepo must be anonymous, got clientSecret = %q", nvSecret)
 	}
 
-	// In connected mode both NGC repos are anonymous, so the ngc-helm-auth mirror
-	// is unused and must not be created in any consuming namespace. Guards against
-	// an orphan/stale mirror lingering after a connected-mode reconcile.
-	for _, ns := range []string{"cattle-system", "fleet-local", "fleet-default"} {
-		authSec := &corev1.Secret{}
-		err := c.Get(context.Background(), types.NamespacedName{Name: credentials.AuthSecretNvidia, Namespace: ns}, authSec)
-		if err == nil {
-			t.Errorf("expected no %s in namespace %s (connected mode is anonymous)", credentials.AuthSecretNvidia, ns)
-		} else if !apierrors.IsNotFound(err) {
-			t.Errorf("unexpected error checking %s in %s: %v", credentials.AuthSecretNvidia, ns, err)
+	// The bundled catalog references only the two org repos, so there are no gated
+	// team repos to consume ngc-helm-auth — the connected-mode reconcile must NOT
+	// write it in any namespace. Regression guard: if a gated team repo is ever
+	// re-added to the catalog, this expectation (and the dormant-feature tests)
+	// must be revisited.
+	for _, authNS := range []string{"cattle-system", "fleet-local", "fleet-default"} {
+		var nvAuth corev1.Secret
+		err := c.Get(context.Background(), types.NamespacedName{Name: credentials.AuthSecretNvidia, Namespace: authNS}, &nvAuth)
+		if !apierrors.IsNotFound(err) {
+			t.Errorf("expected no ngc-helm-auth in %s (no gated team repos in catalog), got err=%v", authNS, err)
 		}
 	}
 
@@ -536,5 +536,128 @@ func TestSettingsController_NoForceUpdateWhenCredentialsUnchanged(t *testing.T) 
 	got := getClusterRepo(t, c, credentials.ClusterRepoApplicationCollection)
 	if fu, found, _ := unstructured.NestedString(got.Object, "spec", "forceUpdate"); found && fu != "" {
 		t.Errorf("expected no forceUpdate when credentials unchanged, got %q", fu)
+	}
+}
+
+// The bundled catalog references only the two org repos (/nvidia and
+// /nvidia/blueprint), so connected-mode reconcile must provision NO NGC team
+// repos and NO ngc-helm-auth — the team-repo feature is dormant until a team
+// repo is re-added to the catalog. The org and blueprint repos are still created
+// anonymously. Regression guard for the org-only catalog.
+func TestSettingsController_OrgOnlyCatalogProvisionsNoTeamRepos(t *testing.T) {
+	s := newScheme(t)
+	registerClusterRepoTypes(s)
+	const ns = "aif-operator"
+
+	cr := &aiplatformv1alpha1.Settings{
+		ObjectMeta: metav1.ObjectMeta{Name: credentials.SettingsName, Namespace: ns},
+	}
+	nvidia := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvidia", Namespace: ns},
+		Data:       map[string][]byte{"user": []byte("$oauthtoken"), "token": []byte("nvapi-test")},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cr, nvidia).
+		WithStatusSubresource(&aiplatformv1alpha1.Settings{}).Build()
+	r := &settings.SettingsReconciler{Client: c, Scheme: s, OperatorNamespace: ns}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: credentials.SettingsName, Namespace: ns},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// The org and blueprint repos ARE created, anonymously.
+	for _, name := range []string{credentials.ClusterRepoNvidia, credentials.ClusterRepoNvidiaBlueprint} {
+		repo := getClusterRepo(t, c, name)
+		if secret, found, _ := unstructured.NestedString(repo.Object, "spec", "clientSecret", "name"); found && secret != "" {
+			t.Errorf("org repo %s must be anonymous, got clientSecret %q", name, secret)
+		}
+	}
+
+	// No team repos are provisioned (formerly nvidia-omniverse public,
+	// nvidia-cuopt gated — both sourced from repos no longer in the catalog).
+	for _, name := range []string{"nvidia-omniverse", "nvidia-cuopt"} {
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(schema.GroupVersionKind{Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepo"})
+		if err := c.Get(context.Background(), types.NamespacedName{Name: name}, got); !apierrors.IsNotFound(err) {
+			t.Errorf("expected no team repo %s from org-only catalog, got err=%v", name, err)
+		}
+	}
+
+	// No ngc-helm-auth written (no gated repo consumes it).
+	var authSec corev1.Secret
+	if err := c.Get(context.Background(), types.NamespacedName{Name: credentials.AuthSecretNvidia, Namespace: "cattle-system"}, &authSec); !apierrors.IsNotFound(err) {
+		t.Errorf("expected no ngc-helm-auth from org-only catalog, got err=%v", err)
+	}
+}
+
+// A team ClusterRepo whose URL is no longer in the catalog is deleted on
+// reconcile. Seed a bogus marker-labelled repo; it must be pruned.
+func TestSettingsController_PrunesOrphanTeamRepo(t *testing.T) {
+	s := newScheme(t)
+	registerClusterRepoTypes(s)
+	const ns = "aif-operator"
+	cr := &aiplatformv1alpha1.Settings{ObjectMeta: metav1.ObjectMeta{Name: credentials.SettingsName, Namespace: ns}}
+	nvidia := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvidia", Namespace: ns},
+		Data:       map[string][]byte{"user": []byte("$oauthtoken"), "token": []byte("nvapi-test")},
+	}
+	orphan := &unstructured.Unstructured{}
+	orphan.SetGroupVersionKind(schema.GroupVersionKind{Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepo"})
+	orphan.SetName("nvidia-gone-from-catalog")
+	orphan.SetLabels(map[string]string{"ai-factory.suse.com/nvidia-team-repo": "true"})
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cr, nvidia, orphan).
+		WithStatusSubresource(&aiplatformv1alpha1.Settings{}).Build()
+	r := &settings.SettingsReconciler{Client: c, Scheme: s, OperatorNamespace: ns}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: credentials.SettingsName, Namespace: ns},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepo"})
+	err := c.Get(context.Background(), types.NamespacedName{Name: "nvidia-gone-from-catalog"}, got)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("expected orphan team repo pruned, got err=%v", err)
+	}
+}
+
+// Switching to air-gap deletes team repos but PRESERVES ngc-helm-auth
+// (the mirror still consumes it).
+func TestSettingsController_AirGapPrunesTeamReposButKeepsAuth(t *testing.T) {
+	s := newScheme(t)
+	registerClusterRepoTypes(s)
+	const ns = "aif-operator"
+	cr := &aiplatformv1alpha1.Settings{
+		ObjectMeta: metav1.ObjectMeta{Name: credentials.SettingsName, Namespace: ns},
+		Spec: aiplatformv1alpha1.SettingsSpec{
+			RegistryEndpoints: &aiplatformv1alpha1.RegistryEndpointsSettings{Nvidia: "oci://registry.internal/nvidia"},
+		},
+	}
+	nvidia := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvidia", Namespace: ns},
+		Data:       map[string][]byte{"user": []byte("$oauthtoken"), "token": []byte("nvapi-test")},
+	}
+	staleTeam := &unstructured.Unstructured{}
+	staleTeam.SetGroupVersionKind(schema.GroupVersionKind{Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepo"})
+	staleTeam.SetName("nvidia-cuopt")
+	staleTeam.SetLabels(map[string]string{"ai-factory.suse.com/nvidia-team-repo": "true"})
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cr, nvidia, staleTeam).
+		WithStatusSubresource(&aiplatformv1alpha1.Settings{}).Build()
+	r := &settings.SettingsReconciler{Client: c, Scheme: s, OperatorNamespace: ns}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: credentials.SettingsName, Namespace: ns},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	// Team repo deleted.
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(schema.GroupVersionKind{Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepo"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "nvidia-cuopt"}, got); !apierrors.IsNotFound(err) {
+		t.Errorf("expected team repo pruned in air-gap, got err=%v", err)
+	}
+	// ngc-helm-auth preserved in cattle-system (air-gap mirror needs it).
+	var authSec corev1.Secret
+	if err := c.Get(context.Background(), types.NamespacedName{Name: credentials.AuthSecretNvidia, Namespace: "cattle-system"}, &authSec); err != nil {
+		t.Errorf("air-gap must preserve ngc-helm-auth: %v", err)
 	}
 }

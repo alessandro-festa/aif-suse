@@ -18,11 +18,17 @@ package settings
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	aiplatformv1alpha1 "github.com/SUSE/aif-operator/api/v1alpha1"
+	"github.com/SUSE/aif-operator/internal/catalog"
 	"github.com/SUSE/aif-operator/internal/credentials"
+	"github.com/SUSE/aif-operator/internal/infra/rancher"
+	"github.com/SUSE/aif-operator/internal/naming"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,6 +49,10 @@ type SettingsReconciler struct {
 	client.Client
 	Scheme            *runtime.Scheme
 	OperatorNamespace string
+	// CatalogHolder receives the Rancher catalog client this controller builds
+	// from Settings.Spec.RancherCatalog. The AIWorkload reconciler reads it to
+	// fetch charts from git-backed ClusterRepos. Nil disables that wiring.
+	CatalogHolder *rancher.Holder
 }
 
 // +kubebuilder:rbac:groups=ai-factory.suse.com,resources=settings,verbs=get;list;watch;create;update;patch;delete
@@ -74,6 +84,11 @@ func (r *SettingsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
+	// Best-effort: rebuild the Rancher catalog client from the current config.
+	// Never fails the reconcile — a missing/invalid token just disables
+	// git-backed ClusterRepo support (surfaced on the affected AIWorkloads).
+	r.reconcileRancherCatalogClient(ctx, &s)
+
 	if err := r.updateStatus(ctx, req.NamespacedName); err != nil {
 		l.Error(err, "failed to update settings status")
 		return ctrl.Result{}, err
@@ -102,6 +117,104 @@ func (r *SettingsReconciler) updateStatus(ctx context.Context, key types.Namespa
 	})
 }
 
+// reconcileRancherCatalogClient (re)builds the Rancher catalog client from
+// Settings.Spec.RancherCatalog and swaps it into the shared holder that the
+// AIWorkload reconciler reads. Best-effort: any resolution problem disables the
+// client (holder set to nil) rather than failing the Settings reconcile.
+func (r *SettingsReconciler) reconcileRancherCatalogClient(ctx context.Context, s *aiplatformv1alpha1.Settings) {
+	if r.CatalogHolder == nil {
+		return
+	}
+	l := log.FromContext(ctx)
+	rc := s.Spec.RancherCatalog
+
+	if rc.TokenSecretRef == nil {
+		r.CatalogHolder.Set(nil)
+		return
+	}
+	token, err := r.readSecretKey(ctx, s.Namespace, rc.TokenSecretRef)
+	if err != nil || token == "" {
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		l.Info("Rancher catalog client disabled: token secret unavailable; git-backed ClusterRepos will not be installable",
+			"secret", rc.TokenSecretRef.Name, "error", msg)
+		r.CatalogHolder.Set(nil)
+		return
+	}
+
+	caPEM, caSource := r.resolveCABundle(ctx, s)
+
+	url := rc.URL
+	if url == "" {
+		url = rancher.DefaultBaseURL
+	}
+	client, err := rancher.NewCatalogClient(url, token, caPEM, rc.InsecureSkipVerify)
+	if err != nil {
+		l.Error(err, "failed to build Rancher catalog client")
+		r.CatalogHolder.Set(nil)
+		return
+	}
+	r.CatalogHolder.Set(client)
+	l.Info("Rancher catalog client configured", "url", url, "insecureSkipVerify", rc.InsecureSkipVerify, "customCA", len(caPEM) > 0, "caSource", caSource)
+}
+
+// resolveCABundle picks the CA the catalog client should trust, and reports
+// which source it came from as one of "settings", "settings-error",
+// "discovered" or "system". The source is logged so support can tell the paths
+// apart without reproducing the cluster.
+//
+// An explicit ref that cannot be read does NOT fall through to discovery. An
+// administrator who pinned a CA gets a loud failure rather than a silent
+// substitution with a different certificate.
+func (r *SettingsReconciler) resolveCABundle(ctx context.Context, s *aiplatformv1alpha1.Settings) ([]byte, string) {
+	l := log.FromContext(ctx)
+	ref := s.Spec.RancherCatalog.CABundleSecretRef
+
+	if ref != nil {
+		ca, err := r.readSecretKey(ctx, s.Namespace, ref)
+		if err != nil {
+			l.Error(err, "Rancher catalog CA secret unavailable; proceeding without a custom CA (not falling back to discovery, because a CA was explicitly configured)",
+				"secret", ref.Name)
+			return nil, "settings-error"
+		}
+		// readSecretKey returns ("", nil) for a Secret that exists but lacks the
+		// key, so an empty value is an unreadable ref, not a configured one.
+		// Reporting "settings" here would log caSource=settings customCA=false —
+		// which reads as "your configured CA is in use" when nothing was loaded.
+		if ca == "" {
+			l.Info("Rancher catalog CA secret has no usable value; proceeding without a custom CA (not falling back to discovery, because a CA was explicitly configured)",
+				"secret", ref.Name, "key", ref.Key)
+			return nil, "settings-error"
+		}
+		return []byte(ca), "settings"
+	}
+
+	// No CA configured: read the CA that signs Rancher's in-cluster serving
+	// certificate. The obvious alternative, the `cacerts` Setting, is a
+	// different CA and produces an x509 failure here.
+	ca, err := rancher.DiscoverInternalCA(ctx, r.Client)
+	switch {
+	case err == nil:
+		return ca, "discovered"
+	case stderrors.Is(err, rancher.ErrCANotFound):
+		l.Info("Rancher internal CA secret not found; using system roots")
+	default:
+		l.Error(err, "failed to read Rancher internal CA secret; using system roots")
+	}
+	return nil, "system"
+}
+
+// readSecretKey returns the value of key in the named Secret in ns.
+func (r *SettingsReconciler) readSecretKey(ctx context.Context, ns string, ref *aiplatformv1alpha1.SecretKeyRef) (string, error) {
+	var sec corev1.Secret
+	if err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: ref.Name}, &sec); err != nil {
+		return "", err
+	}
+	return string(sec.Data[ref.Key]), nil
+}
+
 // SetupWithManager registers the controller with the Manager.
 func (r *SettingsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	gitRepo := &unstructured.Unstructured{}
@@ -116,7 +229,7 @@ func (r *SettingsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			}
 			return r.allSettingsRequests(ctx)
 		})).
-		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.enqueueSettingsForRegistrySecret)).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.enqueueSettingsForSecret)).
 		Complete(r)
 }
 
@@ -134,11 +247,18 @@ func (r *SettingsReconciler) allSettingsRequests(ctx context.Context) []reconcil
 	return reqs
 }
 
-func (r *SettingsReconciler) enqueueSettingsForRegistrySecret(_ context.Context, obj client.Object) []reconcile.Request {
+// enqueueSettingsForSecret reconciles Settings when a Secret it depends on
+// changes. Two families qualify: the well-known registry credential secrets
+// (which feed the ClusterRepo mirrors), and the Secrets referenced by
+// spec.rancherCatalog. The latter matter because the catalog client is built
+// once per reconcile and parked in the holder — rotating a token in place
+// changes no Settings field, so without this the operator would keep using the
+// revoked token until the next informer resync.
+func (r *SettingsReconciler) enqueueSettingsForSecret(ctx context.Context, obj client.Object) []reconcile.Request {
 	if obj.GetNamespace() != r.OperatorNamespace {
 		return nil
 	}
-	if !credentials.IsWellKnownSecret(obj.GetName()) {
+	if !credentials.IsWellKnownSecret(obj.GetName()) && !r.isRancherCatalogSecret(ctx, obj.GetName()) {
 		return nil
 	}
 	return []reconcile.Request{{
@@ -149,13 +269,63 @@ func (r *SettingsReconciler) enqueueSettingsForRegistrySecret(_ context.Context,
 	}}
 }
 
+// isRancherCatalogSecret reports whether name is referenced by
+// Settings.spec.rancherCatalog (token or CA bundle).
+func (r *SettingsReconciler) isRancherCatalogSecret(ctx context.Context, name string) bool {
+	var s aiplatformv1alpha1.Settings
+	key := types.NamespacedName{Name: credentials.SettingsName, Namespace: r.OperatorNamespace}
+	if err := r.Get(ctx, key, &s); err != nil {
+		return false
+	}
+	rc := s.Spec.RancherCatalog
+	if rc.TokenSecretRef != nil && rc.TokenSecretRef.Name == name {
+		return true
+	}
+	return rc.CABundleSecretRef != nil && rc.CABundleSecretRef.Name == name
+}
+
 const (
 	fleetGitRepoName      = "suse-ai-fleet-repo"
 	fleetGitRepoNamespace = "fleet-local"
 )
 
+// teamRepoMarkerLabel marks ClusterRepos the operator creates for NGC team
+// repos, so pruning can list-and-diff them by label (blueprint.go / pullsecrets.go
+// house pattern). Applied ONLY to team repos — never to the org/AC/SR/mirror
+// repos, which keep name-list pruning.
+const (
+	teamRepoMarkerLabel = "ai-factory.suse.com/nvidia-team-repo"
+	teamRepoMarkerValue = "true"
+
+	// clusterRepoNameMax is the DNS-1123 label cap for a ClusterRepo name.
+	clusterRepoNameMax = 63
+)
+
 var fleetGitRepoGVK = schema.GroupVersionKind{
 	Group: "fleet.cattle.io", Version: "v1alpha1", Kind: "GitRepo",
+}
+
+// teamClusterRepoName derives a deterministic, DNS-1123-valid ClusterRepo name
+// from an NGC team-repo URL (e.g. .../nvidia/omniverse → "nvidia-omniverse").
+// Errors if the URL is not an NGC URL, or if the slug collides with an org
+// ClusterRepo name (the collision space is slugs, not URLs).
+func teamClusterRepoName(ngcURL string) (string, error) {
+	if !catalog.IsNGCURL(ngcURL) {
+		return "", fmt.Errorf("not an NGC URL: %q", ngcURL)
+	}
+	parsed, err := url.Parse(strings.TrimSpace(ngcURL))
+	if err != nil {
+		return "", fmt.Errorf("parse NGC URL %q: %w", ngcURL, err)
+	}
+	name := naming.TruncateDNS1123Label(naming.Slugify(strings.TrimPrefix(parsed.Path, "/")), clusterRepoNameMax)
+	if name == "" {
+		return "", fmt.Errorf("empty slug for NGC URL %q", ngcURL)
+	}
+	switch name {
+	case credentials.ClusterRepoNvidia, credentials.ClusterRepoNvidiaBlueprint:
+		return "", fmt.Errorf("team slug %q collides with org repo name", name)
+	}
+	return name, nil
 }
 
 // ensureWellKnownSecretRefs discovers operator-namespace registry secrets and
@@ -528,6 +698,9 @@ func (r *SettingsReconciler) reconcileNvidiaRepos(ctx context.Context, s *aiplat
 	// Configured NVIDIA credentials are the signal that NVIDIA is in use. Without
 	// them, tear every NVIDIA repo + mirror back down.
 	if nvUser == nil || nvToken == nil {
+		if err := r.pruneTeamRepos(ctx, map[string]bool{}); err != nil {
+			return err
+		}
 		return r.pruneRegistryRepos(ctx, credentials.AuthSecretNvidia, allNvidiaRepos)
 	}
 
@@ -542,12 +715,21 @@ func (r *SettingsReconciler) reconcileNvidiaRepos(ctx context.Context, s *aiplat
 		if secretName == "" {
 			// Refs are set but unreadable: nothing to authenticate the private
 			// mirror with, so tear the repos down rather than create a broken one.
+			// Also prune team repos orphaned from a prior connected mode.
+			if err := r.pruneTeamRepos(ctx, map[string]bool{}); err != nil {
+				return err
+			}
 			return r.pruneRegistryRepos(ctx, credentials.AuthSecretNvidia, allNvidiaRepos)
 		}
 		if err := r.deleteClusterRepo(ctx, credentials.ClusterRepoNvidiaBlueprint); err != nil {
 			return err
 		}
 		if err := r.applyClusterRepo(ctx, credentials.ClusterRepoNvidia, nvURL, secretName); err != nil {
+			return err
+		}
+		// Prune team repos on the connected→air-gap switch, but PRESERVE
+		// ngc-helm-auth — the air-gap mirror still consumes it.
+		if err := r.pruneTeamRepos(ctx, map[string]bool{}); err != nil {
 			return err
 		}
 		if changed {
@@ -563,18 +745,14 @@ func (r *SettingsReconciler) reconcileNvidiaRepos(ctx context.Context, s *aiplat
 	// version specified". Sending no credential restores public access (this also
 	// matches what the UI extension creates, so the two reconcilers agree instead
 	// of fighting over the blueprint repo's clientSecret).
-	//
-	// Because both repos are anonymous, the ngc-helm-auth mirror is unused here
-	// (HelmOp helmSecretName is derived from the repo's now-empty clientSecret, so
-	// nothing consumes it). Delete any copy left from a previous air-gap config so
-	// it can't go stale.
-	if err := r.deleteAuthSecret(ctx, credentials.AuthSecretNvidia); err != nil {
-		return err
-	}
 	if err := r.applyClusterRepo(ctx, credentials.ClusterRepoNvidia, credentials.DefaultNvidiaChartsURL, ""); err != nil {
 		return err
 	}
-	return r.applyClusterRepo(ctx, credentials.ClusterRepoNvidiaBlueprint, credentials.DefaultNvidiaBlueprintURL, "")
+	if err := r.applyClusterRepo(ctx, credentials.ClusterRepoNvidiaBlueprint, credentials.DefaultNvidiaBlueprintURL, ""); err != nil {
+		return err
+	}
+	// Connected-mode NGC team repos (public anonymous, gated ngc-helm-auth).
+	return r.reconcileNGCTeamRepos(ctx, s.Namespace, nvUser, nvToken)
 }
 
 // pruneRegistryRepos deletes the given ClusterRepos and the registry's
@@ -586,4 +764,129 @@ func (r *SettingsReconciler) pruneRegistryRepos(ctx context.Context, authSecretN
 		}
 	}
 	return r.deleteAuthSecret(ctx, authSecretName)
+}
+
+// applyTeamClusterRepo applies a ClusterRepo for an NGC team repo, stamped with
+// the team marker label so pruning can find it. clientSecretName is "" for
+// public repos (anonymous). Host guard (S1): a secret is only ever attached to
+// a helm.ngc.nvidia.com URL.
+func (r *SettingsReconciler) applyTeamClusterRepo(ctx context.Context, name, ngcURL, clientSecretName string) error {
+	repo := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "catalog.cattle.io/v1",
+			"kind":       "ClusterRepo",
+			"metadata": map[string]any{
+				"name":   name,
+				"labels": map[string]any{teamRepoMarkerLabel: teamRepoMarkerValue},
+			},
+			"spec": map[string]any{
+				"url": ngcURL,
+			},
+		},
+	}
+	if clientSecretName != "" {
+		if !catalog.IsNGCURL(ngcURL) {
+			return fmt.Errorf("refusing to attach clientSecret to non-NGC URL %q", ngcURL)
+		}
+		_ = unstructured.SetNestedField(repo.Object, clientSecretName, "spec", "clientSecret", "name")
+		_ = unstructured.SetNestedField(repo.Object, "cattle-system", "spec", "clientSecret", "namespace")
+	}
+	return r.Patch(ctx, repo, client.Apply, client.ForceOwnership, client.FieldOwner("aif-operator-settings"))
+}
+
+// reconcileNGCTeamRepos provisions the connected-mode NGC team-repo ClusterRepos
+// from the embedded catalog: public repos anonymously, gated repos with the
+// ngc-helm-auth clientSecret. It writes ngc-helm-auth once (capturing rotation),
+// then force-updates every gated repo when the credential changed. Finally it
+// prunes any marker-labelled repo no longer desired.
+//
+// When refs are set but unreadable (secretName == ""), public repos are still
+// created (anonymous), but gated repos are skipped and pruned rather than created
+// with a dangling clientSecret.
+func (r *SettingsReconciler) reconcileNGCTeamRepos(
+	ctx context.Context,
+	namespace string,
+	nvUser, nvToken *aiplatformv1alpha1.SecretKeyRef,
+) error {
+	teams := catalog.ClassifyNGCTeamRepos()
+
+	// Resolve ngc-helm-auth ONCE, capturing whether the credential rotated
+	// (`changed`) before the mirror is overwritten. Only needed when there is
+	// ≥1 gated repo to consume it.
+	secretName := ""
+	changed := false
+	if len(teams.Gated) > 0 {
+		var err error
+		secretName, changed, err = r.applyRegistryAuthSecret(ctx, namespace, credentials.AuthSecretNvidia, nvUser, nvToken)
+		if err != nil {
+			return err
+		}
+	}
+
+	// ngc-helm-auth must exist on-cluster IFF ≥1 gated repo will consume it with
+	// readable creds. Delete any stale mirror when there are no gated repos, or
+	// when the credentials could not be resolved (secretName == "") — no gated
+	// repo is created in that case, so a lingering secret has no consumer.
+	if secretName == "" {
+		if err := r.deleteAuthSecret(ctx, credentials.AuthSecretNvidia); err != nil {
+			return err
+		}
+	}
+
+	keep := map[string]bool{}
+
+	// Public team repos: always anonymous.
+	for _, u := range teams.Public {
+		name, err := teamClusterRepoName(u)
+		if err != nil {
+			return err
+		}
+		if err := r.applyTeamClusterRepo(ctx, name, u, ""); err != nil {
+			return err
+		}
+		keep[name] = true
+	}
+
+	// Gated team repos: only when the auth secret resolved. Force-update every
+	// gated repo when the credential rotated.
+	if secretName != "" {
+		for _, u := range teams.Gated {
+			name, err := teamClusterRepoName(u)
+			if err != nil {
+				return err
+			}
+			if err := r.applyTeamClusterRepo(ctx, name, u, secretName); err != nil {
+				return err
+			}
+			keep[name] = true
+			if changed {
+				if err := r.forceUpdateClusterRepo(ctx, name); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return r.pruneTeamRepos(ctx, keep)
+}
+
+// pruneTeamRepos deletes every marker-labelled team ClusterRepo whose name is
+// not in keep. List-and-diff by the specific team marker — never by the
+// broad managed-by label, and never touching org/AC/SR repos.
+func (r *SettingsReconciler) pruneTeamRepos(ctx context.Context, keep map[string]bool) error {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(schema.GroupVersionKind{Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepoList"})
+	if err := r.List(ctx, list, client.MatchingLabels{teamRepoMarkerLabel: teamRepoMarkerValue}); err != nil {
+		return fmt.Errorf("list team ClusterRepos: %w", err)
+	}
+	for i := range list.Items {
+		name := list.Items[i].GetName()
+		if keep[name] {
+			continue
+		}
+		if err := r.deleteClusterRepo(ctx, name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
