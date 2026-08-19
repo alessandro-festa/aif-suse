@@ -20,9 +20,9 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"reflect"
 	"time"
 
-	"helm.sh/helm/v3/pkg/action"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -31,11 +31,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	log "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -43,6 +43,7 @@ import (
 
 	aiplatformv1alpha1 "github.com/SUSE/aif-operator/api/v1alpha1"
 	"github.com/SUSE/aif-operator/internal/credentials"
+	"github.com/SUSE/aif-operator/internal/infra/rancher"
 )
 
 const aiWorkloadFinalizer = "ai-factory.suse.com/cleanup"
@@ -51,6 +52,10 @@ const (
 	conditionTypeReady        = "Ready"
 	reasonClusterRepoNotReady = "ClusterRepoNotReady"
 	reasonReconciled          = "Reconciled"
+	// Deletion-path (uninstall safety-net) reasons, surfaced on the terminating CR.
+	reasonAwaitingUninstall    = "AwaitingUninstall"
+	reasonUninstalling         = "Uninstalling"
+	reasonRancherTokenRejected = "RancherTokenRejected"
 )
 
 // setCondition upserts a status condition on the AIWorkload, mirroring the
@@ -66,6 +71,17 @@ func setCondition(conditions *[]metav1.Condition, condType string, status metav1
 	})
 }
 
+// truncateForCondition bounds a message so it cannot overflow the CRD's
+// 32768-byte condition.message cap or flood the log. Fetch errors can carry a
+// whole HTML error page from an ingress or service mesh.
+func truncateForCondition(s string) string {
+	const max = 1024
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "… (truncated)"
+}
+
 var (
 	bundleDeploymentGVK = schema.GroupVersionKind{Group: "fleet.cattle.io", Version: "v1alpha1", Kind: "BundleDeployment"}
 	bundleGVK           = schema.GroupVersionKind{Group: "fleet.cattle.io", Version: "v1alpha1", Kind: "Bundle"}
@@ -77,8 +93,14 @@ var (
 type AIWorkloadReconciler struct {
 	client.Client
 	Scheme            *runtime.Scheme
-	RestConfig        *rest.Config
 	OperatorNamespace string
+	// CatalogClient holds the current Rancher catalog client used to fetch charts
+	// from git-backed ClusterRepos. The Settings controller rebuilds and swaps
+	// the client into this holder when the rancherCatalog config changes. A nil
+	// holder or an empty holder means git-backed repos are unconfigured;
+	// git-backed components then report a clear condition and http/oci components
+	// are unaffected.
+	CatalogClient *rancher.Holder
 }
 
 // +kubebuilder:rbac:groups=ai-factory.suse.com,resources=aiworkloads,verbs=get;list;watch;create;update;patch;delete
@@ -214,17 +236,112 @@ func (r *AIWorkloadReconciler) helmReleaseExists(ctx context.Context, namespace,
 	return len(list.Items) > 0, nil
 }
 
-// uninstallHelm uses the Helm SDK to fully uninstall a release and its deployed resources.
-func (r *AIWorkloadReconciler) uninstallHelm(namespace, releaseName string) error {
-	getter := newRESTClientGetter(r.RestConfig, namespace)
-	cfg := new(action.Configuration)
-	if err := cfg.Init(getter, namespace, "secret", func(string, ...interface{}) {}); err != nil {
-		return fmt.Errorf("helm init: %w", err)
+// appUninstaller is the subset of the Rancher catalog client the deletion path
+// needs. *rancher.CatalogClient satisfies it. Kept local so the finalizer does
+// not depend on the whole catalog surface.
+type appUninstaller interface {
+	UninstallApp(ctx context.Context, namespace, releaseName string) error
+	AppUninstallInProgress(ctx context.Context, namespace, releaseName string) (bool, error)
+}
+
+// handleHelmRelease is the non-orphaning uninstall safety-net for App/Helm
+// workloads. Uninstall itself is UI-driven (Rancher action=uninstall under the
+// user's session); this finalizer step only guarantees the CR is not removed
+// until the Helm release is actually gone, so the workload never disappears from
+// the Workloads page while the chart lingers in "uninstalling".
+//
+// Returns done=true only when the release is gone; otherwise it returns
+// done=false with a requeue so the caller retains the finalizer.
+func (r *AIWorkloadReconciler) handleHelmRelease(ctx context.Context, w *aiplatformv1alpha1.AIWorkload) (bool, ctrl.Result, error) {
+	l := log.FromContext(ctx)
+	ns, release := w.Spec.TargetNamespace, w.Spec.Source.App.Release
+
+	exists, err := r.helmReleaseExists(ctx, ns, release)
+	if err != nil {
+		return false, ctrl.Result{}, err
 	}
-	u := action.NewUninstall(cfg)
-	u.IgnoreNotFound = true
-	if _, err := u.Run(releaseName); err != nil {
-		return fmt.Errorf("helm uninstall %s/%s: %w", namespace, releaseName, err)
+	if !exists {
+		return true, ctrl.Result{}, nil // release gone — safe to finalize
+	}
+
+	// Release still present. If a Rancher token is configured, actively delegate
+	// the uninstall to Rancher (covers headless kubectl/GitOps deletes); the
+	// helm-operation runs privileged so it deletes every chart resource kind.
+	if u := r.appUninstaller(); u != nil {
+		// rejectToken surfaces a token rejection on the terminating CR and requeues.
+		// Shared by the state read and the uninstall call, which fail the same way.
+		rejectToken := func(err error) (bool, ctrl.Result, error) {
+			l.Error(err, "rancher rejected the catalog token during uninstall",
+				"namespace", ns, "release", release)
+			r.setUninstallCondition(ctx, w, reasonRancherTokenRejected,
+				"Rancher rejected the catalog token during uninstall — re-authorize under Settings → Rancher API Access.")
+			return false, ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		}
+
+		// Only request an uninstall Rancher is not already running — otherwise we
+		// would spawn a fresh helm-operation on every reconcile tick.
+		inProgress, err := u.AppUninstallInProgress(ctx, ns, release)
+		if err != nil {
+			if stderrors.Is(err, rancher.ErrUnauthorized) {
+				return rejectToken(err)
+			}
+			l.Error(err, "could not read Rancher app state — will retry",
+				"namespace", ns, "release", release)
+			return false, ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		}
+		if !inProgress {
+			if err := u.UninstallApp(ctx, ns, release); err != nil {
+				if stderrors.Is(err, rancher.ErrUnauthorized) {
+					return rejectToken(err)
+				}
+				l.Error(err, "rancher uninstall delegation failed — will retry",
+					"namespace", ns, "release", release)
+				return false, ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+			}
+			l.Info("requested Rancher uninstall; waiting for release to clear",
+				"namespace", ns, "release", release)
+		}
+		r.setUninstallCondition(ctx, w, reasonUninstalling,
+			"Uninstalling the Helm release via Rancher; waiting for it to clear.")
+		return false, ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	// No token: uninstall is the UI's job. Wait for the release to disappear
+	// rather than orphan it. Surface a condition so a headless/GitOps delete that
+	// stalls here is visible on the CR, not only in the operator log.
+	l.Info("Helm release still present; retaining finalizer until it is uninstalled "+
+		"(uninstall from the Apps page, or configure a Rancher token to enable headless uninstall)",
+		"namespace", ns, "release", release)
+	r.setUninstallCondition(ctx, w, reasonAwaitingUninstall,
+		"Helm release still present; uninstall from the Apps page, or configure a Rancher token "+
+			"(Settings → Rancher API Access) to enable headless uninstall.")
+	return false, ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+}
+
+// setUninstallCondition surfaces the deletion-path state on the terminating CR
+// (Ready=False with a deletion-specific reason) so a workload stuck waiting on an
+// uninstall is visible in `kubectl get`/the UI, not only in the operator log. It
+// skips the write when the condition already carries the same reason, so a
+// waiting workload does not emit a status update on every reconcile.
+func (r *AIWorkloadReconciler) setUninstallCondition(ctx context.Context, w *aiplatformv1alpha1.AIWorkload, reason, message string) {
+	if c := meta.FindStatusCondition(w.Status.Conditions, conditionTypeReady); c != nil &&
+		c.Status == metav1.ConditionFalse && c.Reason == reason {
+		return
+	}
+	setCondition(&w.Status.Conditions, conditionTypeReady, metav1.ConditionFalse, reason, truncateForCondition(message), w.Generation)
+	if err := r.Status().Update(ctx, w); err != nil {
+		log.FromContext(ctx).Error(err, "failed to update AIWorkload uninstall status condition")
+	}
+}
+
+// appUninstaller returns the configured Rancher client if it can perform an App
+// uninstall, or nil when no token is configured.
+func (r *AIWorkloadReconciler) appUninstaller() appUninstaller {
+	if r.CatalogClient == nil {
+		return nil
+	}
+	if u, ok := r.CatalogClient.Get().(appUninstaller); ok {
+		return u
 	}
 	return nil
 }
@@ -329,8 +446,11 @@ func (r *AIWorkloadReconciler) handleDeletion(ctx context.Context, w *aiplatform
 	switch w.Spec.DeployStrategy {
 	case aiplatformv1alpha1.AIWorkloadDeployHelm:
 		if w.Spec.Source.App != nil {
-			if err := r.uninstallHelm(w.Spec.TargetNamespace, w.Spec.Source.App.Release); err != nil {
-				l.Error(err, "helm uninstall failed — proceeding with finalizer removal")
+			done, res, err := r.handleHelmRelease(ctx, w)
+			if !done {
+				// Keep the finalizer: the Helm release still exists. Removing it
+				// now is exactly the bug that orphaned the release in "uninstalling".
+				return res, err
 			}
 		}
 	case aiplatformv1alpha1.AIWorkloadDeployFleetBundle:
@@ -526,6 +646,31 @@ func (r *AIWorkloadReconciler) credentialSecretToAIWorkloads(ctx context.Context
 	return r.allAIWorkloadRequests(ctx)
 }
 
+// settingsToAIWorkloads re-enqueues every blueprint-sourced AIWorkload when
+// Settings changes. The Settings controller rebuilds the Rancher catalog client
+// (CatalogClient holder) from Settings.Spec.RancherCatalog at runtime; without
+// this watch, a git-backed workload that failed with CatalogClientNotConfigured
+// before the token was set would stay Failed until the next informer resync.
+// Only blueprint-sourced workloads can consume git-backed ClusterRepos, so
+// helm/app workloads are skipped; reconcile is idempotent so re-enqueuing the
+// rest is safe.
+func (r *AIWorkloadReconciler) settingsToAIWorkloads(ctx context.Context, _ client.Object) []reconcile.Request {
+	var list aiplatformv1alpha1.AIWorkloadList
+	if err := r.List(ctx, &list); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range list.Items {
+		if list.Items[i].Spec.Source.Blueprint == nil {
+			continue
+		}
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: list.Items[i].Name, Namespace: list.Items[i].Namespace},
+		})
+	}
+	return reqs
+}
+
 func (r *AIWorkloadReconciler) allAIWorkloadRequests(ctx context.Context) []reconcile.Request {
 	var list aiplatformv1alpha1.AIWorkloadList
 	if err := r.List(ctx, &list); err != nil {
@@ -563,6 +708,26 @@ func (r *AIWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return obj.GetNamespace() == r.OperatorNamespace && credentials.IsWellKnownSecret(obj.GetName())
 	})
 
+	// Settings carries far more than the catalog config, and every field of it
+	// is edited from the UI. Without this filter each unrelated edit (and each
+	// status write the Settings controller itself makes) re-enqueues every
+	// blueprint workload, which for git-backed components means re-downloading
+	// their charts from Rancher. Only spec.rancherCatalog can change the
+	// outcome of a git-chart reconcile, so that is all we react to.
+	catalogSettingsChanged := predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldS, ok1 := e.ObjectOld.(*aiplatformv1alpha1.Settings)
+			newS, ok2 := e.ObjectNew.(*aiplatformv1alpha1.Settings)
+			if !ok1 || !ok2 {
+				return true
+			}
+			return !reflect.DeepEqual(oldS.Spec.RancherCatalog, newS.Spec.RancherCatalog)
+		},
+		CreateFunc:  func(event.CreateEvent) bool { return true },
+		DeleteFunc:  func(event.DeleteEvent) bool { return true },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&aiplatformv1alpha1.AIWorkload{}).
 		Watches(bd, handler.EnqueueRequestsFromMapFunc(r.bundleDeploymentToAIWorkloads)).
@@ -571,5 +736,7 @@ func (r *AIWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(isHelmSecret)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.credentialSecretToAIWorkloads),
 			builder.WithPredicates(isCredentialSecret)).
+		Watches(&aiplatformv1alpha1.Settings{}, handler.EnqueueRequestsFromMapFunc(r.settingsToAIWorkloads),
+			builder.WithPredicates(catalogSettingsChanged)).
 		Complete(r)
 }

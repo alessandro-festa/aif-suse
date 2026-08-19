@@ -1,6 +1,6 @@
 # SUSE AI Factory
 
-SUSE AI Factory is a Rancher UI Extension for managing SUSE AI Factory components across Kubernetes clusters. This extension provides a unified interface for installing, managing, and monitoring AI workloads in Rancher-managed clusters.
+SUSE AI Factory is a Rancher UI extension + Kubernetes operator that provide a unified interface for installing, managing, and monitoring AI applications in Rancher-managed clusters.
 
 > **Note:** This extension requires an active [SUSE AI Factory](https://www.suse.com/products/ai/) subscription to access the application catalog.
 
@@ -193,7 +193,7 @@ pre-commit install --hook-type commit-msg  # enables commitlint
 ```
 
 The Go and UI hooks shell out to your local toolchains, so make sure `go`,
-`gofmt`, and the UI dependencies (`cd ui/pkg/aif-ui && yarn install`) are
+`gofmt`, and the UI dependencies (`cd ui && yarn install`) are
 available. To run every hook against the whole repository on demand:
 
 ```bash
@@ -227,4 +227,4 @@ git commit -m "fix: resolve app installation error handling"
 1. **Extension not loading**: Verify URL in developer tools console
 2. **Build errors**: Check Node.js version compatibility (requires 20+)
 3. **API errors**: Verify cluster permissions and connectivity
-4. **Linting errors**: Run `cd ui/pkg/aif-ui && yarn lint` to see details
+4. **Linting errors**: Run `cd ui && yarn lint` to see details
