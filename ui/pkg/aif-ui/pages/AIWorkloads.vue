@@ -13,6 +13,8 @@ import type { AIWorkload, AIWorkloadPhase } from '../types/aiworkload-types';
 import type { Blueprint } from '../types/blueprint-types';
 import { PRODUCT } from '../config/suseai';
 import ClusterChips from '../formatters/ClusterChips.vue';
+import RancherLinkCell from '../components/RancherLinkCell.vue';
+import { workloadRancherLinks } from '../utils/rancher-links';
 import { getClusters } from '../services/cluster-service';
 import type { ClusterInfo } from '../types/rancher-types';
 import { useT } from '../composables/useT';
@@ -180,11 +182,18 @@ function workloadSource(w: AIWorkload): string {
   return w.spec.source.blueprint?.name || '—';
 }
 
+function linksFor(w: AIWorkload) {
+  return workloadRancherLinks(w, clusters.value);
+}
+
 // workloadStatusMessage returns a human-readable reason when a workload is not
 // healthy: the Ready=False condition message (set by the operator when a
 // ClusterRepo can't be resolved), falling back to the first non-empty
-// per-cluster message. Empty string when there's nothing to surface.
+// per-cluster message. Empty string when there's nothing to surface. Running
+// workloads suppress the message — the success text ("Helm install complete…")
+// is noise once the badge already says Running.
 function workloadStatusMessage(w: AIWorkload): string {
+  if (w.status?.phase === 'Running') return '';
   const ready = (w.status?.conditions || []).find(
     (c: any) => c?.type === 'Ready' && c?.status === 'False',
   );
@@ -476,7 +485,7 @@ async function doRetry(w: AIWorkload) {
 
                 <!-- Namespace -->
                 <td class="col-namespace">
-                  <span class="mono-chip">{{ w.metadata.namespace }}</span>
+                  {{ w.metadata.namespace }}
                 </td>
 
                 <!-- Cluster -->
@@ -510,28 +519,40 @@ async function doRetry(w: AIWorkload) {
                 <!-- Actions -->
                 <td class="col-actions text-right">
                   <div class="btn-group">
+                    <!-- Open in Rancher (type-aware) -->
+                    <RancherLinkCell
+                      :link="linksFor(w).primary"
+                      :open-label="w.spec.source.sourceType === 'App'
+                        ? t('suseai.workloads.viewApp', 'Open app in Rancher')
+                        : t('suseai.workloads.viewNamespace', 'View namespace in Rancher')"
+                      trigger-class="btn btn-sm role-secondary"
+                    >
+                      <i class="icon icon-external-link" />
+                      <span>{{ t('suseai.workloads.openInRancher', 'Open in Rancher') }}</span>
+                    </RancherLinkCell>
+
                     <!-- App workload: Manage -->
                     <button
                       v-if="w.spec.source.sourceType === 'App'"
-                      class="btn btn-sm role-secondary"
+                      class="btn btn-sm role-secondary equal-action"
                       :disabled="w.status?.phase !== 'Running'"
                       @click="onManage(w)"
                       type="button"
                     >
                       <i class="icon icon-edit" />
-                      Manage
+                      <span>Manage</span>
                     </button>
 
                     <!-- Blueprint workload: Upgrade -->
                     <button
                       v-else
-                      class="btn btn-sm role-secondary"
+                      class="btn btn-sm role-secondary equal-action"
                       :disabled="false"
                       @click="openUpgradeModal(w)"
                       type="button"
                     >
                       <i class="icon icon-upload" />
-                      Upgrade
+                      <span>Upgrade</span>
                     </button>
 
                     <!-- Blueprint workload: Roll Back -->
@@ -563,7 +584,7 @@ async function doRetry(w: AIWorkload) {
                       type="button"
                     >
                       <i class="icon icon-delete" />
-                      Delete
+                      <span>Delete</span>
                     </button>
                   </div>
                 </td>
@@ -623,6 +644,13 @@ async function doRetry(w: AIWorkload) {
           />
         </div>
 
+        <p class="text-muted modal-note">
+          This upgrades the deployed release only. It does not run data migrations, CRD
+          schema/storage-version conversions, or other application-level upgrade steps —
+          please make sure any required manual steps are completed. We strongly recommend
+          taking backups (e.g. of your CRs) before upgrading, in case you need to roll back.
+        </p>
+
         <div class="modal-buttons">
           <button class="btn role-secondary" @click="upgradeModal.show = false" type="button">Cancel</button>
           <button
@@ -660,6 +688,13 @@ async function doRetry(w: AIWorkload) {
         <p class="text-muted modal-warning">
           The workload will be redeployed at the last certified version
           (v{{ rollbackModal.workload?.status?.deployedSource?.version }}).
+        </p>
+
+        <p class="text-muted modal-note">
+          This redeploys the previously certified version. It does not undo data
+          migrations, CRD schema/storage-version conversions, or other manual changes
+          made after the original deployment — please revert those yourself before
+          rolling back.
         </p>
 
         <div class="modal-buttons">
@@ -787,16 +822,6 @@ async function doRetry(w: AIWorkload) {
   .source-name { font-size: 12px; color: var(--muted); font-family: monospace; }
 }
 
-// Mono chip (namespace)
-.mono-chip {
-  font-family: monospace;
-  background: var(--accent-btn);
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-size: 12px;
-  border: 1px solid var(--border);
-}
-
 // Deploy badge
 .deploy-badge {
   display: inline-block;
@@ -812,6 +837,7 @@ async function doRetry(w: AIWorkload) {
 // Actions
 .btn-group {
   display: flex;
+  align-items: center;
   gap: 4px;
   justify-content: flex-end;
 }
@@ -830,6 +856,12 @@ async function doRetry(w: AIWorkload) {
     background: var(--warning-banner-bg);
     border-radius: 4px;
     border-left: 3px solid var(--warning);
+  }
+
+  .modal-note {
+    font-size: 12px;
+    font-style: italic;
+    opacity: 0.85;
   }
 
   .modal-buttons {
@@ -870,7 +902,9 @@ async function doRetry(w: AIWorkload) {
 
 .text-right { text-align: right; }
 
-.btn {
+// `:deep` reaches the "Open in Rancher" trigger inside the RancherLinkCell child.
+.btn,
+:deep(.rancher-link-cell .btn) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -900,11 +934,40 @@ async function doRetry(w: AIWorkload) {
     color: var(--body-text);
 
     &.text-error { color: var(--error); }
-    &:disabled   { opacity: 0.6; cursor: not-allowed; }
+
+    // Override Rancher's global `.btn[disabled]` recolor: keep the border and
+    // let opacity convey the disabled state.
+    &:disabled,
+    &[disabled] {
+      opacity: 0.6;
+      cursor: not-allowed;
+      background: var(--body-bg);
+      border: 1px solid var(--border);
+      color: var(--body-text);
+    }
+
+    // Keep the border on focus; Rancher's global rule sets `border: 0`, shrinking it.
+    &.btn-sm:focus,
+    &.btn-sm.focused { border: 1px solid var(--border); }
   }
+
+  // The disabled "Open in Rancher" trigger is a <span>, so `:disabled` can't
+  // match it; RancherLinkCell marks it `.rl-disabled` instead.
+  &.rl-disabled { opacity: 0.6; cursor: not-allowed; }
 
   .icon-spin { animation: spin 1s linear infinite; }
 }
+
+// Shared min-width so the Manage/Upgrade labels line up across rows.
+.btn.equal-action {
+  min-width: 96px;
+  justify-content: center;
+}
+
+// Zero Rancher's global icon `margin-right` on row buttons so their spacing is
+// the flex `gap` alone; the `:deep` variant covers the RancherLinkCell trigger.
+.btn-group .btn .icon,
+.btn-group :deep(.rancher-link-cell .btn) .icon { margin-right: 0; }
 
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
@@ -918,9 +981,7 @@ async function doRetry(w: AIWorkload) {
   white-space: nowrap;
 }
 
-/* Only show the reason in error red once the workload has actually failed;
-   during the initial grace window the phase is still Pending and the message
-   is a hedged "not available yet", so keep it muted. */
+/* Red only once actually failed; Pending messages stay muted. */
 .state-message.is-failed {
   color: var(--error, #dc2626);
 }
