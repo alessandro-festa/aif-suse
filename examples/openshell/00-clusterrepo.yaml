@@ -1,0 +1,23 @@
+# Rancher ClusterRepo for the NVIDIA OpenShell Helm charts.
+#
+# The AIWorkload controller resolves a Blueprint component's `chartRepo` to a
+# ClusterRepo by name and reads only spec.url / spec.ociRepo from it
+# (operator/internal/controller/aiworkload/blueprint.go:893). There is no
+# allowlist, so any ClusterRepo works — the Settings controller just happens to
+# auto-create four of them.
+#
+# For OCI repos the controller builds the chart reference as
+# `<spec.url>/<chartName>` (blueprint.go:179), so this URL plus a component
+# chartName of `helm-chart` resolves to
+# oci://ghcr.io/nvidia/openshell/helm-chart.
+#
+# Note: Rancher cannot index this repo (ghcr.io exposes no catalog API under a
+# namespace path), so it stays at DOWNLOAD TIME "" and its charts do not appear
+# in the UI catalog browser. That only affects browsing — the Blueprint install
+# path never reads the index.
+apiVersion: catalog.cattle.io/v1
+kind: ClusterRepo
+metadata:
+  name: openshell
+spec:
+  url: oci://ghcr.io/nvidia/openshell

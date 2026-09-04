@@ -1,0 +1,171 @@
+# Blueprint C1 — Inference engine for OpenShell, PER-TENANT (CPU / Ollama).
+#
+# One of two inference blueprints. Pick ONE per tenant:
+#
+#   C1 (this file)  40-...-ollama-tenant.yaml   engine INSIDE the tenant namespace
+#   C2              41-...-ollama-shared.yaml   ONE engine in "openshell", shared
+#
+# They deploy the same chart and the same model; they differ in blast radius,
+# footprint and defaults. Nothing stops a cluster running both — tenants that
+# need isolation get C1, the rest point at C2. The choice is expressed when the
+# admin sets the tenant's provider URL, so it can be changed later without
+# touching sandboxes: inference routing hot-reloads in ~5s.
+#
+# CHOOSE C1 (this one) FOR MAXIMUM ISOLATION. The engine lives in the tenant's
+# own namespace, next to its sandboxes. Nothing about the tenant's prompts,
+# model or load is visible to or contended with any other tenant, and deleting
+# the tenant namespace removes the engine with it.
+#
+# WHY THAT IS THE ISOLATED SHAPE. The sandbox pod's own supervisor makes the
+# upstream call, not the gateway: openshell-supervisor-network fetches the route
+# bundle from the gateway over gRPC every ~5s and then proxies the request
+# itself. So the engine is reached FROM the tenant namespace, and putting it
+# there keeps the hop intra-namespace. It also matches OpenShell's own grain —
+# providers and inference routes are workspace-scoped, not gateway-scoped.
+#
+# THE COST, stated plainly: one model copy per tenant. qwen2.5:0.5b is ~400 MB
+# pulled and held resident, per namespace. With persistentVolume disabled it is
+# re-pulled on every pod restart, per namespace. On a laptop cluster, install
+# this for one tenant only, and use C2 for the rest.
+#
+# WHY A SEPARATE BLUEPRINT rather than a second component of Blueprint B: so a
+# tenant can opt out of inference, or choose C2 instead, and so a cluster that
+# already has an engine is not forced to deploy another. The operator fans
+# components out in a single pass with no ordering or wait-for-ready, so merging
+# the two would work — it would just remove the choice.
+#
+# GPU CLUSTERS: do not use either. Install the shipped "suse-inference-endpoint"
+# blueprint instead (vLLM + LiteLLM), then wire OpenShell at LiteLLM. Both
+# wiring recipes are in docs/openshell-blueprints.md.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: Blueprint
+metadata:
+  labels:
+    ai-factory.suse.com/blueprint-name: openshell-inference-ollama-tenant
+    ai-factory.suse.com/blueprint-version: 0.2.0
+  name: openshell-inference-ollama-tenant-0-2-0
+spec:
+  source: SUSE
+  displayName: OpenShell Inference (Ollama, per-tenant)
+  version: 0.2.0
+  description: |
+    A CPU-friendly OpenAI-compatible inference endpoint for NVIDIA OpenShell
+    sandboxes, using Ollama from the SUSE Application Collection. This is the
+    ISOLATED variant: one engine per tenant, inside the tenant's own namespace.
+
+    For a single engine shared by every tenant, install "OpenShell Inference
+    (Ollama, shared)" instead. Same chart, same model, one copy.
+
+    Install once per tenant, choosing that tenant's namespace in the install
+    wizard — the same namespace you gave the "OpenShell Workspace" blueprint.
+    The service name is pinned, so the in-cluster URL is deterministic:
+      http://ollama.<tenant>.svc.cluster.local:11434/v1
+
+    Give each install a globally unique AIWorkload name (e.g.
+    openshell-inf-<tenant>). The Fleet HelmOp is "<aiworkload-name>-ollama" and
+    the AIWorkload's namespace is not part of it, so two tenants using the same
+    instance name collide on one HelmOp.
+
+    AFTER INSTALL — wire it into OpenShell. These are gateway runtime state, not
+    Helm values, so they run through the CLI once the pod is Ready.
+
+    BOTH COMMANDS ARE WORKSPACE-SCOPED. Omitting --workspace targets the
+    "default" workspace, and sandboxes in a tenant workspace then see no
+    provider and no inference route. Repeat per tenant, with that tenant's URL.
+
+      openshell -g <gateway> --workspace <tenant> provider create \
+        --name ollama-local \
+        --type openai \
+        --credential OPENAI_API_KEY=ollama \
+        --config OPENAI_BASE_URL=http://ollama.<tenant>.svc.cluster.local:11434/v1
+
+      openshell -g <gateway> --workspace <tenant> inference set \
+        --provider ollama-local \
+        --model qwen2.5:0.5b
+
+      openshell -g <gateway> --workspace <tenant> inference get
+
+    Ollama ignores the API key, but `provider create --type openai` requires one
+    to be present — hence the placeholder value above. Note that credential keys
+    are environment variable NAMES, not field names.
+
+    Inference routing hot-reloads in a few seconds; there is no need to recreate
+    sandboxes after changing it. Inside a sandbox the endpoint is
+    https://inference.local — with a /v1 suffix for OpenAI-style clients, and
+    WITHOUT one for Claude Code (ANTHROPIC_BASE_URL).
+
+    Sandbox policy needs NO rule for inference.local: it is a built-in
+    supervisor route and is never evaluated against network policy.
+
+    MODEL CHOICE — qwen2.5:0.5b is ~400 MB, which is what makes a per-tenant
+    engine affordable. It is chosen for footprint, not capability: it answers
+    chat prompts fine and is enough to prove the inference.local path end to
+    end, but it is weak at tool calling, so do not expect a convincing Claude
+    Code agent loop from it. Step up to qwen2.5:1.5b (~1 GB) or 3b (~2 GB) if
+    the demo needs one — but note that 3b is under the Qwen Research License
+    (research use only), whereas 0.5b and 1.5b are Apache-2.0.
+    https://huggingface.co/Qwen/Qwen2.5-0.5B/blob/main/LICENSE
+  components:
+    - chartRepo: application-collection
+      chartName: ollama
+      chartVersion: 1.55.0
+      vendor: suse
+      # Deliberately no targetNamespace: this component follows the AIWorkload's
+      # targetNamespace, i.e. the tenant namespace picked in the install wizard.
+      # fullnameOverride below pins the service NAME, so the URL is still
+      # deterministic — it is just tenant-scoped:
+      #   http://ollama.<tenant>.svc.cluster.local:11434/v1
+      values:
+        # Pin the service name so the URL does not depend on the Helm release
+        # name (which the operator derives from the chart name).
+        fullnameOverride: ollama
+
+        image:
+          registry: dp.apps.rancher.io
+          repository: containers/ollama
+          tag: 0.21.2-11.48
+          pullPolicy: IfNotPresent
+
+        ollama:
+          port: 11434
+          models:
+            # Pulled at startup, then kept resident. ~400 MB — small enough that
+            # one copy per tenant namespace is affordable, which is the whole
+            # reason this blueprint can be per-tenant. See MODEL CHOICE in the
+            # description for the capability trade-off.
+            pull:
+              - qwen2.5:0.5b
+            run:
+              - qwen2.5:0.5b
+          gpu:
+            enabled: false
+
+        service:
+          type: ClusterIP
+          port: 11434
+
+        # Off by default so the demo needs no StorageClass. The cost is that the
+        # model is re-pulled on every pod restart — and with a per-tenant
+        # install, that is once per tenant. Turn this on for anything
+        # long-lived; the cluster then needs a default StorageClass, or set
+        # storageClass explicitly, otherwise the PVC stays Pending and the pod
+        # never starts.
+        persistentVolume:
+          enabled: false
+          # Sized for qwen2.5:0.5b (~400 MB) plus room for a second small model.
+          # Raise it if you switch to a larger model.
+          size: 5Gi
+          storageClass: ""
+
+        # CPU inference is memory-bound, not CPU-bound. Left unset so the pod
+        # schedules on a small cluster; set requests/limits on a shared one.
+        resources: {}
+
+        ingress:
+          # Never expose the raw engine. Sandboxes reach it through OpenShell's
+          # inference router at https://inference.local, which strips sandbox
+          # credentials, injects the real provider credential and rewrites the
+          # model name. The proxying is done by the sandbox pod's own supervisor
+          # using a route bundle it fetches from the gateway, so a ClusterIP
+          # Service reachable from the tenant namespace is all that is needed.
+          enabled: false

@@ -1,0 +1,115 @@
+# Demo installs of the blueprints — the same payload the UI install wizard
+# would produce. Apply after 00/10/20/40, and after creating + labelling the
+# namespaces:
+#
+#   kubectl create namespace openshell
+#   for t in tenant-a tenant-b; do
+#     kubectl create namespace $t
+#     kubectl label namespace $t ai-factory.suse.com/openshell-workspace=true
+#   done
+#
+# NOTE the workload names. The Fleet HelmOp is named
+# "<aiworkload-name>-<chartName>" and always lands in fleet-local, so the
+# AIWorkload namespace is NOT part of it. Two tenants using the same workload
+# name collide on one HelmOp — hence the tenant suffix below.
+#
+# Note also that spec.componentValues is NOT read on the Blueprint path; the
+# operator takes values from the Blueprint CR only. To change a value, author a
+# new Blueprint version rather than adding overrides here.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: AIWorkload
+metadata:
+  name: openshell-gw-local
+  namespace: openshell
+spec:
+  displayName: OpenShell Gateway
+  source:
+    sourceType: Blueprint
+    blueprint:
+      name: openshell-gateway
+      version: 0.2.0
+  targetNamespace: openshell
+  targetClusters: ["local"]
+  deployStrategy: FleetBundle
+---
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: AIWorkload
+metadata:
+  name: openshell-ws-tenant-a
+  namespace: tenant-a
+spec:
+  displayName: OpenShell Workspace
+  source:
+    sourceType: Blueprint
+    blueprint:
+      name: openshell-workspace
+      version: 0.2.0
+  targetNamespace: tenant-a
+  targetClusters: ["local"]
+  deployStrategy: FleetBundle
+---
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: AIWorkload
+metadata:
+  name: openshell-ws-tenant-b
+  namespace: tenant-b
+spec:
+  displayName: OpenShell Workspace
+  source:
+    sourceType: Blueprint
+    blueprint:
+      name: openshell-workspace
+      version: 0.2.0
+  targetNamespace: tenant-b
+  targetClusters: ["local"]
+  deployStrategy: FleetBundle
+---
+# Optional — the CPU inference engine sandboxes talk to through
+# inference.local. Skip on GPU clusters and install the shipped
+# "suse-inference-endpoint" blueprint (vLLM + LiteLLM) instead.
+#
+# There are two variants and the demo below installs BOTH, to show the choice:
+# tenant-a gets a dedicated engine in its own namespace (isolation), tenant-b
+# uses the shared one in "openshell" (efficiency). Which one a tenant actually
+# uses is decided by the OPENAI_BASE_URL in its provider, not by what is
+# installed — and inference routing hot-reloads in ~5s, so it is reversible.
+#
+# Installing both is a demo choice, not a recommendation. In practice pick one
+# per cluster unless a specific tenant needs isolation.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: AIWorkload
+metadata:
+  name: openshell-inf-tenant-a
+  namespace: tenant-a
+spec:
+  displayName: OpenShell Inference (Ollama, per-tenant)
+  source:
+    sourceType: Blueprint
+    blueprint:
+      name: openshell-inference-ollama-tenant
+      version: 0.2.0
+  targetNamespace: tenant-a
+  targetClusters: ["local"]
+  deployStrategy: FleetBundle
+---
+# The shared engine. Install once; tenant-b (and any other tenant) points its
+# provider at http://ollama.openshell.svc.cluster.local:11434/v1.
+#
+# NOTE: this variant defaults persistentVolume to true, so the cluster needs a
+# default StorageClass. Without one the PVC stays Pending and the pod never
+# starts — author a Blueprint version with it disabled if that is your case.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: AIWorkload
+metadata:
+  name: openshell-inf-shared
+  namespace: openshell
+spec:
+  displayName: OpenShell Inference (Ollama, shared)
+  source:
+    sourceType: Blueprint
+    blueprint:
+      name: openshell-inference-ollama-shared
+      version: 0.2.0
+  targetNamespace: openshell
+  targetClusters: ["local"]
+  deployStrategy: FleetBundle

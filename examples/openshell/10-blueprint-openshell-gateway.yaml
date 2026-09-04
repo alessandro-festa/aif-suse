@@ -1,0 +1,349 @@
+# Blueprint A — OpenShell Gateway (install ONCE per cluster).
+#
+# Deploys the NVIDIA OpenShell gateway in shared-gateway topology: the gateway
+# itself creates no sandbox resources (workspaceResources.enabled=false) and
+# serves many pre-provisioned tenant namespaces, each provisioned by Blueprint B
+# (openshell-workspace).
+#
+# PREREQUISITE — the Kubernetes Agent Sandbox CRDs and controller must already
+# be installed cluster-wide. See docs/openshell-blueprints.md. The chart's own
+# preflight (left enabled below) fails the install with a clear message if they
+# are missing.
+#
+# HOW TO CUSTOMISE THIS. There are no install-time parameters: the AI Factory
+# install wizard collects only the instance name, namespace, cluster and deploy
+# strategy, and AIWorkload.spec.componentValues is ignored on the Blueprint
+# path. To change any value below, author a new Blueprint version (Blueprints →
+# Create, which does expose a per-component values editor) or edit this file and
+# bump spec.version. Most optional blocks below are therefore left commented
+# out with the guidance needed to switch them on.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: Blueprint
+metadata:
+  labels:
+    ai-factory.suse.com/blueprint-name: openshell-gateway
+    ai-factory.suse.com/blueprint-version: 0.2.0
+  name: openshell-gateway-0-2-0
+spec:
+  source: Nvidia
+  displayName: OpenShell Gateway
+  version: 0.2.0
+  description: |
+    NVIDIA OpenShell gateway — a runtime environment for autonomous agents.
+    Install this once per cluster, then install the "OpenShell Workspace"
+    blueprint once into each tenant namespace that should be able to run
+    sandboxes.
+
+    Requires the Kubernetes Agent Sandbox CRDs and controller to be installed
+    on the cluster first:
+      kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.0/sandbox-with-extensions.yaml
+
+    The gateway is pinned to the "openshell" namespace regardless of the
+    namespace chosen in the install wizard, because the Workspace blueprint
+    references the gateway's ServiceAccount at a fixed location.
+
+    WHAT THIS BLUEPRINT DOES NOT CONFIGURE. Helm values cover the gateway's
+    deployment, exposure, authentication and credential backend. They do NOT
+    cover the gateway's runtime state — OpenShell workspaces and their members,
+    provider instances and profiles, sandbox policies, and inference routing all
+    live in the gateway database and are set through the `openshell` CLI after
+    install. See docs/openshell-blueprints.md ("Blueprint values vs gateway
+    runtime state") and the ready-made files under examples/openshell/policies/
+    and examples/openshell/providers/.
+
+    PROTOTYPE — this blueprint enables server.auth.allowUnauthenticatedUsers so
+    it can be demonstrated without an OIDC provider. Every caller is accepted as
+    a local developer principal, which also makes every caller a Platform Admin.
+    Do NOT use on a shared or production cluster; set server.oidc.* and turn
+    this off first.
+  components:
+    # The upstream chart's Chart.yaml name is literally "helm-chart", which is
+    # also the OCI repository name. releaseName below decouples the Helm release
+    # name from that — see the note on it.
+    - chartRepo: openshell
+      chartName: helm-chart
+      chartVersion: 0.0.0-dev.17171cd9337a2181d4bb5a9e711e1f2ad5f69388
+      # "suse" is the default injector. It adds imagePullSecrets +
+      # global.imagePullSecrets for the combined SUSE pull secret. OpenShell's
+      # images are public on ghcr.io so the secret is not needed, but the shape
+      # (list of {name}) matches what the chart's pod spec expects and the extra
+      # global.* key is ignored. The "nvidia" injector would wire in ngc-secret,
+      # which authenticates nvcr.io — the wrong registry for these images.
+      vendor: suse
+      # Pinned, NOT taken from the install wizard. The Workspace blueprint
+      # hardcodes gateway.serviceAccount.namespace: openshell, and the gateway's
+      # derived grpc_endpoint bakes in the release namespace.
+      targetNamespace: openshell
+      # CRITICAL, and the single value that makes the two charts agree.
+      #
+      # Without it the release name defaults to chartName ("helm-chart"), which
+      # has two silent consequences: the chart fullname becomes
+      # "helm-chart-openshell" (so the gateway ServiceAccount is not the
+      # "openshell" subject that Blueprint B's RoleBinding grants), and the pod
+      # label app.kubernetes.io/instance becomes "helm-chart" (so Blueprint B's
+      # NetworkPolicy, which defaults to instance=openshell, selects zero pods
+      # and the gateway cannot reach sandbox SSH on :2222).
+      #
+      # Setting the release name to "openshell" fixes both at once: the chart's
+      # fullname helper returns the release name when it already contains the
+      # chart nameOverride, and selectorLabels use the release name directly.
+      # That is why there is no fullnameOverride below and no podSelector
+      # override in Blueprint B.
+      releaseName: openshell
+      values:
+        # ---------------------------------------------------------------
+        # Topology
+        # ---------------------------------------------------------------
+        # Shared-gateway topology: the sandbox ServiceAccount, Role, RoleBinding
+        # and NetworkPolicy come from Blueprint B in each tenant namespace, not
+        # from this release.
+        workspaceResources:
+          enabled: false
+
+        supervisor:
+          # Pinned rather than auto-detected. The chart picks image-volume vs
+          # init-container from .Capabilities.KubeVersion; ImageVolume is only
+          # on by default from Kubernetes 1.35. Pin explicitly so the rendered
+          # result does not depend on what Helm reports. Drop this on K8s >=1.35.
+          sideloadMethod: init-container
+          # "combined" runs the egress proxy inside the sandbox container.
+          # Switch to "sidecar" for a separate proxy container — required if you
+          # use upstreamProxy with authentication.
+          # topology: combined
+
+        server:
+          # ---------------------------------------------------------------
+          # Authentication
+          # ---------------------------------------------------------------
+          auth:
+            # PROTOTYPE ONLY — see the description above. With this on, OpenShell
+            # workspace RBAC (Platform Admin / Workspace Admin / Workspace User)
+            # is inert: every caller is treated as a Platform Admin.
+            allowUnauthenticatedUsers: true
+
+          # Turn allowUnauthenticatedUsers off and fill this in for any shared
+          # cluster. rolesClaim is IdP-specific:
+          #   Keycloak  realm_access.roles
+          #   Entra ID  roles
+          #   Okta      groups
+          # adminRole and userRole must BOTH be set or BOTH be empty; setting
+          # only one is a configuration error. Leaving both empty gives
+          # authentication-only mode (valid token = access, no role mapping).
+          # caConfigMapName is required when the issuer's TLS certificate is
+          # signed by a private CA (OpenShift ingress, internal PKI); the
+          # ConfigMap must have a ca.crt key.
+          # oidc:
+          #   issuer: "https://keycloak.example.com/realms/openshell"
+          #   audience: "openshell-cli"
+          #   rolesClaim: "realm_access.roles"
+          #   adminRole: "openshell-admin"
+          #   userRole: "openshell-user"
+          #   caConfigMapName: ""
+
+          # ---------------------------------------------------------------
+          # Workspaces and sandboxes
+          # ---------------------------------------------------------------
+          drivers:
+            kubernetes:
+              # One gateway serving many pre-provisioned namespaces. A workspace
+              # name maps 1:1 to a namespace of the same name.
+              workspaceMode: operator
+              # Operator mode requires exactly one of operatorNamespaceLabel or
+              # operatorNamespaceFile. The gateway watches namespaces carrying
+              # this label; Blueprint B's namespace must be labelled with it.
+              # A missing label is the single most common cause of "sandbox
+              # create" failing with an error that never mentions labels.
+              operatorNamespaceLabel: ai-factory.suse.com/openshell-workspace=true
+
+          # Default image for new sandboxes. Left at the chart default, which is
+          # the only sandbox image published publicly today — of
+          # ghcr.io/nvidia/openshell-community/sandboxes/{base,suse,python,
+          # openclaw-suse}, an anonymous pull succeeds for "base" alone; the
+          # others return DENIED.
+          #
+          # The SUSE-branded sandboxes (sandboxes/suse, sandboxes/openclaw-suse)
+          # exist in source in the OpenShell-Community fork. Once they are built
+          # and published, switch this to one of them — that is what a SUSE demo
+          # should show. Until then, overriding this breaks every sandbox create
+          # with an ImagePullBackOff.
+          sandboxImage: "ghcr.io/nvidia/openshell-community/sandboxes/base:latest"
+          # sandboxImagePullPolicy: ""
+          # For a private registry (including the SUSE images above once they
+          # are published behind auth):
+          # sandboxImagePullSecrets:
+          #   - name: openshell-sandbox-pull
+
+          # Left empty so sandbox workspace PVCs use the cluster's default
+          # StorageClass. Set this on clusters that have no default, otherwise
+          # the PVC stays Pending and the sandbox never starts.
+          workspaceStorageClass: ""
+          # Per-sandbox workspace PVC size. Empty = the driver default.
+          # workspaceDefaultStorageSize: "10Gi"
+
+          # Set on clusters where sandboxes must run under a specific runtime
+          # (e.g. "nvidia" for GPU sandboxes, or a sandboxed runtime like gVisor
+          # or Kata for stronger isolation than the default).
+          # defaultRuntimeClassName: ""
+          # appArmorProfile: "Unconfined"
+
+          # ---------------------------------------------------------------
+          # Policy posture
+          # ---------------------------------------------------------------
+          # How the gateway reacts when a sandbox policy fails validation.
+          #   fail_closed        reject the policy and deny the traffic it
+          #                      governed (default, and the right default)
+          #   retain_last_valid  keep serving the previously valid policy
+          # This is the ONLY policy-related Helm value. Policy *content* is set
+          # with `openshell policy set [--global]` — see
+          # examples/openshell/policies/.
+          policyValidationFailureMode: fail_closed
+
+          # ---------------------------------------------------------------
+          # Provider credential backend
+          # ---------------------------------------------------------------
+          # Where provider credential material is stored. This is the part of
+          # "providers" that IS a Helm value; provider *instances* and *profiles
+          # are created with `openshell provider ...` after install.
+          #
+          # By default the gateway encrypts credentials in its own database
+          # using a key-encryption key held in a chart-generated Secret. That
+          # generation uses Helm's `lookup`, which returns nothing under
+          # `helm template` — so on a GitOps path (Fleet renders the chart) the
+          # key is regenerated on every render and previously stored
+          # credentials become undecryptable. Create the Secret out of band and
+          # name it here to pin it:
+          #
+          #   kubectl -n openshell create secret generic openshell-credential-kek \
+          #     --from-literal=key-encryption-key="$(head -c 32 /dev/urandom | base64)"
+          #
+          # credentialStorage:
+          #   existingSecret: "openshell-credential-kek"
+
+          # Alternative backends. kubernetesSecrets stores provider credentials
+          # as Secret objects — note the RBAC Role grants read/write on ALL
+          # Secrets in the chosen namespace, so give it a dedicated one.
+          # credentialDrivers:
+          #   kubernetesSecrets:
+          #     enabled: true
+          #     namespace: "openshell-credentials"
+          #     rbac:
+          #       create: true
+          #   vault:
+          #     enabled: false
+          #     address: "http://vault.vault.svc.cluster.local:8200"
+          #     mount: secret
+          #     kvVersion: "2"
+          #     authMethod: kubernetes
+          #     role: "openshell"
+
+          # Dynamic, short-lived provider tokens via SPIFFE instead of stored
+          # credentials. Requires a SPIRE agent socket on the nodes.
+          # providerTokenGrants:
+          #   spiffe:
+          #     enabled: false
+
+          # ---------------------------------------------------------------
+          # Exposure
+          # ---------------------------------------------------------------
+          # The demo reaches the gateway with `kubectl port-forward`, which needs
+          # none of the values below. For a real cluster pick ONE of the two
+          # routes documented in docs/openshell-blueprints.md ("Exposing the
+          # gateway"); they differ in who terminates TLS, which decides whether
+          # mTLS or OIDC authenticates the caller.
+          #
+          # Route 1 — Gateway API. Envoy terminates TLS, so the gateway never
+          # sees a client certificate and OIDC becomes mandatory. Set
+          # server.disableTls=true so Envoy forwards plaintext to the pod, and
+          # set server.grpcEndpoint to the external URL the CLI should use.
+          # disableTls: false
+          # grpcEndpoint: ""
+          #
+          # Route 2 — OpenShift Route with TLS passthrough. The gateway keeps
+          # terminating its own TLS/mTLS; the router only forwards on SNI. Keep
+          # disableTls=false and make sure the server certificate's SANs include
+          # the Route hostname (pkiInitJob.serverDnsNames or
+          # certManager.serverDnsNames).
+
+          # ---------------------------------------------------------------
+          # Operations
+          # ---------------------------------------------------------------
+          # Gateway display name and identity. Defaults to the chart fullname.
+          # name: ""
+          # otlp:
+          #   endpoint: "http://opentelemetry-collector.observability:4317"
+          #   serviceName: "openshell-gateway"
+          # telemetryEnabled: true
+          # grpcRateLimit:
+          #   requests: 0
+          #   windowSeconds: 60
+          #
+          # The default database is SQLite on the StatefulSet's volume, which
+          # caps the gateway at one replica. Point at Postgres to scale out.
+          # externalDbSecret: "openshell-db"
+
+        # ---------------------------------------------------------------
+        # Exposure (chart-level)
+        # ---------------------------------------------------------------
+        # Gateway API GRPCRoute. Requires a Gateway API controller (Envoy
+        # Gateway installs the "eg" GatewayClass). Pair protocol HTTPS with
+        # server.disableTls=true above.
+        # grpcRoute:
+        #   enabled: true
+        #   hostnames:
+        #     - openshell.example.com
+        #   gateway:
+        #     create: true
+        #     className: eg
+        #     listener:
+        #       port: 443
+        #       protocol: HTTPS
+        #       allowedRoutes: Same
+        #       tls:
+        #         certificateRefs:
+        #           - name: openshell-external-tls
+
+        # OpenShift Route with TLS passthrough. host must match a SAN on the
+        # gateway's server certificate.
+        # openshiftRoute:
+        #   enabled: true
+        #   host: openshell.apps.example.com
+
+        # ClusterIP is right for port-forward and for both routes above. Use
+        # LoadBalancer only to expose the gateway directly, in which case add
+        # the load balancer's hostname/IP to the certificate SANs below.
+        # service:
+        #   type: ClusterIP
+
+        # ---------------------------------------------------------------
+        # TLS / PKI
+        # ---------------------------------------------------------------
+        # By default a chart hook generates a self-signed CA, a server
+        # certificate and the sandbox JWT signing key. Add every name and
+        # address the gateway will be reached on, or the CLI's TLS handshake
+        # fails against the external hostname.
+        # pkiInitJob:
+        #   serverDnsNames:
+        #     - openshell.example.com
+        #   serverIpAddresses:
+        #     - 203.0.113.10
+        #
+        # Or hand TLS to cert-manager. serverIssuerRef points at a real issuer
+        # (e.g. an ACME ClusterIssuer) for a publicly-trusted external
+        # certificate; the internal certificate stays signed by the chart CA,
+        # which is what the sandbox supervisors' client certificates chain to.
+        # certManager:
+        #   enabled: true
+        #   serverIssuerRef:
+        #     name: letsencrypt-prod
+        #     kind: ClusterIssuer
+        #     group: cert-manager.io
+        #   serverDnsNames:
+        #     - openshell.example.com
+
+        # ---------------------------------------------------------------
+        # Egress via a corporate proxy
+        # ---------------------------------------------------------------
+        # Note: proxy authentication requires supervisor.topology: sidecar.
+        # upstreamProxy:
+        #   url: "http://proxy.example.com:3128"
+        #   noProxy: ".svc,.cluster.local,10.0.0.0/8"

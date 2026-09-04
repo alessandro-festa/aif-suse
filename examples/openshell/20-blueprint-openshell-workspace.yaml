@@ -1,0 +1,77 @@
+# Blueprint B — OpenShell Workspace (install ONCE PER TENANT namespace).
+#
+# Creates only the namespace-scoped prerequisites a tenant namespace needs so
+# the shared gateway from Blueprint A can run sandboxes in it: a sandbox
+# ServiceAccount, a Role/RoleBinding granting the gateway's ServiceAccount
+# sandbox CRUD in this namespace, and a NetworkPolicy restricting sandbox SSH
+# ingress to gateway pods.
+#
+# Unlike Blueprint A, no component targetNamespace is pinned — the namespace
+# chosen in the install wizard IS the tenant namespace, so installing this
+# blueprint N times with N different namespaces onboards N tenants.
+#
+# NOTE ON SCOPE. This creates the *Kubernetes* side of a workspace. The
+# OpenShell workspace itself — and its members and their roles — is gateway
+# state, created with `openshell workspace create` / `workspace member add`.
+# See docs/openshell-blueprints.md ("Workspaces").
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: Blueprint
+metadata:
+  labels:
+    ai-factory.suse.com/blueprint-name: openshell-workspace
+    ai-factory.suse.com/blueprint-version: 0.2.0
+  name: openshell-workspace-0-2-0
+spec:
+  source: Nvidia
+  displayName: OpenShell Workspace
+  version: 0.2.0
+  description: |
+    Onboards one tenant namespace to a shared NVIDIA OpenShell gateway.
+    Install the "OpenShell Gateway" blueprint first; then install this once per
+    tenant, choosing the tenant's namespace in the install wizard. The
+    namespace name becomes the OpenShell workspace name.
+
+    The namespace must carry the label the gateway watches:
+      kubectl label namespace <tenant> ai-factory.suse.com/openshell-workspace=true
+
+    Deploys no workloads — only a ServiceAccount, Role, RoleBinding and
+    NetworkPolicy.
+
+    Give each install a globally unique AIWorkload name (e.g.
+    openshell-ws-<tenant>). The Fleet HelmOp is named
+    "<aiworkload-name>-<chartName>" and always lands in fleet-local, so the
+    AIWorkload's own namespace is not part of the name and two tenants using the
+    same instance name would collide on one HelmOp.
+  components:
+    - chartRepo: openshell
+      chartName: openshell-workspace
+      chartVersion: 0.0.0-dev.17171cd9337a2181d4bb5a9e711e1f2ad5f69388
+      vendor: suse
+      # Deliberately no targetNamespace: this component follows the AIWorkload's
+      # targetNamespace, i.e. whatever the user picks in the install wizard.
+      values:
+        gateway:
+          serviceAccount:
+            # The RoleBinding subject. Must match the gateway's ServiceAccount,
+            # which Blueprint A makes "openshell" in namespace "openshell" by
+            # setting its component's releaseName to "openshell".
+            name: openshell
+            namespace: openshell
+          # gateway.networkPolicy.podSelector is deliberately NOT set. Its
+          # upstream default is {app.kubernetes.io/name: openshell,
+          # app.kubernetes.io/instance: openshell}, which matches the gateway
+          # pod labels exactly — again because Blueprint A sets releaseName to
+          # "openshell" (the instance label is the Helm release name).
+          #
+          # If you ever change Blueprint A's releaseName, this NetworkPolicy
+          # stops selecting the gateway pod, and the failure is silent and
+          # confusing: `openshell sandbox exec` still works (it is gRPC to the
+          # gateway) while `openshell sandbox connect` hangs (it is SSH from the
+          # gateway to the sandbox on :2222, which the policy now drops).
+        sandboxServiceAccount:
+          create: true
+          # Must match the gateway's sandboxServiceAccount.name (both default to
+          # openshell-sandbox).
+          name: openshell-sandbox
+        networkPolicy:
+          enabled: true

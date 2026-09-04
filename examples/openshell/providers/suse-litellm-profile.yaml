@@ -1,0 +1,73 @@
+# Custom provider profile — LiteLLM in front of vLLM on a SUSE AI Factory
+# cluster, reachable DIRECTLY from a sandbox.
+#
+#   openshell provider profile lint   -f suse-litellm-profile.yaml
+#   openshell provider profile import -f suse-litellm-profile.yaml --global
+#   openshell --workspace <tenant> provider create \
+#     --name litellm-direct --type suse-litellm --global-profile \
+#     --credential OPENAI_API_KEY=<litellm-virtual-key>
+#   openshell --workspace <tenant> sandbox provider attach <sandbox> litellm-direct
+#
+# Provider INSTANCES are always workspace-scoped; --workspace defaults to
+# "default" and a tenant sandbox cannot see a provider created there. Profiles
+# can be platform-scoped with --global, which is why the import above uses it.
+#
+# WHEN YOU DO NOT NEED THIS. If you only want inference.local routed at LiteLLM,
+# use the built-in `openai` profile with --config OPENAI_BASE_URL instead — see
+# README.md. That path keeps the key out of the sandbox entirely and is the
+# better default. Use this profile when code in the sandbox must call the
+# endpoint itself (a tool that cannot be pointed at inference.local, direct
+# /v1/models discovery, an OpenAI SDK with a hardcoded client), and you want
+# OpenShell to inject the credential at the proxy rather than handing it over.
+#
+# Attaching a provider built from this profile contributes generated
+# `_provider_*` entries to the sandbox's effective network policy, so the
+# endpoints below do not have to be repeated in every sandbox policy.
+# Inspect the result with `openshell policy get <sandbox> --full`.
+id: suse-litellm
+annotations:
+  ai-factory.suse.com/source: aif-suse/examples/openshell
+display_name: SUSE LiteLLM
+description: OpenAI-compatible inference through LiteLLM on SUSE AI Factory
+category: inference
+# Metadata only. This does NOT create inference.local routes — that is
+# `openshell inference set`, and it is a separate, gateway-scoped setting.
+inference_capable: true
+
+credentials:
+  - name: api_token
+    description: LiteLLM virtual key
+    # Credential keys are environment variable NAMES. LiteLLM accepts its
+    # virtual keys as an OpenAI-style bearer token.
+    env_vars: [OPENAI_API_KEY]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+
+discovery:
+  credentials: [api_token]
+
+# These endpoints are also the credential binding: the proxy substitutes the
+# real key only for requests matching this host, port and path. Anything else
+# is rejected with HTTP 403 credential_endpoint_mismatch.
+#
+# ADJUST THE HOST. This assumes LiteLLM was installed by the shipped
+# "suse-inference-endpoint" blueprint into the `openshell` namespace. Change the
+# namespace segment if you installed it elsewhere; the profile has to name the
+# concrete service.
+#
+# An exact hostname endpoint is allowed to resolve to a private (RFC 1918)
+# address without an `allowed_ips` list — which is what a ClusterIP is. Wildcard
+# or hostless endpoints would require one.
+endpoints:
+  - host: litellm.openshell.svc.cluster.local
+    port: 4000
+    path: /v1/**
+    protocol: rest
+    access: full
+    enforcement: enforce
+
+binaries:
+  - /usr/bin/curl
+  - /usr/bin/python3
+  - /usr/bin/node

@@ -1,0 +1,86 @@
+# Claude Code with L7-inspected endpoints — the fix for `provider attach`.
+#
+#   openshell policy set <sandbox> --policy claude-code-l7.yaml --wait
+#   openshell sandbox provider attach <sandbox> <provider>
+#
+# THE PROBLEM. The stock sandbox image ships a `claude_code` network policy
+# whose telemetry endpoints are declared L4-only — no `protocol:`, so OpenShell
+# cannot inspect or rewrite the traffic:
+#
+#   - { host: statsig.anthropic.com, port: 443 }
+#   - { host: sentry.io, port: 443 }
+#
+# Attaching a provider makes those endpoints credentialed, and OpenShell
+# refuses to put injected credentials down a path it cannot inspect:
+#
+#   credentialed endpoint 'statsig.anthropic.com:443' in rule 'claude_code'
+#   uses L4-only; configure L7 inspection or explicitly set
+#   allow_uninspected_credentials: true
+#
+# THE FIX. Redeclare the same endpoints with `protocol: rest`, which lets the
+# proxy terminate TLS and inspect the request. The alternative the error
+# suggests — `allow_uninspected_credentials: true` — is a security-sensitive
+# opt-in that permits credentials down an uninspectable tunnel. Prefer this file.
+#
+# Longer term the right home for this is the image, not a per-sandbox override:
+# see sandboxes/openclaw-suse/policy.yaml in the OpenShell-Community fork.
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /proc
+    - /dev/urandom
+    - /etc
+    - /app
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev/null
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+  claude_code:
+    name: claude-code
+    endpoints:
+      # The API itself was already inspected in the stock policy.
+      - host: api.anthropic.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: full
+
+      # These four are the change: L4-only in the image policy, inspected here.
+      # read-only would be tighter, but the Statsig and Sentry clients POST,
+      # so they need read-write.
+      - host: statsig.anthropic.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-write
+      - host: sentry.io
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-write
+      - host: platform.claude.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-write
+      - host: raw.githubusercontent.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+    binaries:
+      - { path: /usr/local/bin/claude }
+      - { path: /usr/bin/node }

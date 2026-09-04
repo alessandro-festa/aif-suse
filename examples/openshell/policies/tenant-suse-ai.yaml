@@ -1,0 +1,129 @@
+# Per-sandbox policy for a SUSE AI Factory tenant.
+#
+#   openshell policy set <sandbox> --policy tenant-suse-ai.yaml --wait
+#
+# Grants the egress an agent actually needs on a SUSE stack — the SUSE
+# registries, PyPI and npm — and nothing else. Everything not listed here is
+# denied.
+#
+# NOTE there is deliberately no rule for inference.local. That endpoint is a
+# built-in route inside the sandbox supervisor, not an ordinary destination, so
+# it never reaches network policy evaluation. Adding a rule for it does nothing.
+# Only external inference hosts called directly need one.
+#
+# network_policies and network_middlewares are dynamic: applying this to a
+# running sandbox takes effect in a few seconds, no restart. filesystem_policy,
+# landlock and process are static and require recreating the sandbox.
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /proc
+    - /dev/urandom
+    - /etc
+    - /app
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev/null
+
+landlock:
+  # best_effort skips paths that do not exist in this particular image and
+  # enforces the rest. hard_requirement aborts sandbox startup on any gap —
+  # correct when no reduction in filesystem isolation is acceptable.
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+  # Container images and Helm charts from the SUSE registries.
+  suse_registries:
+    name: suse-registries
+    endpoints:
+      - host: registry.suse.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+      - host: dp.apps.rancher.io
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+    binaries:
+      - { path: /usr/bin/curl }
+      - { path: /usr/bin/zypper }
+      - { path: /usr/bin/helm }
+
+  # PyPI. read-only is enough to install; it does not permit uploads.
+  pypi:
+    name: pypi
+    endpoints:
+      - host: pypi.org
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+      - host: files.pythonhosted.org
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+    binaries:
+      - { path: /usr/bin/pip }
+      - { path: /usr/bin/pip3 }
+      - { path: /usr/bin/python3 }
+
+  # npm. allow_encoded_slash is required for scoped packages, whose paths
+  # contain %2F (/@scope%2Fname) and would otherwise be rejected by L7 parsing.
+  npm_registry:
+    name: npm-registry
+    endpoints:
+      - host: registry.npmjs.org
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+        allow_encoded_slash: true
+    binaries:
+      - { path: /usr/bin/npm }
+      - { path: /usr/bin/node }
+
+# Ordered egress middleware, applied after network and L7 policy admit a
+# request and BEFORE OpenShell injects provider credentials.
+#
+# This is the one part of OpenShell's extensibility surface that is reachable
+# declaratively: built-in middleware needs no registration in gateway.toml.
+# Operator-run (custom gRPC) middleware does, and the Helm chart cannot emit
+# that section — see docs/openshell-blueprints.md ("Extension points").
+network_middlewares:
+  redact-api-tokens:
+    name: Redact API tokens
+    # openshell/ is reserved for built-ins. This one replaces simple token
+    # patterns (initially sk-… shapes) in UTF-8 HTTP bodies and WebSocket text
+    # messages. It is regex-based, not parser-aware: treat it as defence in
+    # depth against an agent pasting a key into an outbound request, not as a
+    # guarantee.
+    middleware: openshell/regex
+    # Must be unique across the policy. Lower runs first.
+    order: 10
+    config:
+      mode: redact
+    # Deny the request if the stage fails. Note that a fail_closed selector is
+    # rejected at validation if it could match a `tls: skip` endpoint, because
+    # that traffic cannot be inspected through any operation.
+    on_error: fail_closed
+    endpoints:
+      # Required, and must be non-empty. Host globs only: * matches exactly one
+      # DNS label, ** matches one or more. Max 32 include+exclude patterns.
+      include:
+        - "registry.suse.com"
+        - "dp.apps.rancher.io"
+        - "pypi.org"
+        - "files.pythonhosted.org"
+        - "registry.npmjs.org"
