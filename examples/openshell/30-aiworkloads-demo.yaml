@@ -27,7 +27,7 @@ spec:
     sourceType: Blueprint
     blueprint:
       name: openshell-gateway
-      version: 0.2.0
+      version: 0.2.1
   targetNamespace: openshell
   targetClusters: ["local"]
   deployStrategy: FleetBundle
@@ -76,6 +76,16 @@ spec:
 #
 # Installing both is a demo choice, not a recommendation. In practice pick one
 # per cluster unless a specific tenant needs isolation.
+#
+# FOOTPRINT. As of 0.2.1 both variants default to qwen3:1.7b — ~1.4 GB on disk
+# and ~2-3 GB of RAM each — so running both engines is roughly 6 GB resident.
+# That fits on a typical laptop kind cluster, which is why installing both is
+# shown here at all. Check your Docker/VM memory ceiling first: kind cannot
+# hand out RAM the host VM does not have.
+#
+# If you raise either Blueprint to qwen2.5:7b-instruct (~6 GB resident each),
+# stop installing both. Apply one — the shared engine below is the better
+# default — and point tenant-a's provider at it too.
 apiVersion: ai-factory.suse.com/v1alpha1
 kind: AIWorkload
 metadata:
@@ -87,7 +97,7 @@ spec:
     sourceType: Blueprint
     blueprint:
       name: openshell-inference-ollama-tenant
-      version: 0.2.0
+      version: 0.2.1
   targetNamespace: tenant-a
   targetClusters: ["local"]
   deployStrategy: FleetBundle
@@ -95,9 +105,10 @@ spec:
 # The shared engine. Install once; tenant-b (and any other tenant) points its
 # provider at http://ollama.openshell.svc.cluster.local:11434/v1.
 #
-# NOTE: this variant defaults persistentVolume to true, so the cluster needs a
-# default StorageClass. Without one the PVC stays Pending and the pod never
-# starts — author a Blueprint version with it disabled if that is your case.
+# NOTE: since 0.2.1 BOTH variants default persistentVolume to true, so the
+# cluster needs a default StorageClass. Without one the PVC stays Pending and
+# the pod never starts — author a Blueprint version with it disabled if that is
+# your case, accepting a ~4.7 GB re-pull on every restart.
 apiVersion: ai-factory.suse.com/v1alpha1
 kind: AIWorkload
 metadata:
@@ -109,7 +120,7 @@ spec:
     sourceType: Blueprint
     blueprint:
       name: openshell-inference-ollama-shared
-      version: 0.2.0
+      version: 0.2.1
   targetNamespace: openshell
   targetClusters: ["local"]
   deployStrategy: FleetBundle

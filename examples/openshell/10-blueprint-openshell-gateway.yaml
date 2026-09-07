@@ -22,12 +22,12 @@ kind: Blueprint
 metadata:
   labels:
     ai-factory.suse.com/blueprint-name: openshell-gateway
-    ai-factory.suse.com/blueprint-version: 0.2.0
-  name: openshell-gateway-0-2-0
+    ai-factory.suse.com/blueprint-version: 0.2.1
+  name: openshell-gateway-0-2-1
 spec:
   source: Nvidia
   displayName: OpenShell Gateway
-  version: 0.2.0
+  version: 0.2.1
   description: |
     NVIDIA OpenShell gateway — a runtime environment for autonomous agents.
     Install this once per cluster, then install the "OpenShell Workspace"
@@ -155,19 +155,37 @@ spec:
               # create" failing with an error that never mentions labels.
               operatorNamespaceLabel: ai-factory.suse.com/openshell-workspace=true
 
-          # Default image for new sandboxes. Left at the chart default, which is
-          # the only sandbox image published publicly today — of
+          # Default image for new sandboxes.
+          #
+          # THIS IS A LOCALLY BUILT IMAGE, NOT A PULLABLE ONE. Of
           # ghcr.io/nvidia/openshell-community/sandboxes/{base,suse,python,
           # openclaw-suse}, an anonymous pull succeeds for "base" alone; the
-          # others return DENIED.
+          # others return DENIED. But "base" ships Claude Code and NO OpenClaw,
+          # so nothing in it can be driven by the nemoclaw CLI. The
+          # SUSE-branded openclaw-suse sandbox is what this demo needs, and it
+          # only exists in source.
           #
-          # The SUSE-branded sandboxes (sandboxes/suse, sandboxes/openclaw-suse)
-          # exist in source in the OpenShell-Community fork. Once they are built
-          # and published, switch this to one of them — that is what a SUSE demo
-          # should show. Until then, overriding this breaks every sandbox create
-          # with an ImagePullBackOff.
-          sandboxImage: "ghcr.io/nvidia/openshell-community/sandboxes/base:latest"
-          # sandboxImagePullPolicy: ""
+          # BUILD AND LOAD IT BEFORE INSTALLING THIS BLUEPRINT (two stages —
+          # openclaw-suse builds FROM sandboxes/suse):
+          #
+          #   cd ~/Documents/dev/OpenShell-Community
+          #   docker buildx build --load -t openshell-community/sandboxes/suse:demo \
+          #     sandboxes/suse
+          #   docker buildx build --load \
+          #     --build-arg BASE_IMAGE=openshell-community/sandboxes/suse:demo \
+          #     -t openshell-community/sandboxes/openclaw-suse:demo \
+          #     sandboxes/openclaw-suse
+          #   kind load docker-image \
+          #     openshell-community/sandboxes/openclaw-suse:demo --name <cluster>
+          #
+          # To fall back to the stock behaviour, restore
+          # "ghcr.io/nvidia/openshell-community/sandboxes/base:latest" and drop
+          # the Never pull policy — you lose OpenClaw, not the sandbox.
+          sandboxImage: "docker.io/openshell-community/sandboxes/openclaw-suse:demo"
+          # Never: the image is side-loaded into the nodes, so any pull attempt
+          # is an ImagePullBackOff. Change this to IfNotPresent (or drop it) the
+          # day the image is published to a registry.
+          sandboxImagePullPolicy: "Never"
           # For a private registry (including the SUSE images above once they
           # are published behind auth):
           # sandboxImagePullSecrets:
