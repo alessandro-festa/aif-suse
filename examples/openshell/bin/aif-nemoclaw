@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+#
+# aif-nemoclaw — run the local `nemoclaw` CLI against an OpenShell gateway
+# running in an AI Factory cluster.
+#
+#   ./aif-nemoclaw demo-a exec -- uname -a
+#   ./aif-nemoclaw demo-a agent -m "list the files in /sandbox"
+#   ./aif-nemoclaw list
+#   ./aif-nemoclaw --shell            # drop into a subshell with the env set
+#
+# WHY THIS EXISTS. NemoClaw is built to drive a gateway it started itself, in
+# Docker, on your laptop; `nemoclaw onboard` builds an image, starts a gateway
+# and autostarts a host Ollama. None of that is what we want against a cluster.
+#
+# But NemoClaw never speaks gRPC to the gateway. Every sandbox operation shells
+# out to the local `openshell` binary with `-g <gateway>` injected. So pointing
+# it at a cluster is a matter of controlling WHICH gateway registration it
+# names — no patching, and no security guard bypassed. Three env vars do it:
+#
+#   XDG_CONFIG_HOME       an isolated openshell config dir, so this registration
+#                         never collides with your real ~/.config/openshell
+#   NEMOCLAW_GATEWAY_PORT NemoClaw derives the gateway NAME from the port:
+#                         8080 -> "nemoclaw", anything else -> "nemoclaw-<port>".
+#                         Using a non-default port is what keeps your laptop's
+#                         own "nemoclaw" registration untouched.
+#   OPENSHELL_WORKSPACE   the tenant. Providers, inference routes and sandboxes
+#                         are WORKSPACE-scoped; unset means "default", where the
+#                         tenant's sandboxes are invisible.
+#
+# NemoClaw forwards exactly these through its subprocess env allowlist, which is
+# why they reach the `openshell` child process at all.
+#
+# The gateway is reached over `kubectl port-forward`, so from NemoClaw's point
+# of view it is a literal 127.0.0.1 — which is what OpenShell's loopback rule
+# for externally-supervised gateways contemplates. We never set
+# OPENSHELL_GATEWAY_ENDPOINT or pass --gateway-endpoint; both are rejected by
+# NemoClaw's endpoint guard, and we do not need them.
+#
+# Note that a good half of the NemoClaw CLI is host/Docker-bound and will not
+# work this way: onboard, rebuild, gc, update, doctor --fix, recover, gateway
+# restart, tunnel, share mount and snapshot all assume a local Docker gateway.
+# What does work is the sandbox surface reached through the gateway — list,
+# use, status, exec, agent, logs, upload/download, policy, mcp, inference
+# get/set, sessions, stop/start, and connect. See docs/nemoclaw-demo.md.
+
+set -euo pipefail
+
+# --- Tunables (override by exporting before calling) ------------------------
+GW_NAMESPACE="${GW_NAMESPACE:-openshell}"      # namespace holding the gateway
+GW_SERVICE="${GW_SERVICE:-openshell}"          # gateway Service name
+GW_PORT="${GW_PORT:-28080}"                    # local port -> gateway name
+WORKSPACE="${OPENSHELL_WORKSPACE:-tenant-a}"   # tenant workspace
+SANDBOX="${AIF_SANDBOX:-demo-a}"               # sandbox to ensure exists
+CFG_HOME="${AIF_NEMOCLAW_HOME:-$HOME/.aif-nemoclaw/config}"
+TLS_SECRET="${TLS_SECRET:-openshell-client-tls}"
+
+GW_NAME="nemoclaw"
+[ "$GW_PORT" != "8080" ] && GW_NAME="nemoclaw-${GW_PORT}"
+
+log() { printf '\033[2m[aif-nemoclaw]\033[0m %s\n' "$*" >&2; }
+die() { printf '\033[31m[aif-nemoclaw] %s\033[0m\n' "$*" >&2; exit 1; }
+
+for b in kubectl openshell nemoclaw; do
+  command -v "$b" >/dev/null || die "'$b' not found in PATH"
+done
+
+export XDG_CONFIG_HOME="$CFG_HOME"
+export NEMOCLAW_GATEWAY_PORT="$GW_PORT"
+export OPENSHELL_WORKSPACE="$WORKSPACE"
+mkdir -p "$CFG_HOME"
+
+# --- 1. Port-forward: adopt an existing one, else start one -----------------
+if nc -z 127.0.0.1 "$GW_PORT" 2>/dev/null; then
+  log "port $GW_PORT already open — adopting it"
+else
+  log "starting port-forward $GW_NAMESPACE/$GW_SERVICE -> 127.0.0.1:$GW_PORT"
+  kubectl -n "$GW_NAMESPACE" port-forward --address 127.0.0.1 \
+    "svc/$GW_SERVICE" "${GW_PORT}:8080" >/tmp/aif-nemoclaw-pf.log 2>&1 &
+  PF_PID=$!
+  # Leave the forward running only if we are exec'ing a one-shot command; a
+  # --shell session needs it for its whole life, so it is killed on exit there.
+  for _ in $(seq 1 30); do
+    nc -z 127.0.0.1 "$GW_PORT" 2>/dev/null && break
+    kill -0 "$PF_PID" 2>/dev/null || die "port-forward died — see /tmp/aif-nemoclaw-pf.log"
+    sleep 0.5
+  done
+  nc -z 127.0.0.1 "$GW_PORT" 2>/dev/null \
+    || die "port-forward never came up — see /tmp/aif-nemoclaw-pf.log"
+fi
+
+# --- 2. Gateway registration + mTLS material --------------------------------
+# ORDER MATTERS: `gateway add --local` SEEDS ITS OWN self-signed material into
+# mtls/, so the cluster certs must be copied AFTER registering, never before.
+#
+# And note the copy is UNCONDITIONAL. The obvious optimisation — skip it when
+# mtls/tls.crt already exists — is wrong, because `--local` just created a
+# tls.crt that is not ours. "A cert is present" is not the same as "our cert is
+# present", and the difference shows up as `gateway ... is not reachable`
+# several steps later, which points at the port-forward rather than at the
+# certs. Two kubectl reads are cheaper than that debugging session.
+MTLS="$CFG_HOME/openshell/gateways/$GW_NAME/mtls"
+if [ ! -f "$CFG_HOME/openshell/gateways/$GW_NAME/metadata.json" ]; then
+  log "registering gateway '$GW_NAME'"
+  # Warns "Gateway is not reachable" — expected and harmless: it probes before
+  # it has any client certs to probe with. The registration still succeeds.
+  openshell gateway add "https://127.0.0.1:${GW_PORT}" --name "$GW_NAME" --local >/dev/null
+fi
+log "copying mTLS material from secret/$TLS_SECRET"
+mkdir -p "$MTLS"
+for pair in "tls.crt:tls\.crt" "tls.key:tls\.key" "ca.crt:ca\.crt"; do
+  out="${pair%%:*}"; key="${pair##*:}"
+  kubectl -n "$GW_NAMESPACE" get secret "$TLS_SECRET" \
+    -o "jsonpath={.data.${key}}" | base64 -d > "$MTLS/$out"
+done
+chmod 600 "$MTLS/tls.key"
+
+openshell -g "$GW_NAME" status >/dev/null 2>&1 \
+  || die "gateway '$GW_NAME' is not answering. Check the port-forward and that
+         secret/$TLS_SECRET in namespace $GW_NAMESPACE is the CLIENT cert."
+
+# --- 3. Ensure the sandbox exists -------------------------------------------
+# --tty and NO trailing command: OpenShell's main process is SandboxSpec.command
+# (default /bin/bash -l), not the image ENTRYPOINT. Passing a trailing command
+# here replaces that and you get a sandbox you cannot attach a shell to.
+if ! openshell -g "$GW_NAME" sandbox list 2>/dev/null | grep -q "\b${SANDBOX}\b"; then
+  log "creating sandbox '$SANDBOX' in workspace '$WORKSPACE'"
+  openshell -g "$GW_NAME" sandbox create --name "$SANDBOX" --detach --tty
+fi
+
+# --- 3b. Bootstrap OpenClaw inside the sandbox ------------------------------
+# `nemoclaw <n> connect` REQUIRES an OpenClaw gateway already listening inside
+# the sandbox. It notices when one is missing and tries to recover, but that
+# path is Docker-privileged and fails here with PRIVILEGED_CONTROL_UNAVAILABLE:
+#
+#   Failure layer: privileged control unavailable - gateway restart failed
+#
+# The image ships /usr/local/bin/openclaw-suse-start to do exactly this setup,
+# but OpenShell never runs it: the sandbox's main process is SandboxSpec.command
+# (/bin/bash -l), not the image ENTRYPOINT. So we run it ourselves, once.
+#
+# Run it via the START SCRIPT, not a bare `openclaw gateway`. The script also
+# pins per-provider timeoutSeconds and turns thinking OFF; starting the gateway
+# by hand leaves thinking=medium, which on CPU is the difference between a slow
+# turn and an unusable one.
+#
+# CHAT_UI_URL is required by the script but only feeds the browser Control UI's
+# CORS origin list — nothing the CLI flow uses. In NemoClaw's own Docker
+# topology it is injected at container launch; nothing sets it here, and
+# without it the script dies on KeyError: 'CHAT_UI_URL' AFTER onboarding but
+# BEFORE starting the gateway, which looks like a successful bootstrap.
+if ! openshell -g "$GW_NAME" --workspace "$WORKSPACE" sandbox exec -n "$SANDBOX" \
+     -- bash -lc 'exec 3<>/dev/tcp/127.0.0.1/18789' >/dev/null 2>&1; then
+  log "bootstrapping OpenClaw in '$SANDBOX' (~45s)"
+  openshell -g "$GW_NAME" --workspace "$WORKSPACE" sandbox exec -n "$SANDBOX" -- bash -lc '
+    export CHAT_UI_URL=http://127.0.0.1:18789
+    setsid nohup /usr/local/bin/openclaw-suse-start >/tmp/boot.log 2>&1 </dev/null &
+    disown
+    for _ in $(seq 1 40); do
+      (exec 3<>/dev/tcp/127.0.0.1/18789) 2>/dev/null && exit 0
+      sleep 2
+    done
+    echo "OpenClaw gateway never came up — see /tmp/boot.log and /tmp/gateway.log" >&2
+    exit 1' || die "OpenClaw bootstrap failed in '$SANDBOX'"
+fi
+
+# --- 4. Seed NemoClaw's own registry ----------------------------------------
+# NemoClaw keeps a local record of sandboxes it believes it created. Commands
+# that take a sandbox name look it up here first, so a cluster-created sandbox
+# has to be introduced. This is metadata only — the truth is in the gateway.
+REG="$HOME/.nemoclaw/sandboxes.json"
+mkdir -p "$(dirname "$REG")"
+[ -f "$REG" ] || echo '{"sandboxes":{}}' > "$REG"
+python3 - "$REG" "$SANDBOX" <<'PY'
+import json, sys, datetime
+path, name = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    data = json.load(f)
+data.setdefault("sandboxes", {})
+if name not in data["sandboxes"]:
+    data["sandboxes"][name] = {
+        "name": name,
+        "createdAt": datetime.datetime.now(datetime.timezone.utc)
+                        .isoformat().replace("+00:00", "Z"),
+        "model": None, "nimContainer": None, "provider": None,
+        "gpuEnabled": False, "hostGpuDetected": False,
+        "sandboxGpuEnabled": False, "sandboxGpuMode": None,
+        "sandboxGpuDevice": None,
+        "openshellDriver": "kubernetes", "openshellVersion": None,
+        "policies": [], "policyTier": None,
+        "agent": "openclaw", "agentVersion": None,
+        "imageTag": None, "messagingChannels": [],
+    }
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+PY
+
+# --- 5. Hand over to nemoclaw -----------------------------------------------
+if [ "${1:-}" = "--shell" ]; then
+  log "gateway=$GW_NAME workspace=$WORKSPACE sandbox=$SANDBOX"
+  log "env is set; run nemoclaw directly. Ctrl-D to leave."
+  trap '[ -n "${PF_PID:-}" ] && kill "$PF_PID" 2>/dev/null || true' EXIT
+  exec "${SHELL:-/bin/bash}" -i
+fi
+
+[ $# -gt 0 ] || die "usage: $(basename "$0") [--shell] <nemoclaw args...>
+  e.g. $(basename "$0") $SANDBOX exec -- uname -a"
+
+exec nemoclaw "$@"
