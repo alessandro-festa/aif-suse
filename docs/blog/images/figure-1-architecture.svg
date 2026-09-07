@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="660" viewBox="0 0 960 660" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#76B900"/>
+    </marker>
+  </defs>
+  <rect width="960" height="660" fill="#ffffff"/>
+
+  <!-- Developer workstation -->
+  <rect x="40" y="30" width="880" height="110" rx="8" fill="#f7f9fa" stroke="#cfd8dc"/>
+  <text x="58" y="54" font-size="13" font-weight="600" fill="#5a6570">DEVELOPER WORKSTATION</text>
+
+  <rect x="80" y="68" width="220" height="54" rx="6" fill="#ffffff" stroke="#76B900" stroke-width="2"/>
+  <text x="190" y="92" font-size="15" font-weight="600" fill="#1a1a1a" text-anchor="middle">nemoclaw CLI</text>
+  <text x="190" y="110" font-size="11" fill="#5a6570" text-anchor="middle">agent experience</text>
+
+  <line x1="304" y1="95" x2="352" y2="95" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="328" y="86" font-size="10" fill="#5a6570" text-anchor="middle">invokes</text>
+
+  <rect x="360" y="68" width="220" height="54" rx="6" fill="#ffffff" stroke="#cfd8dc"/>
+  <text x="470" y="92" font-size="15" font-weight="600" fill="#1a1a1a" text-anchor="middle">openshell CLI</text>
+  <text x="470" y="110" font-size="11" fill="#5a6570" text-anchor="middle">gateway client</text>
+
+  <text x="640" y="88" font-size="12" font-weight="600" fill="#3d4852">No kubectl and no cluster</text>
+  <text x="640" y="106" font-size="12" font-weight="600" fill="#3d4852">credentials on the laptop</text>
+
+  <!-- Link into the cluster -->
+  <line x1="480" y1="140" x2="480" y2="178" stroke="#76B900" stroke-width="1.8" marker-end="url(#arrow)"/>
+  <text x="494" y="164" font-size="11" fill="#5a6570">gRPC over mTLS, OIDC-authenticated</text>
+
+  <!-- Cluster boundary -->
+  <rect x="40" y="180" width="880" height="450" rx="10" fill="#ffffff" stroke="#76B900" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="58" y="206" font-size="13" font-weight="600" fill="#76B900">KUBERNETES CLUSTER — SUSE AI FACTORY WITH NVIDIA</text>
+
+  <!-- Control plane -->
+  <rect x="64" y="222" width="420" height="118" rx="7" fill="#f4f8ee" stroke="#cfd8dc"/>
+  <text x="82" y="245" font-size="12" font-weight="600" fill="#3d4852">AI Factory control plane</text>
+  <rect x="82" y="256" width="188" height="66" rx="5" fill="#ffffff" stroke="#cfd8dc"/>
+  <text x="176" y="282" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">Rancher UI</text>
+  <text x="176" y="301" font-size="10" fill="#5a6570" text-anchor="middle">Blueprint catalog</text>
+  <rect x="288" y="256" width="180" height="66" rx="5" fill="#ffffff" stroke="#cfd8dc"/>
+  <text x="378" y="282" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">AI Factory operator</text>
+  <text x="378" y="301" font-size="10" fill="#5a6570" text-anchor="middle">Blueprint to Helm</text>
+
+  <!-- Gateway -->
+  <rect x="500" y="222" width="396" height="118" rx="7" fill="#f4f8ee" stroke="#cfd8dc"/>
+  <text x="518" y="245" font-size="12" font-weight="600" fill="#3d4852">namespace: openshell</text>
+  <rect x="518" y="256" width="360" height="66" rx="5" fill="#ffffff" stroke="#76B900" stroke-width="2"/>
+  <text x="698" y="282" font-size="14" font-weight="600" fill="#1a1a1a" text-anchor="middle">OpenShell gateway</text>
+  <text x="698" y="302" font-size="10" fill="#5a6570" text-anchor="middle">sandbox lifecycle · policy · inference routing</text>
+
+  <!-- Control fan-out -->
+  <path d="M 698 322 L 698 350 L 274 350 L 274 366" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <path d="M 698 350 L 698 366" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="486" y="343" font-size="10" fill="#5a6570" text-anchor="middle">create · exec · connect</text>
+
+  <!-- Tenants -->
+  <rect x="64" y="370" width="420" height="238" rx="7" fill="#fafbfc" stroke="#cfd8dc"/>
+  <text x="82" y="394" font-size="12" font-weight="600" fill="#3d4852">namespace: tenant-a</text>
+  <rect x="82" y="404" width="384" height="86" rx="5" fill="#ffffff" stroke="#cfd8dc"/>
+  <text x="274" y="428" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">Sandbox pod</text>
+  <rect x="96" y="438" width="168" height="38" rx="4" fill="#f4f8ee" stroke="#cfd8dc"/>
+  <text x="180" y="462" font-size="11" fill="#1a1a1a" text-anchor="middle">OpenClaw agent</text>
+  <rect x="284" y="438" width="168" height="38" rx="4" fill="#f4f8ee" stroke="#cfd8dc"/>
+  <text x="368" y="462" font-size="11" fill="#1a1a1a" text-anchor="middle">supervisor + proxy</text>
+  <line x1="180" y1="490" x2="180" y2="514" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="196" y="508" font-size="10" fill="#76B900">inference.local</text>
+  <rect x="82" y="518" width="384" height="72" rx="5" fill="#ffffff" stroke="#cfd8dc"/>
+  <text x="274" y="544" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">Inference engine</text>
+  <text x="274" y="564" font-size="10" fill="#5a6570" text-anchor="middle">NVIDIA NIM on GPU, or Ollama on CPU</text>
+
+  <rect x="500" y="370" width="396" height="238" rx="7" fill="#fafbfc" stroke="#cfd8dc"/>
+  <text x="518" y="394" font-size="12" font-weight="600" fill="#3d4852">namespace: tenant-b</text>
+  <rect x="518" y="404" width="360" height="86" rx="5" fill="#ffffff" stroke="#cfd8dc"/>
+  <text x="698" y="428" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">Sandbox pod</text>
+  <rect x="532" y="438" width="158" height="38" rx="4" fill="#f4f8ee" stroke="#cfd8dc"/>
+  <text x="611" y="462" font-size="11" fill="#1a1a1a" text-anchor="middle">OpenClaw agent</text>
+  <rect x="706" y="438" width="158" height="38" rx="4" fill="#f4f8ee" stroke="#cfd8dc"/>
+  <text x="785" y="462" font-size="10" fill="#1a1a1a" text-anchor="middle">supervisor + proxy</text>
+  <line x1="611" y1="490" x2="611" y2="514" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="627" y="508" font-size="10" fill="#76B900">inference.local</text>
+  <rect x="518" y="518" width="360" height="72" rx="5" fill="#ffffff" stroke="#cfd8dc"/>
+  <text x="698" y="544" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">Inference engine</text>
+  <text x="698" y="564" font-size="10" fill="#5a6570" text-anchor="middle">dedicated, or shared across tenants</text>
+</svg>

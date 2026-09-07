@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#76B900"/>
+    </marker>
+  </defs>
+  <rect width="960" height="420" fill="#ffffff"/>
+
+  <text x="40" y="42" font-size="13" font-weight="600" fill="#5a6570">DECLARATIVE DEPLOYMENT — ADMIN ACTION TO RUNNING WORKLOAD</text>
+
+  <!-- Stage 1 -->
+  <rect x="40" y="70" width="164" height="96" rx="7" fill="#ffffff" stroke="#76B900" stroke-width="2"/>
+  <text x="122" y="104" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">Platform admin</text>
+  <text x="122" y="126" font-size="11" fill="#5a6570" text-anchor="middle">Rancher UI</text>
+  <text x="122" y="144" font-size="11" fill="#5a6570" text-anchor="middle">install wizard</text>
+
+  <line x1="208" y1="118" x2="244" y2="118" stroke="#76B900" stroke-width="1.8" marker-end="url(#arrow2)"/>
+
+  <!-- Stage 2 -->
+  <rect x="248" y="70" width="164" height="96" rx="7" fill="#f4f8ee" stroke="#cfd8dc"/>
+  <text x="330" y="100" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">Blueprint</text>
+  <text x="330" y="122" font-size="11" fill="#5a6570" text-anchor="middle">versioned, reviewed</text>
+  <text x="330" y="140" font-size="11" fill="#5a6570" text-anchor="middle">config as a CR</text>
+
+  <line x1="416" y1="118" x2="452" y2="118" stroke="#76B900" stroke-width="1.8" marker-end="url(#arrow2)"/>
+
+  <!-- Stage 3 -->
+  <rect x="456" y="70" width="164" height="96" rx="7" fill="#f4f8ee" stroke="#cfd8dc"/>
+  <text x="538" y="100" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">AIWorkload</text>
+  <text x="538" y="122" font-size="11" fill="#5a6570" text-anchor="middle">one install of one</text>
+  <text x="538" y="140" font-size="11" fill="#5a6570" text-anchor="middle">Blueprint version</text>
+
+  <line x1="624" y1="118" x2="660" y2="118" stroke="#76B900" stroke-width="1.8" marker-end="url(#arrow2)"/>
+
+  <!-- Stage 4 -->
+  <rect x="664" y="70" width="164" height="96" rx="7" fill="#f4f8ee" stroke="#cfd8dc"/>
+  <text x="746" y="100" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">AI Factory</text>
+  <text x="746" y="118" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">operator</text>
+  <text x="746" y="140" font-size="11" fill="#5a6570" text-anchor="middle">emits Fleet bundles</text>
+
+  <!-- Down into targets -->
+  <path d="M 746 166 L 746 196 L 300 196 L 300 226" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow2)"/>
+  <path d="M 746 196 L 570 196 L 570 226" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow2)"/>
+  <path d="M 746 196 L 830 196 L 830 226" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow2)"/>
+  <text x="360" y="188" font-size="10" fill="#5a6570">GitOps delivery to one or many clusters</text>
+
+  <!-- Targets -->
+  <rect x="150" y="230" width="300" height="110" rx="7" fill="#ffffff" stroke="#cfd8dc"/>
+  <text x="300" y="256" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">OpenShell gateway</text>
+  <text x="300" y="278" font-size="11" fill="#5a6570" text-anchor="middle">namespace: openshell</text>
+  <text x="300" y="298" font-size="11" fill="#5a6570" text-anchor="middle">installed once per cluster</text>
+  <text x="300" y="322" font-size="11" fill="#5a6570" text-anchor="middle">pinned chart version</text>
+
+  <rect x="470" y="230" width="200" height="110" rx="7" fill="#ffffff" stroke="#cfd8dc"/>
+  <text x="570" y="256" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">Workspace</text>
+  <text x="570" y="278" font-size="11" fill="#5a6570" text-anchor="middle">RBAC, service account</text>
+  <text x="570" y="298" font-size="11" fill="#5a6570" text-anchor="middle">NetworkPolicy</text>
+  <text x="570" y="322" font-size="11" fill="#5a6570" text-anchor="middle">one per tenant</text>
+
+  <rect x="690" y="230" width="200" height="110" rx="7" fill="#ffffff" stroke="#cfd8dc"/>
+  <text x="790" y="256" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">Inference engine</text>
+  <text x="790" y="278" font-size="11" fill="#5a6570" text-anchor="middle">NVIDIA NIM or Ollama</text>
+  <text x="790" y="298" font-size="11" fill="#5a6570" text-anchor="middle">dedicated or shared</text>
+  <text x="790" y="322" font-size="11" fill="#5a6570" text-anchor="middle">optional</text>
+
+  <text x="40" y="380" font-size="11" fill="#5a6570">Onboarding tenant N is one more run of the same wizard. Nothing about the platform is hand-assembled per team.</text>
+</svg>

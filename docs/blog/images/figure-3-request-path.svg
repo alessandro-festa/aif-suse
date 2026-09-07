@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="470" viewBox="0 0 960 470" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#76B900"/>
+    </marker>
+    <marker id="arrow3g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a94a0"/>
+    </marker>
+  </defs>
+  <rect width="960" height="470" fill="#ffffff"/>
+
+  <text x="40" y="40" font-size="13" font-weight="600" fill="#5a6570">WHAT HAPPENS WHEN A DEVELOPER OPENS A SANDBOX</text>
+
+  <!-- laptop side -->
+  <rect x="40" y="66" width="200" height="330" rx="8" fill="#f7f9fa" stroke="#cfd8dc"/>
+  <text x="58" y="90" font-size="12" font-weight="600" fill="#5a6570">LAPTOP</text>
+
+  <rect x="58" y="110" width="164" height="62" rx="5" fill="#ffffff" stroke="#76B900" stroke-width="2"/>
+  <text x="140" y="136" font-size="12" font-weight="600" fill="#1a1a1a" text-anchor="middle">nemoclaw</text>
+  <text x="140" y="156" font-size="10" fill="#5a6570" text-anchor="middle">connect my-sandbox</text>
+
+  <line x1="140" y1="172" x2="140" y2="204" stroke="#8a94a0" stroke-width="1.5" marker-end="url(#arrow3g)"/>
+
+  <rect x="58" y="208" width="164" height="56" rx="5" fill="#ffffff" stroke="#cfd8dc"/>
+  <text x="140" y="232" font-size="12" font-weight="600" fill="#1a1a1a" text-anchor="middle">openshell CLI</text>
+  <text x="140" y="250" font-size="10" fill="#5a6570" text-anchor="middle">client credential</text>
+
+  <!-- cluster side -->
+  <rect x="300" y="66" width="620" height="330" rx="10" fill="#ffffff" stroke="#76B900" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="318" y="90" font-size="12" font-weight="600" fill="#76B900">CLUSTER BOUNDARY — PROMPTS, CODE, AND MODEL STAY INSIDE</text>
+
+  <line x1="240" y1="236" x2="336" y2="236" stroke="#76B900" stroke-width="1.8" marker-end="url(#arrow3)"/>
+  <text x="268" y="218" font-size="10" fill="#5a6570" text-anchor="middle">mTLS</text>
+
+  <rect x="340" y="200" width="200" height="72" rx="6" fill="#ffffff" stroke="#76B900" stroke-width="2"/>
+  <text x="440" y="228" font-size="13" font-weight="600" fill="#1a1a1a" text-anchor="middle">OpenShell gateway</text>
+  <text x="440" y="248" font-size="10" fill="#5a6570" text-anchor="middle">authn, authz, scheduling</text>
+
+  <line x1="540" y1="236" x2="596" y2="236" stroke="#76B900" stroke-width="1.8" marker-end="url(#arrow3)"/>
+
+  <!-- sandbox pod -->
+  <rect x="600" y="130" width="290" height="212" rx="7" fill="#fafbfc" stroke="#cfd8dc"/>
+  <text x="618" y="154" font-size="12" font-weight="600" fill="#3d4852">Sandbox pod (tenant namespace)</text>
+
+  <rect x="618" y="166" width="254" height="52" rx="5" fill="#ffffff" stroke="#cfd8dc"/>
+  <text x="745" y="188" font-size="12" font-weight="600" fill="#1a1a1a" text-anchor="middle">Interactive shell</text>
+  <text x="745" y="206" font-size="10" fill="#5a6570" text-anchor="middle">plus the OpenClaw agent</text>
+
+  <line x1="745" y1="218" x2="745" y2="242" stroke="#8a94a0" stroke-width="1.5" marker-end="url(#arrow3g)"/>
+
+  <rect x="618" y="246" width="254" height="76" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="1.6"/>
+  <text x="745" y="270" font-size="12" font-weight="600" fill="#1a1a1a" text-anchor="middle">Supervisor egress proxy</text>
+  <text x="745" y="288" font-size="10" fill="#5a6570" text-anchor="middle">policy enforcement per request</text>
+  <text x="745" y="306" font-size="10" fill="#5a6570" text-anchor="middle">credential injection, L7 inspection</text>
+
+  <!-- egress split -->
+  <path d="M 745 322 L 745 360 L 440 360 L 440 340" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow3)"/>
+  <rect x="340" y="300" width="200" height="40" rx="5" fill="#ffffff" stroke="#cfd8dc"/>
+  <text x="440" y="325" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">In-cluster model endpoint</text>
+
+  <path d="M 745 360 L 900 360 L 900 396" fill="none" stroke="#8a94a0" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow3g)"/>
+  <text x="898" y="418" font-size="10" fill="#5a6570" text-anchor="end">allow-listed external hosts only</text>
+  <text x="898" y="434" font-size="10" fill="#5a6570" text-anchor="end">(git, package registries)</text>
+
+  <text x="40" y="440" font-size="11" fill="#5a6570">Every request the agent makes leaves through one inspected path.</text>
+</svg>
