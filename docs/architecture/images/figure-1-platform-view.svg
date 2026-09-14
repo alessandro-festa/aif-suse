@@ -1,0 +1,193 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="932" viewBox="0 0 1280 932" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect width="1280" height="932" fill="#ffffff"/>
+
+  <text x="40" y="42" font-size="20" font-weight="700" fill="#0C322C">Sovereign Agentic SecOps — platform view</text>
+  <text x="40" y="64" font-size="12" fill="#5a6570">SUSE AI Factory with NVIDIA · six layers. Every green box is NVIDIA technology. The L2–L5 stack is three Blueprints plus the three charts tagged APP.</text>
+
+  <!-- Cluster boundary -->
+  <rect x="32" y="80" width="1216" height="730" rx="12" fill="#ffffff" stroke="#0C322C" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="50" y="104" font-size="12" font-weight="700" fill="#0C322C">KUBERNETES CLUSTER — RKE2 + RANCHER PRIME · AIR-GAPPABLE · SINGLE SUPPORT CONTRACT</text>
+
+  <!-- Column headers -->
+  <text x="194" y="138" font-size="12" font-weight="700" fill="#0C322C">SUSE — packaging, governance, lifecycle, support</text>
+  <text x="696" y="138" font-size="12" font-weight="700" fill="#76B900">NVIDIA — models, toolkit, runtime, acceleration</text>
+  <line x1="690" y1="146" x2="690" y2="802" stroke="#cfd8dc" stroke-width="1" stroke-dasharray="3 4"/>
+
+  <!-- ===================== L0 Infrastructure ===================== -->
+  <rect x="48" y="148" width="1184" height="104" rx="7" fill="#f7f9fa" stroke="#cfd8dc"/>
+  <text x="62" y="184" font-size="20" font-weight="700" fill="#0C322C">L0</text>
+  <text x="62" y="206" font-size="12" font-weight="600" fill="#3d4852">Infrastructure</text>
+
+  <rect x="194" y="170" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="273" y="190" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">SLES 16 / SL Micro</text>
+  <rect x="360" y="170" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="439" y="190" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">RKE2 · Rancher Prime</text>
+  <rect x="526" y="170" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="605" y="190" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">SUSE Storage</text>
+  <rect x="194" y="208" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4" stroke-dasharray="5 3"/>
+  <text x="273" y="222" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">SUSE Security</text>
+  <text x="273" y="234" font-size="9" fill="#5a6570" text-anchor="middle">NeuVector — scan and rescan</text>
+  <rect x="360" y="208" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4" stroke-dasharray="5 3"/>
+  <text x="439" y="222" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">SUSE Observability</text>
+  <text x="439" y="234" font-size="9" fill="#5a6570" text-anchor="middle">OTLP · gen_ai.* semantics</text>
+  <rect x="526" y="208" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4" stroke-dasharray="5 3"/>
+  <text x="605" y="222" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">SUSE App Collection</text>
+  <text x="605" y="234" font-size="9" fill="#5a6570" text-anchor="middle">curated charts, images, libraries</text>
+
+  <rect x="696" y="170" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="780" y="184" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">GPU Operator v26.3.1</text>
+  <text x="780" y="196" font-size="9" fill="#5a6570" text-anchor="middle">precompiled driver 595</text>
+  <rect x="873" y="170" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="957" y="190" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Network Operator · DOCA</text>
+  <rect x="1050" y="170" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="1134" y="190" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">MIG + DRA</text>
+  <rect x="696" y="208" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="780" y="228" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Run:ai / KAI Scheduler</text>
+
+  <!-- ===================== L1 Control plane ===================== -->
+  <rect x="48" y="258" width="1184" height="104" rx="7" fill="#fbfcfc" stroke="#cfd8dc"/>
+  <text x="62" y="294" font-size="20" font-weight="700" fill="#0C322C">L1</text>
+  <text x="62" y="316" font-size="12" font-weight="600" fill="#3d4852">Control plane</text>
+
+  <rect x="194" y="280" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="273" y="300" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">AI Factory operator</text>
+  <rect x="360" y="280" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="439" y="300" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Blueprint / AIWorkload CRs</text>
+  <rect x="526" y="280" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="605" y="300" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Rancher UI extension</text>
+  <rect x="194" y="318" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="273" y="338" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Fleet GitOps</text>
+  <rect x="360" y="318" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="439" y="338" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Air-gap mirroring</text>
+  <rect x="526" y="318" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="605" y="332" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Provenance · drift detection</text>
+  <text x="605" y="344" font-size="9" fill="#5a6570" text-anchor="middle">render-digest comparison</text>
+
+  <rect x="696" y="280" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="780" y="300" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">NGC ClusterRepos</text>
+  <rect x="873" y="280" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="957" y="294" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">vendor: nvidia injection</text>
+  <text x="957" y="306" font-size="9" fill="#5a6570" text-anchor="middle">ngc-secret · ngc-api</text>
+  <rect x="1050" y="280" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="1134" y="300" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">AIE Support Matrix</text>
+
+  <!-- ===================== L2 Model plane ===================== -->
+  <rect x="48" y="368" width="1184" height="104" rx="7" fill="#f7f9fa" stroke="#cfd8dc"/>
+  <text x="62" y="404" font-size="20" font-weight="700" fill="#0C322C">L2</text>
+  <text x="62" y="426" font-size="12" font-weight="600" fill="#3d4852">Model plane</text>
+
+  <rect x="194" y="390" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="273" y="404" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">LiteLLM</text>
+  <text x="273" y="416" font-size="9" fill="#5a6570" text-anchor="middle">virtual keys · budgets</text>
+  <rect x="360" y="390" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="439" y="410" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">vLLM (non-NIM models)</text>
+
+  <rect x="696" y="390" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="780" y="404" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">NIM Operator</text>
+  <text x="780" y="416" font-size="9" fill="#5a6570" text-anchor="middle">NIMCache · NIMService</text>
+  <rect x="832" y="407" width="27" height="10" rx="2" fill="#76B900"/>
+  <text x="845.5" y="415" font-size="6.6" font-weight="700" letter-spacing="0.6" fill="#ffffff" text-anchor="middle">APP</text>
+  <rect x="873" y="390" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="957" y="404" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Nemotron 3 Ultra</text>
+  <text x="957" y="416" font-size="9" fill="#5a6570" text-anchor="middle">550B-A55B — plans</text>
+  <rect x="1009" y="407" width="27" height="10" rx="2" fill="#76B900"/>
+  <text x="1022.5" y="415" font-size="6.6" font-weight="700" letter-spacing="0.6" fill="#ffffff" text-anchor="middle">APP</text>
+  <rect x="1050" y="390" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="1134" y="404" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Nemotron 3.5 Lightning</text>
+  <text x="1134" y="416" font-size="9" fill="#5a6570" text-anchor="middle">30B-A3B — executes</text>
+  <rect x="1186" y="407" width="27" height="10" rx="2" fill="#76B900"/>
+  <text x="1199.5" y="415" font-size="6.6" font-weight="700" letter-spacing="0.6" fill="#ffffff" text-anchor="middle">APP</text>
+  <rect x="696" y="428" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="780" y="448" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Nemotron 3 Embed 1B</text>
+  <rect x="873" y="428" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="957" y="448" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Nemotron Rerank VL 1B</text>
+  <rect x="1050" y="428" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="1134" y="448" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">NeMo Guardrails</text>
+
+  <!-- ===================== L3 Knowledge plane ===================== -->
+  <rect x="48" y="478" width="1184" height="104" rx="7" fill="#fbfcfc" stroke="#cfd8dc"/>
+  <text x="62" y="514" font-size="20" font-weight="700" fill="#0C322C">L3</text>
+  <text x="62" y="536" font-size="12" font-weight="600" fill="#3d4852">Knowledge plane</text>
+
+  <rect x="194" y="500" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="273" y="514" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Elasticsearch / Milvus</text>
+  <text x="273" y="526" font-size="9" fill="#5a6570" text-anchor="middle">on SUSE Storage</text>
+  <rect x="360" y="500" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="439" y="514" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Corpus curation</text>
+  <text x="439" y="526" font-size="9" fill="#5a6570" text-anchor="middle">CVE · SUSE-SU · SBOM · runbooks</text>
+  <rect x="194" y="538" width="324" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4" stroke-dasharray="5 3"/>
+  <text x="356" y="552" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">SUSE Security scan exports → nightly ingestion</text>
+  <text x="356" y="564" font-size="9" fill="#5a6570" text-anchor="middle">the reachability signal — which images are affected, and running</text>
+
+  <rect x="696" y="500" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="780" y="514" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">NVIDIA RAG Blueprint</text>
+  <text x="780" y="526" font-size="9" fill="#5a6570" text-anchor="middle">v2.6.0</text>
+  <rect x="873" y="500" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="957" y="520" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">NeMo Retriever · nv-ingest</text>
+  <rect x="1050" y="500" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="1134" y="514" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">CUDA-X cuVS GPU_CAGRA</text>
+  <text x="1134" y="526" font-size="9" fill="#5a6570" text-anchor="middle">scale-out option (Milvus)</text>
+
+  <!-- ===================== L4 Agent plane ===================== -->
+  <rect x="48" y="588" width="1184" height="104" rx="7" fill="#f7f9fa" stroke="#cfd8dc"/>
+  <text x="62" y="624" font-size="20" font-weight="700" fill="#0C322C">L4</text>
+  <text x="62" y="646" font-size="12" font-weight="600" fill="#3d4852">Agent plane</text>
+
+  <rect x="194" y="610" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="273" y="630" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Multi-tenant packaging</text>
+  <rect x="360" y="610" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="439" y="630" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Per-tenant quotas</text>
+  <rect x="194" y="648" width="324" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4" stroke-dasharray="5 3"/>
+  <text x="356" y="662" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">OTLP spans → SUSE Observability · MCP back to the agents</text>
+  <text x="356" y="674" font-size="9" fill="#5a6570" text-anchor="middle">one 4T topology for models, retrieval, sandboxes and the cluster</text>
+
+  <rect x="696" y="610" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="780" y="624" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">AI-Q 2.2</text>
+  <text x="780" y="636" font-size="9" fill="#5a6570" text-anchor="middle">NeMo Agent Toolkit</text>
+  <rect x="873" y="610" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="957" y="624" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Async Job API</text>
+  <text x="957" y="636" font-size="9" fill="#5a6570" text-anchor="middle">checkpointed long runs</text>
+  <rect x="1050" y="610" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="1134" y="630" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">MCP + A2A</text>
+  <rect x="696" y="648" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="780" y="662" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">NeMo Relay</text>
+  <text x="780" y="674" font-size="9" fill="#5a6570" text-anchor="middle">ATIF trajectories · OTLP</text>
+
+  <!-- ===================== L5 Action plane ===================== -->
+  <rect x="48" y="698" width="1184" height="104" rx="7" fill="#fbfcfc" stroke="#cfd8dc"/>
+  <text x="62" y="734" font-size="20" font-weight="700" fill="#0C322C">L5</text>
+  <text x="62" y="756" font-size="12" font-weight="600" fill="#3d4852">Action plane</text>
+
+  <rect x="194" y="720" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="273" y="734" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">SLE BCI 16 sandbox image</text>
+  <text x="273" y="746" font-size="9" fill="#5a6570" text-anchor="middle">curated index only — no public PyPI</text>
+  <rect x="360" y="720" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="439" y="740" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Egress policy authoring</text>
+  <rect x="526" y="720" width="158" height="32" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="605" y="740" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Namespace isolation</text>
+
+  <rect x="696" y="720" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="780" y="734" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">OpenShell gateway</text>
+  <text x="780" y="746" font-size="9" fill="#5a6570" text-anchor="middle">+ in-pod supervisor</text>
+  <rect x="873" y="720" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="957" y="734" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">L7 egress proxy</text>
+  <text x="957" y="746" font-size="9" fill="#5a6570" text-anchor="middle">Landlock · out-of-process</text>
+  <rect x="1050" y="720" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="1134" y="740" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">NemoClaw</text>
+  <rect x="696" y="758" width="169" height="32" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="780" y="778" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">agent-sandbox (K8s SIG)</text>
+
+  <!-- ===================== Legend ===================== -->
+  <rect x="32" y="818" width="1216" height="100" rx="8" fill="#fbfcfc" stroke="#cfd8dc"/>
+  <rect x="52" y="829" width="26" height="18" rx="4" fill="#f7f9fa" stroke="#0C322C" stroke-width="2"/>
+  <text x="88" y="843" font-size="11" font-weight="600" fill="#3d4852">SUSE-supplied — packaged, versioned, air-gappable, supported</text>
+  <rect x="560" y="829" width="26" height="18" rx="4" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="596" y="843" font-size="11" font-weight="600" fill="#3d4852">NVIDIA technology — embedded at every one of the six layers</text>
+  <rect x="52" y="859" width="26" height="18" rx="4" fill="#f7f9fa" stroke="#0C322C" stroke-width="2" stroke-dasharray="5 3"/>
+  <text x="88" y="873" font-size="11" font-weight="600" fill="#3d4852">SUSE platform prerequisite — the customer already runs it; this architecture integrates with it, it does not install it</text>
+  <line x1="900" y1="868" x2="936" y2="868" stroke="#2453FF" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="946" y="873" font-size="11" font-weight="600" fill="#3d4852">Feedback loops — see Figure 3</text>
+  <rect x="52" y="890" width="27" height="12" rx="3" fill="#76B900"/>
+  <text x="65.5" y="899.5" font-size="7.4" font-weight="700" letter-spacing="0.6" fill="#ffffff" text-anchor="middle">APP</text>
+  <text x="88" y="900" font-size="11" font-weight="600" fill="#3d4852">Installed from the AI Factory catalog as an app, not carried by a Blueprint — the NIM Operator and both Nemotron LLM releases</text>
+</svg>

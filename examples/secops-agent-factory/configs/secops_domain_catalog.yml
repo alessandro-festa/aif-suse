@@ -1,0 +1,89 @@
+# Domain catalog for SecOps source routing.
+#
+# ADAPTED FROM: NVIDIA-AI-Blueprints/aiq @ v2.2.0,
+# configs/domain_catalogs/deep_research_domain_catalog.yml — same schema, same
+# "intentionally data-only" contract. Referenced by
+# deep_research_agent.domain_catalog_path in config_secops.yml.
+#
+# This file is how the SecOps specialization is declared. Upstream's catalog
+# routes between web search, papers, prediction markets and news; this one
+# routes between the kinds of question a vulnerability workflow asks. Adding a
+# domain is a data change, not a code change — which is the point: a customer
+# extends this to their own sources without forking AI-Q.
+#
+# CONSTRAINT (upstream's, quoted): "Source IDs must match entries in the
+# data_source_registry for the active workflow config." config_secops.yml
+# deliberately registers exactly one source — `knowledge_layer` — because every
+# web-search tool sends the query text to a third party, and here the query text
+# is the customer's own exposure. So every domain below resolves to the same
+# source today, and the catalog's value is in the ROUTING SIGNAL it gives the
+# source_router_llm, not yet in source selection. It becomes load-bearing the
+# moment a second source is registered — an internal ticketing MCP server, a
+# private threat-intel feed, an on-prem mirror of NVD.
+#
+# STATUS: UNTESTED. Never executed.
+
+default_domain_id: vulnerability_triage
+
+domains:
+  - domain_id: vulnerability_triage
+    domain_name: Vulnerability Triage
+    description: >-
+      Is this finding real, reachable and exploitable in our deployment? Covers
+      CVE records, CVSS and EPSS scoring, KEV membership, duplicate and
+      superseded findings, and whether the vulnerable code path is reachable
+      from the image's actual entrypoint.
+    preferred_source_ids:
+      - knowledge_layer
+    fallback_source_ids:
+      - knowledge_layer
+    is_default: true
+
+  - domain_id: vendor_advisory
+    domain_name: Vendor Advisory and Errata
+    description: >-
+      What did the vendor actually ship, and in which version? Covers SUSE
+      security advisories (SUSE-SU), backported fixes, affected-version
+      matrices, package NEVRAs and upstream changelogs. This is the domain where
+      exact-token retrieval matters more than semantic similarity — a
+      semantically adjacent advisory is the wrong advisory.
+    preferred_source_ids:
+      - knowledge_layer
+    fallback_source_ids:
+      - knowledge_layer
+
+  - domain_id: supply_chain_inventory
+    domain_name: Supply Chain and Inventory
+    description: >-
+      Where does the affected component appear in our estate? Covers SBOMs,
+      image and layer provenance, transitive dependency chains, base-image
+      lineage, and which workloads run the affected image.
+    preferred_source_ids:
+      - knowledge_layer
+    fallback_source_ids:
+      - knowledge_layer
+
+  - domain_id: remediation_engineering
+    domain_name: Remediation Engineering
+    description: >-
+      How is the fix applied here? Covers internal remediation runbooks, prior
+      accepted patches for the same component, Containerfile and Helm values
+      conventions, rebuild and rollout procedure, and known regressions from
+      previous version bumps. This is the domain whose answers become sandbox
+      actions rather than prose, so precedent from past accepted remediations
+      outranks general guidance.
+    preferred_source_ids:
+      - knowledge_layer
+    fallback_source_ids:
+      - knowledge_layer
+
+  - domain_id: compliance_evidence
+    domain_name: Compliance and Audit Evidence
+    description: >-
+      What must be recorded, and against which control? Covers remediation SLAs,
+      exception and risk-acceptance records, control mappings, and the evidence
+      an auditor expects for a given finding class.
+    preferred_source_ids:
+      - knowledge_layer
+    fallback_source_ids:
+      - knowledge_layer

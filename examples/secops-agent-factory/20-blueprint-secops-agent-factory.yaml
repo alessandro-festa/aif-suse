@@ -1,0 +1,608 @@
+# Blueprint 3 of 3 — the SecOps Agent Factory itself.
+#
+# This is the application stack: the vulnerability corpus, the retrieval and
+# safety tiers that sit on its hot path, and the AI-Q workflow that runs the
+# specialized agents over it. Four components, one version, one install.
+#
+# ---------------------------------------------------------------------------
+# WHAT IS *NOT* HERE, AND WHY — read this before adding anything
+# ---------------------------------------------------------------------------
+# An earlier draft of this directory shipped nine Blueprints, four of which did
+# nothing but install a chart that SUSE AI Factory already publishes as an app.
+# That was wrong, and it was inconsistent with how the product's own blueprints
+# are built. Both shipped NVIDIA blueprints in this repo —
+#
+#   charts/aif-operator/files/blueprints/nvidia-aiq-with-rag-1.0.0.yaml
+#     → nvidia-blueprint-rag + aiq2-web          (2 components)
+#   charts/aif-operator/files/blueprints/nvidia-rag-minimal-2-6-0.yaml
+#     → nvidia-blueprint-rag                     (1 component)
+#
+# — serve llama-3.3-nemotron-super-49b and yet ship no LLM and no operator. They
+# state the NIM Operator as a prerequisite and expect the model to exist. That is
+# the convention, and this Blueprint follows it:
+#
+#   the OPERATORS and the MODEL PLANE come from AI Factory → Apps;
+#   the BLUEPRINT carries the application stack.
+#
+# Concretely, all of these are first-class catalog entries in
+# operator/internal/catalog/default-catalog.json and are installed as apps, not
+# as components here:
+#
+#   k8s-nim-operator   "NVIDIA NIM Operator"      Supported
+#   nim-llm            "NVIDIA NIM for LLMs"      Supported   ×2, see apps/
+#   nemo-datastore / nemo-evaluator / nemo-customizer        (the flywheel)
+#
+# The two Nemotron generative tiers are the interesting case. They are served by
+# the SAME chart (`nim-llm`) with different images, and `Blueprint.spec.components`
+# is a CEL list-map keyed on chartName — two `nim-llm` components in one Blueprint
+# are rejected by the API server. Installing them as apps is not a workaround for
+# that constraint; it is the convention that makes the constraint irrelevant. The
+# values for both are kept in apps/ so nothing is lost.
+#
+# ---------------------------------------------------------------------------
+# STATUS
+# ---------------------------------------------------------------------------
+# UNTESTED end to end. The cluster this was authored against has simulated GPUs.
+# Per-component verification differs and is marked inline: the RAG and aiq2-web
+# value keys were checked with `helm show values` (both charts are anonymously
+# readable); the embedding and guardrails charts are NGC-gated and their values
+# are illustrative. See README.md for the full ledger.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: Blueprint
+metadata:
+  labels:
+    ai-factory.suse.com/blueprint-name: secops-agent-factory
+    ai-factory.suse.com/blueprint-version: 1.0.0
+  name: secops-agent-factory-1-0-0
+spec:
+  source: Nvidia
+  displayName: SecOps Agent Factory
+  version: 1.0.0
+  description: |
+    Autonomous vulnerability remediation on NVIDIA Nemotron, AI-Q 2.2 and the
+    NVIDIA RAG Blueprint, governed by an OpenShell execution boundary.
+
+    Installs four components across three namespaces:
+
+      ns-secops-models     Nemotron 3 Embed 1B      embedding for the corpus
+                           NeMo Guardrails          topical + injection rails
+      ns-secops-knowledge  NVIDIA RAG Blueprint     the vulnerability corpus,
+                                                    with the Llama Nemotron
+                                                    Rerank VL subchart enabled
+      ns-secops-agents     AI-Q 2.2 (aiq2-web)      the specialized agents
+
+    The agents: intent classification, triage, a human plan gate, an
+    orchestrator that fans out to parallel researcher workers over the corpus,
+    a writer with citation verification, and remediation that executes inside
+    an OpenShell sandbox rather than in the agent's own process.
+
+    ---------------------------------------------------------------------
+    PREREQUISITES — installed from AI Factory → Apps, not by this Blueprint
+    ---------------------------------------------------------------------
+
+      NVIDIA NIM Operator (k8s-nim-operator 3.1.2), cluster-wide. Must be
+      Ready, with the NIMService/NIMCache CRDs established, before this
+      Blueprint is deployed.
+
+      NVIDIA NIM for LLMs (nim-llm 2.0.4-pb6.6), TWICE, both into
+      ns-secops-models, with these exact release names — every endpoint below
+      and in configs/config_secops.yml addresses them by DNS:
+
+        nemotron-ultra       nvidia/nemotron-3-ultra-550b-a55b
+                             plans and synthesises: the clarifier, the research
+                             orchestrator, the source router and the writer
+        nemotron-lightning   nvidia/nemotron-3.5-lightning-30b-a3b
+                             executes: intent classification, triage, the
+                             parallel researcher workers, query rewriting
+
+      Values for both are in apps/nim-llm-nemotron-ultra.values.yaml and
+      apps/nim-llm-nemotron-lightning.values.yaml.
+
+      Elasticsearch (ECK) Operator. RAG v2.6.0 defaults its vector store to
+      Elasticsearch, not Milvus.
+
+    REQUIRES: "SecOps OpenShell Gateway" (blueprint 10) reachable, and a
+    workspace namespace (blueprint 11). Without them the deep-research path
+    fails closed at sandbox creation, which is the intended behaviour: an agent
+    that cannot get a governed sandbox does not fall back to an ungoverned one.
+
+    REQUIRES: namespaces, a Secret and two ConfigMaps that must exist first —
+
+      kubectl create namespace ns-secops-models
+      kubectl create namespace ns-secops-knowledge
+      kubectl create namespace ns-secops-agents
+
+      kubectl create secret generic aiq-credentials -n ns-secops-agents \
+        --from-literal=NVIDIA_API_KEY="$NGC_API_KEY" \
+        --from-literal=DB_USER_NAME="aiq" \
+        --from-literal=DB_USER_PASSWORD="aiq_dev"
+
+      kubectl create configmap aiq-secops-config -n ns-secops-agents \
+        --from-file=configs/config_secops.yml \
+        --from-file=configs/secops_domain_catalog.yml
+
+      kubectl create configmap openshell-secops-policy -n ns-secops-agents \
+        --from-file=policies/remediation-sandbox.yaml
+
+    NOTE ON ORDERING. There is no ordering WITHIN a Blueprint — the operator
+    emits one Fleet HelmOp per component and Fleet applies them concurrently
+    (buildComponentMatrix in operator/internal/controller/aiworkload/blueprint.go
+    sorts components for status display only; there is no dependsOn anywhere in
+    the operator). So rag-server will crash-loop until the embedding NIM is
+    serving, and AI-Q will restart until rag-server answers. Both recover on
+    their own. If you want a quiet install, deploy the prerequisite apps and
+    wait for them before creating the AIWorkload.
+
+    ENGINEERING GAP: the stock aiq-agent image does not ship the OpenShell
+    client SDK, and AI-Q 2.2 certifies only the Docker sandbox runtime. The
+    OpenShell bindings below are correct as configuration and incomplete as a
+    deployment. See README.md.
+
+    DEPRECATION: nemo-guardrails is part of NeMo Microservices, which NVIDIA
+    sunsets on 1 October 2026 in favour of NeMo Platform. This Blueprint is not
+    marked deprecated as a whole, because three of its four components are
+    unaffected — but plan the guardrails migration.
+
+    STATUS: reference example, never installed end to end.
+  components:
+    # =====================================================================
+    # 1. Embedding — Nemotron 3 Embed 1B
+    # =====================================================================
+    # Not folded into the RAG chart like the reranker below, because the RAG
+    # chart does not bundle it. `helm show values nvidia-blueprint-rag v2.6.0`
+    # offers exactly these NIM subcharts:
+    #
+    #   nim-llm, nim-vlm, nim-vlm-captioning,
+    #   nvidia-nim-llama-nemotron-embed-1b-v2,
+    #   nvidia-nim-llama-nemotron-embed-vl-1b-v2,
+    #   nvidia-nim-llama-nemotron-rerank-1b-v2,
+    #   nvidia-nim-llama-nemotron-rerank-vl-1b-v2
+    #
+    # — all previous-generation. Nemotron 3 Embed is the current generation and
+    # is matched to the Nemotron 3 generative tiers, so it is worth the extra
+    # component. The cost of the choice: "NVIDIA RAG (minimal, low-GPU)" in this
+    # repo uses llama-nemotron-embed-1b-v2, so if you run both, keep each RAG
+    # collection on the embedding model that created it. Mixing embedding models
+    # silently degrades recall rather than failing.
+    - chartRepo: nim-nvidia
+      chartName: nvidia-nim-nemotron-3-embed-1b
+      chartVersion: 2.2.2
+      vendor: nvidia
+      targetNamespace: ns-secops-models
+      # Pinned so the DNS name is predictable. The Blueprint controller
+      # otherwise derives a long release name from the AIWorkload instance, and
+      # every endpoint that addresses this NIM would have to track it.
+      releaseName: nemotron-embed
+      values:
+        # UNVERIFIED — the per-model NIM charts use a different values shape
+        # from the generic nim-llm chart, and nim-nvidia is NGC-gated (403 for
+        # anonymous `helm show values`). Confirm with NGC credentials before
+        # installing.
+        image:
+          pullSecrets:
+            - ngc-secret
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+          requests:
+            nvidia.com/gpu: 1
+        persistence:
+          enabled: true
+          size: 50Gi
+
+    # =====================================================================
+    # 2. Guardrails — NeMo Guardrails
+    # =====================================================================
+    # Kept in the Blueprint rather than moved to Apps like the LLMs, because
+    # the rail CONTENT is SecOps-specific: the topical rails and the
+    # injection-detection flows are part of this application, not shared model
+    # infrastructure. In an autonomous remediation loop the job is narrower than
+    # in a chatbot — keep the agents on the security task, and stop a
+    # prompt-injected advisory or README from steering the remediation agent
+    # off-task.
+    - chartRepo: nvidia-nemo-microservices
+      chartName: nemo-guardrails
+      chartVersion: 25.6.0
+      vendor: nvidia
+      targetNamespace: ns-secops-models
+      releaseName: nemo-guardrails
+      values:
+        # UNVERIFIED — nvidia-nemo-microservices is NGC-gated.
+        #
+        # Guardrails needs to know which model endpoint to police. Point it at
+        # the executor tier's in-cluster Service rather than at NVIDIA's hosted
+        # API, or inference leaves the cluster perimeter and the sovereignty
+        # property of this architecture is lost.
+        env:
+          NIM_ENDPOINT_URL: http://nemotron-lightning.ns-secops-models.svc.cluster.local:8000/v1
+        # Rail content — the Colang flows and allowed-topic definitions — is
+        # configuration, not a Helm value. It is supplied as a ConfigMap mounted
+        # into the pod, in the same way the AI-Q workflow config is mounted
+        # below.
+
+    # =====================================================================
+    # 3. Knowledge plane — NVIDIA RAG Blueprint v2.6.0
+    # =====================================================================
+    # The corpus the research agents read: CVE records, SUSE security advisories
+    # (SUSE-SU), upstream changelogs, SBOMs for the images in scope, SUSE
+    # Security (NeuVector) scan exports, and the platform team's own remediation
+    # runbooks.
+    #
+    # This is the component that makes remediation advice specific. Without it
+    # an agent proposes "upgrade the package"; with it the agent proposes
+    # "SUSE-SU ships the backported fix in 3.0.11-150600.3.1, the image already
+    # pins 3.0.11-150600.2.x, so the change is a version bump in this
+    # Containerfile line", and cites the advisory.
+    #
+    # CORPUS SOURCES, AND WHO PRODUCES THEM. Four of the six are external to
+    # this Blueprint and arrive through the nightly ingestion loop:
+    #
+    #   * CVE records and SUSE-SU advisories  — public feeds, pulled on a schedule
+    #   * SBOMs for the images in scope       — emitted by the customer's build
+    #   * SUSE Security (NeuVector) scan      — exported from the cluster's own
+    #     exports                               scanner; SUSE Security is a
+    #                                           PREREQUISITE, not installed here
+    #   * internal remediation runbooks       — the platform team's own git repo
+    #
+    # The SUSE Security exports are the difference between a corpus about
+    # vulnerabilities in general and a corpus about THIS cluster: they carry
+    # which images are affected, which are running, and which the enforcer has
+    # already seen exercised. That is the reachability signal, and it is what
+    # lets the triage agent rank rather than merely list. Wiring the export job
+    # is a customer-side integration — see integrations/suse-security-prereq.md.
+    #
+    # WHAT IS REUSED. Every subchart release-name and resource workaround below
+    # comes from charts/aif-operator/files/blueprints/nvidia-rag-minimal-2-6-0.yaml,
+    # where it was established against a real install. Those are not new guesses,
+    # and every value key here was checked with `helm show values`.
+    - chartRepo: nvidia-blueprints
+      chartName: nvidia-blueprint-rag
+      chartVersion: v2.6.0
+      # Required. Without it the default SUSE combined-secret injector runs,
+      # the create:false references below resolve to missing secrets, and
+      # rag-server fails with CreateContainerConfigError on ngc-api while
+      # nv-ingest gets 403/ImagePullBackOff on gated nvcr.io images.
+      vendor: nvidia
+      targetNamespace: ns-secops-knowledge
+      values:
+        imagePullSecret:
+          create: false
+          name: ngc-secret
+        ngcApiSecret:
+          create: false
+          name: ngc-api
+
+        envVars:
+          # DECISION: route every generative call the rag-server makes — main
+          # answer, query rewriting, filter-expression generation — to the
+          # Lightning app, instead of the chart's bundled
+          # nemotron-3-super-120b-a12b. These are short, structured,
+          # high-frequency calls: exactly Lightning's design point, and it
+          # avoids standing up a third large model.
+          APP_LLM_MODELNAME: "nvidia/nemotron-3.5-lightning-30b-a3b"
+          APP_QUERYREWRITER_MODELNAME: "nvidia/nemotron-3.5-lightning-30b-a3b"
+          APP_FILTEREXPRESSIONGENERATOR_MODELNAME: "nvidia/nemotron-3.5-lightning-30b-a3b"
+          APP_LLM_SERVERURL: "nemotron-lightning.ns-secops-models.svc.cluster.local:8000/v1"
+
+          # Embedding lives in ns-secops-models (component 1), so it is
+          # addressed fully-qualified. Ranking is a subchart of THIS chart and
+          # lands in this namespace, so it is addressed short — and without the
+          # /v1 suffix, matching the chart's own default for the ranking URL.
+          APP_EMBEDDINGS_MODELNAME: "nvidia/nemotron-3-embed-1b"
+          APP_EMBEDDINGS_SERVERURL: "nemotron-embed.ns-secops-models.svc.cluster.local:8000/v1"
+          APP_RANKING_MODELNAME: "nvidia/llama-nemotron-rerank-vl-1b-v2"
+          APP_RANKING_SERVERURL: "nemotron-ranking-vl-ms:8000"
+
+          # DECISION: hybrid search, weighted toward sparse. Vulnerability
+          # retrieval is unusual in that exact-token matching matters more
+          # than semantic similarity — "CVE-2026-1234", a package NEVRA, or a
+          # SUSE-SU identifier must match literally. Pure dense retrieval
+          # happily returns a semantically adjacent but WRONG advisory, which
+          # in this workload is worse than returning nothing.
+          APP_VECTORSTORE_SEARCHTYPE: "hybrid"
+          APP_VECTORSTORE_RANKER_TYPE: "weighted"
+          APP_VECTORSTORE_DENSE_WEIGHT: "0.4"
+          APP_VECTORSTORE_SPARSE_WEIGHT: "0.6"
+
+          # NOTE ON GPU VECTOR SEARCH. The chart ships
+          # APP_VECTORSTORE_INDEXTYPE: "GPU_CAGRA", but with the Elasticsearch
+          # backend that setting is inert and this one is "False" — the chart's
+          # own comment says GPU search is not supported by Elasticsearch.
+          # cuVS/CAGRA acceleration requires switching APP_VECTORSTORE_NAME to
+          # milvus. On a corpus of this size (advisories and SBOMs, not a
+          # document lake) CPU dense retrieval is already single-digit
+          # milliseconds, so this is a scale-out option, not a day-one
+          # requirement. Kept explicit so the choice is visible rather than
+          # inherited.
+          APP_VECTORSTORE_ENABLEGPUSEARCH: "False"
+
+          # --- SUSE Observability (customer prerequisite) -------------------
+          # Not installed by this directory — see integrations/README.md. The
+          # rag-server is on the hot path of every researcher worker, so its
+          # spans are what turn "the agent took eleven minutes" into "nine of
+          # them were reranking". 4318 for the same reason as the AI-Q
+          # component: the Python OTLP exporter defaults to HTTP.
+          #
+          # Note this is set on rag-server only. nv-ingest keeps otelEnabled
+          # false below, because that chart emits OTEL_EXPORTER_OTLP_ENDPOINT
+          # twice and Fleet rejects the duplicate — a chart bug, not a choice.
+          OTEL_EXPORTER_OTLP_ENDPOINT: "http://suse-observability-otel-collector.suse-observability.svc.cluster.local:4318"
+          OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+          OTEL_SERVICE_NAME: "secops-rag-server"
+
+        ingestor-server:
+          envVars:
+            SUMMARY_LLM: "nvidia/nemotron-3.5-lightning-30b-a3b"
+            APP_EMBEDDINGS_MODELNAME: "nvidia/nemotron-3-embed-1b"
+            APP_EMBEDDINGS_SERVERURL: "nemotron-embed.ns-secops-models.svc.cluster.local:8000/v1"
+          resources:
+            # Requests only. `null` does NOT clear a chart default — the
+            # Blueprint controller strips null values during the merge — so
+            # omitting limits lets the chart defaults ride while our requests
+            # override the (very large) defaults.
+            requests:
+              cpu: "2"
+              memory: 8Gi
+
+        nv-ingest:
+          # Pin subchart names to the chart's release-name="rag" assumptions.
+          # The Blueprint controller picks a long release name of its own;
+          # without these overrides every *_HOST / *_ENDPOINT default in the
+          # chart points at a Service that does not exist.
+          fullnameOverride: rag-nv-ingest
+          redis:
+            fullnameOverride: rag-redis
+            architecture: standalone
+          # The chart emits OTEL_EXPORTER_OTLP_ENDPOINT twice in the nv-ingest
+          # Deployment — once from the envVars loop and once from a fallback
+          # block — which Fleet rejects as a duplicate env var.
+          otelEnabled: false
+          resources:
+            requests:
+              cpu: "2"
+              memory: 8Gi
+          envVars:
+            APP_EMBEDDINGS_SERVERURL: "nemotron-embed.ns-secops-models.svc.cluster.local:8000/v1"
+            EMBEDDING_NIM_ENDPOINT: "http://nemotron-embed.ns-secops-models.svc.cluster.local:8000/v1"
+          milvus:
+            minio:
+              fullnameOverride: rag-minio
+            # The milvus subchart builds its S3 endpoint as
+            # "{{ .Release.Name }}-{{ .Values.minio.name }}", IGNORING
+            # minio.fullnameOverride. Under the controller's long release name
+            # that resolves to a host that does not exist and milvus panics
+            # with "no such host". externalS3 is the only branch that bypasses
+            # the release-name computation.
+            externalS3:
+              enabled: true
+              host: rag-minio
+              port: 9000
+              accessKey: minioadmin
+              secretKey: minioadmin
+              bucketName: nv-ingest
+              rootPath: file
+              useSSL: false
+          nimOperator:
+            # DECISION: keep table and chart structure extraction ON. Unlike
+            # the minimal RAG blueprint, this corpus genuinely needs them —
+            # affected-version matrices in vendor advisories are tables, and
+            # flattening them to prose is how an agent concludes the wrong
+            # version range is patched.
+            table_structure:
+              enabled: true
+            page_elements:
+              enabled: true
+            # DECISION: OCR off. The corpus is text — JSON, YAML, advisories,
+            # Markdown runbooks. nemoretriever-ocr-v1 took 18.6 GB of VRAM to
+            # initialise on the minimal-RAG install for no benefit here. Turn
+            # it back on only if scanned PDF reports enter the corpus.
+            ocr:
+              enabled: false
+            graphic_elements:
+              enabled: false
+
+        nimOperator:
+          # DECISION: the reranker rides as a subchart of this chart rather
+          # than as a fifth Blueprint component. It is the same chart and the
+          # same version either way, it lands in the same namespace as the
+          # rag-server that is its only caller, and enabling it here is the
+          # convention "NVIDIA RAG (minimal, low-GPU)" already follows. Its
+          # Service name is fixed by the subchart to nemotron-ranking-vl-ms,
+          # which is what APP_RANKING_SERVERURL above addresses.
+          nvidia-nim-llama-nemotron-rerank-vl-1b-v2:
+            enabled: true
+          # Everything else this chart could start stays off. The model plane
+          # (the two nim-llm apps) owns generative serving, and the envVars
+          # above route this chart to those endpoints. Leaving these enabled
+          # starts a duplicate 120B generative NIM and a second embedding NIM.
+          nim-llm:
+            enabled: false
+          nim-vlm:
+            enabled: false
+          nim-vlm-captioning:
+            enabled: false
+          nvidia-nim-llama-nemotron-embed-1b-v2:
+            enabled: false
+          nvidia-nim-llama-nemotron-embed-vl-1b-v2:
+            enabled: false
+          nvidia-nim-llama-nemotron-rerank-1b-v2:
+            enabled: false
+
+    # =====================================================================
+    # 4. Agent plane — NVIDIA AI-Q 2.2 / NeMo Agent Toolkit
+    # =====================================================================
+    # This is where the specialized agents live. Everything above it — the
+    # corpus, the retrieval tiers — and everything in Apps — the two Nemotron
+    # tiers, the NIM Operator — exists to be called from here.
+    #
+    # WHY aiq2-web 2.2.1 AND NOT THE 2.1.0 THE SHIPPED BLUEPRINT USES.
+    # AI-Q 2.2 is the release that added `deep_research_sandbox` with
+    # `provider: openshell`. That single feature is the hinge of this
+    # architecture: it is NVIDIA's own, documented seam between an agent that
+    # reasons and an agent that acts under policy. On 2.1.0 there is no sandbox
+    # provider to configure and the action plane does not exist.
+    #
+    # The cost of that choice is real: the known-good AI-Q config in this repo
+    # (examples/config_web_frag_2_1_0_updated.yaml) is a 2.1 file, so
+    # configs/config_secops.yml had to be written against the 2.2 schema. It was
+    # derived line by line from NVIDIA's own v2.2.0 configs/config_openshell.yml
+    # rather than guessed.
+    #
+    # NOTE: the shipped "NVIDIA AI-Q With RAG" blueprint states AI-Q must be
+    # deployed into the "ns-aiq" namespace. Nothing in the aiq2-web 2.2.1 values
+    # hardcodes that name, so a different namespace is used here — but this has
+    # not been verified against a running install. If AI-Q misbehaves on startup,
+    # try ns-aiq before debugging anything else.
+    - chartRepo: nvidia-blueprints
+      chartName: aiq2-web
+      chartVersion: 2.2.1
+      vendor: nvidia
+      targetNamespace: ns-secops-agents
+      values:
+        aiq:
+          apps:
+            backend:
+              env:
+                # Select the SecOps workflow instead of the baked-in default
+                # (configs/config_web_default_llamaindex.yml). Path is relative
+                # to the AI-Q working directory and must match the subPath
+                # mount below.
+                CONFIG_FILE: configs/config_secops.yml
+
+                # --- Knowledge plane (component 3) ------------------------
+                # The chart defaults are http://rag-server:8080 and
+                # http://rag-ingest:8080, which only resolve if RAG is in this
+                # namespace under its default release name. It is not: it is in
+                # ns-secops-knowledge. Fully-qualified names, and the ports the
+                # RAG chart actually serves.
+                RAG_SERVER_URL: http://rag-server.ns-secops-knowledge.svc.cluster.local:8081/v1
+                RAG_INGEST_URL: http://ingestor-server.ns-secops-knowledge.svc.cluster.local:8082/v1
+                COLLECTION_NAME: secops_vulnerability_corpus
+
+                # --- OpenShell sandbox (blueprints 10 / 11) ---------------
+                # The env contract from NVIDIA's operator guide. AI-Q reads
+                # these at sandbox creation; config_secops.yml consumes them as
+                # ${...} defaults, so the two must agree.
+                #
+                # A NAMED gateway is what puts this in remote mode: AI-Q attaches
+                # to a gateway the platform owns instead of starting a local one.
+                AIQ_OPENSHELL_GATEWAY_NAME: secops
+                AIQ_OPENSHELL_WORKSPACE: ns-secops-sandboxes
+                AIQ_OPENSHELL_POLICY_FILE: /app/configs/openshell/remediation-sandbox.yaml
+                # UNVERIFIED: this image is specified by this architecture and
+                # does not exist. Build it from SLE BCI 16 with the remediation
+                # toolchain — see sandbox-image/.
+                AIQ_OPENSHELL_IMAGE: registry.suse.com/suse/ai/openshell-secops-sandbox:0.1.0
+                # Pin the gateway version AI-Q will accept. NVIDIA certifies
+                # 0.0.88 for AI-Q 2.2; keep this in lockstep with the gateway
+                # chart in blueprint 10, and treat a mismatch as a release-gate
+                # failure rather than something to override.
+                AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION: "0.0.88"
+                # Refuse to run if the kernel cannot hard-enforce the filesystem
+                # policy. Never set this to false in an environment where the
+                # sandbox can write to a source repository — a best-effort
+                # Landlock is not a control.
+                AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK: "true"
+
+                # --- Admission control ------------------------------------
+                # These are chart defaults, restated because in this workload
+                # they are a safety property rather than a tuning knob: each
+                # active deep-research job holds a live sandbox with write
+                # access to a git remote. The global cap is the ceiling on how
+                # many things can be changing at once.
+                AIQ_MAX_ACTIVE_DEEP_RESEARCH_JOBS_PER_PRINCIPAL: "5"
+                AIQ_MAX_ACTIVE_DEEP_RESEARCH_JOBS_GLOBAL: "50"
+                AIQ_MAX_DEEP_RESEARCH_SUBMISSIONS_PER_MINUTE: "20"
+
+                # --- SUSE Observability (customer prerequisite) -----------
+                # Nothing in this directory installs SUSE Observability. What
+                # is configured here is the integration: where this workload
+                # sends its spans. See integrations/README.md.
+                #
+                # 4318, not 4317. The OTLP *HTTP* port is deliberate: the
+                # OpenTelemetry Python SDK and its auto-instrumentation default
+                # to the HTTP exporter, and pointing an HTTP exporter at the
+                # gRPC port produces a workload that starts cleanly, reports no
+                # error, and exports nothing. The OpenShell gateway in blueprint
+                # 10 uses 4317 because its exporter really is gRPC.
+                #
+                # The Service name is <release>-otel-collector and SUSE's
+                # documented release name is `suse-observability`. A customer
+                # who installed under another name must change this string.
+                OTEL_EXPORTER_OTLP_ENDPOINT: http://suse-observability-otel-collector.suse-observability.svc.cluster.local:4318
+                OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+                OTEL_SERVICE_NAME: secops-agent-plane
+                # No sampling. A trace here is not a performance sample, it is
+                # the reasoning record for a change that will be proposed to a
+                # production repository — "we dropped 90% of them to save disk"
+                # is not an answer an auditor accepts. Volume is bounded by the
+                # job admission caps above, not by a sampler.
+                OTEL_TRACES_SAMPLER: parentbased_always_on
+                OTEL_RESOURCE_ATTRIBUTES: "service.namespace=secops,deployment.environment=production"
+
+                # --- SUSE Security (customer prerequisite) ----------------
+                # Also not installed here — see
+                # integrations/suse-security-prereq.md. AI-Q needs the endpoint
+                # so the validation agent's tool definition can be resolved;
+                # it does NOT get the API key. That is injected by the OpenShell
+                # gateway at the egress boundary, so the credential lives in the
+                # one process the agent cannot read.
+                SUSE_SECURITY_API_URL: https://neuvector-svc-controller.cattle-neuvector-system.svc.cluster.local:10443
+
+              # UNVERIFIED: whether aiq2-web 2.2.1 exposes a podAnnotations key
+              # under aiq.apps.backend. If it does, adding
+              #
+              #   instrumentation.opentelemetry.io/inject-python: ns-secops-agents/otel-instrumentation
+              #
+              # gets zero-code Python auto-instrumentation from the OTel
+              # Operator (integrations/otel-instrumentation.yaml) on top of
+              # whatever AI-Q emits natively. If it does not, the annotation has
+              # to be patched onto the Deployment out of band — which Fleet will
+              # then revert on the next reconcile, so it belongs in the chart.
+
+              # Helm replaces list values wholesale, so the chart's own volume
+              # list is respecified in full. Dropping postgres-init breaks
+              # database initialisation and the failure looks like a job-store
+              # error, not a missing volume.
+              volumes:
+                - name: postgres-init
+                  configMap:
+                    name: aiq-postgres-init
+                - name: aiq-secops-config
+                  configMap:
+                    name: aiq-secops-config
+                - name: openshell-secops-policy
+                  configMap:
+                    name: openshell-secops-policy
+
+              volumeMounts:
+                # subPath mounts a single file over the baked-in one and leaves
+                # the rest of /app/configs intact. Mounting the directory would
+                # hide every other config the image ships.
+                - name: aiq-secops-config
+                  mountPath: /app/configs/config_secops.yml
+                  subPath: config_secops.yml
+                - name: aiq-secops-config
+                  mountPath: /app/configs/secops_domain_catalog.yml
+                  subPath: secops_domain_catalog.yml
+                - name: openshell-secops-policy
+                  mountPath: /app/configs/openshell/remediation-sandbox.yaml
+                  subPath: remediation-sandbox.yaml
+
+              # The orchestrator holds N concurrent researcher futures and the
+              # sandbox session for the lifetime of a job, and jobs here run for
+              # an hour. The chart's 1Gi request assumes chat.
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: 4Gi
+
+            frontend:
+              # The analyst-facing surface: submit a finding, approve or reject
+              # the plan at the clarifier gate, read the cited brief. Point DNS
+              # (or /etc/hosts) for this name at the ingress controller and edit
+              # it to your own domain.
+              ingress:
+                enabled: true
+                className: ""
+                hostname: secops-agents.suse.demo

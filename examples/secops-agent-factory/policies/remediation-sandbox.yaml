@@ -1,0 +1,337 @@
+# OpenShell sandbox policy — autonomous vulnerability remediation.
+#
+#   openshell policy set <sandbox> --policy remediation-sandbox.yaml --wait
+#
+# Also mounted into the AI-Q pod at
+# /app/configs/openshell/remediation-sandbox.yaml (blueprint 20), because AI-Q's
+# deep_research_sandbox.policy reads it at sandbox creation.
+#
+# ---------------------------------------------------------------------------
+# THIS FILE IS THE SECURITY BOUNDARY
+# ---------------------------------------------------------------------------
+# Every other document in this directory describes what the agents are supposed
+# to do. This one describes what they are able to do, and it is the only one the
+# system actually enforces. It is worth reading with that asymmetry in mind: if
+# the prose and this file disagree, this file wins.
+#
+# Two properties make that enforcement meaningful:
+#
+#   1. It is OUT OF PROCESS. The supervisor and the egress proxy are not
+#      libraries the agent imports; they are separate processes the agent cannot
+#      reach. A jailbroken agent, a prompt-injected advisory, a malicious
+#      dependency in a repo it clones — none of them can widen this policy,
+#      because none of them run where the policy is evaluated.
+#
+#   2. Credentials are injected AT THE BOUNDARY. The agent never holds the git
+#      token or the model key. It emits a request; the proxy admits or denies
+#      it, and only then substitutes the real credential. Exfiltrating the token
+#      is not a matter of being clever — the token is not in the sandbox.
+#
+# ADAPTED FROM NVIDIA's own AI-Q policy, configs/openshell/aiq-research-policy.yaml
+# at tag v2.2.0, and from examples/openshell/policies/tenant-suse-ai.yaml in this
+# repo. The filesystem baseline is NVIDIA's and must not be trimmed: OpenShell's
+# proxy-mode sandbox requires it (including read-only /proc), and attestation
+# fails if it is missing.
+#
+# STATUS: UNTESTED. Never loaded into a gateway.
+version: 1
+
+# ---------------------------------------------------------------------------
+# Filesystem — static. Changing this requires recreating the sandbox.
+# ---------------------------------------------------------------------------
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    # NVIDIA's proxy-mode baseline. /proc must be present and read-only or the
+    # supervisor cannot inspect the process tree it is supposed to police.
+    - /usr
+    - /lib
+    - /etc
+    - /var/log
+    - /proc
+    - /dev/urandom
+  read_write:
+    - /sandbox
+    - /workspace
+    - /tmp
+    - /dev/null
+    # Container builds need somewhere to put layers. Confined to a subtree of
+    # the sandbox's own workspace rather than anywhere under /var.
+    - /sandbox/.buildah
+
+landlock:
+  # hard_requirement, NOT the best_effort used by the tenant example.
+  # best_effort silently skips paths the kernel cannot enforce and starts
+  # anyway. For a sandbox holding a write credential to a source repository,
+  # "started with less isolation than requested, and did not say so" is the
+  # failure mode to design against. Refuse to start instead.
+  #
+  # This must agree with require_hard_landlock in configs/config_secops.yml and
+  # AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK in blueprint 20. All three are the same
+  # decision expressed at three layers, and all three should move together.
+  compatibility: hard_requirement
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+# ---------------------------------------------------------------------------
+# Network — dynamic. Applying this to a running sandbox takes effect in seconds.
+# ---------------------------------------------------------------------------
+# Everything not listed here is denied. Note there is deliberately NO rule for
+# inference.local: that is a built-in route inside the supervisor, short-
+# circuited before network policy is evaluated, so a rule for it would do
+# nothing. It is also why configs/config_secops.yml removes
+# integrate.api.nvidia.com from the sandbox allowlist — the sandbox reaches a
+# model through the supervisor route, not over the network.
+network_policies:
+
+  # -------------------------------------------------------------------------
+  # The git forge. The only write access in this policy.
+  # -------------------------------------------------------------------------
+  # DECISION: explicit allow rules instead of `access: read-write`.
+  # `access: read-write` is a preset that expands to GET, HEAD, OPTIONS, POST,
+  # PUT and PATCH across every path on the host. That is enough to open a pull
+  # request — and also enough to merge it, approve it, disable branch
+  # protection, rotate a webhook, or delete a release. The whole argument for
+  # autonomous remediation is that a human still approves the change; a policy
+  # that lets the agent approve its own change quietly removes the reviewer.
+  #
+  # So the API surface is enumerated. The agent may read the repository, create
+  # a branch, push a blob/tree/commit, and open a pull request. It may not
+  # merge, review, or touch protection settings.
+  git_forge:
+    name: git-forge
+    endpoints:
+      - host: api.github.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          # --- read ---
+          - allow: { method: GET, path: "/repos/*/*" }
+          - allow: { method: GET, path: "/repos/*/*/**" }
+          # --- write: branch, objects, commit ---
+          - allow: { method: POST, path: "/repos/*/*/git/refs" }
+          - allow: { method: POST, path: "/repos/*/*/git/blobs" }
+          - allow: { method: POST, path: "/repos/*/*/git/trees" }
+          - allow: { method: POST, path: "/repos/*/*/git/commits" }
+          - allow: { method: PATCH, path: "/repos/*/*/git/refs/heads/*" }
+          # --- write: the pull request, and a comment on it ---
+          - allow: { method: POST, path: "/repos/*/*/pulls" }
+          - allow: { method: POST, path: "/repos/*/*/issues/*/comments" }
+        # Belt and braces. The rules above already omit these, but an operator
+        # who later widens the policy to `access: read-write` in a hurry gets
+        # caught by the deny list. Deny is evaluated against the preset too.
+        deny_rules:
+          - { method: PUT,    path: "/repos/*/*/pulls/*/merge" }
+          - { method: POST,   path: "/repos/*/*/pulls/*/reviews" }
+          - { method: PUT,    path: "/repos/*/*/branches/*/protection" }
+          - { method: DELETE, path: "/repos/*/*/branches/*/protection" }
+          - { method: POST,   path: "/repos/*/*/hooks" }
+          - { method: PUT,    path: "/repos/*/*/actions/**" }
+          - { method: POST,   path: "/repos/*/*/actions/**" }
+
+      # git-over-HTTPS for clone and push. The L7 rules above govern the REST
+      # API; the git protocol is a different surface on a different host.
+      - host: github.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-write
+        # Required for forges that embed %2F in namespaced paths (GitLab does;
+        # harmless for GitHub). Without it the L7 path canonicalizer rejects
+        # those requests and clone fails with an error about the URL.
+        allow_encoded_slash: true
+
+    binaries:
+      - { path: /usr/bin/git }
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # SUSE update infrastructure and registry — read-only.
+  # -------------------------------------------------------------------------
+  # Resolving a CVE to a fixed package version means reading the errata;
+  # rebuilding the image means pulling the package and the base image.
+  suse_platform:
+    name: suse-platform
+    endpoints:
+      - { host: registry.suse.com, port: 443, protocol: rest, enforcement: enforce, access: read-only }
+      - { host: updates.suse.com,  port: 443, protocol: rest, enforcement: enforce, access: read-only }
+      - { host: scc.suse.com,      port: 443, protocol: rest, enforcement: enforce, access: read-only }
+
+      # ---------------------------------------------------------------------
+      # SUSE Application Collection — the sandbox's ONLY package index.
+      # ---------------------------------------------------------------------
+      # DECISION: enumerate paths rather than grant the whole host read-only.
+      # dp.apps.rancher.io serves three different things — a Python index, an
+      # OCI registry for charts and containers, and a web application with an
+      # authenticated account surface. The sandbox needs the first two and has
+      # no business with the third.
+      #
+      # This is the payoff of the sandbox image's `index-url` decision (see
+      # ../sandbox-image/Containerfile). Because every Python dependency comes
+      # from one curated host, "no arbitrary packages" stops being a build-time
+      # convention and becomes a network rule: pypi.org and
+      # files.pythonhosted.org are simply not in this policy, so a resolver that
+      # falls back to them fails at the proxy rather than succeeding quietly.
+      - host: dp.apps.rancher.io
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          # the curated Python index — PEP 503 simple API, GET only
+          - allow: { method: GET, path: "/libraries/python/simple/**" }
+          # OCI pulls: charts and containers. Distribution spec reads are GET
+          # for manifests/blobs and HEAD for existence checks.
+          - allow: { method: GET,  path: "/v2/**" }
+          - allow: { method: HEAD, path: "/v2/**" }
+    binaries:
+      - { path: /usr/bin/zypper }
+      - { path: /usr/bin/buildah }
+      - { path: /usr/bin/helm }
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # SUSE Security (NeuVector) — the oracle that grades the work.
+  # -------------------------------------------------------------------------
+  # SUSE Security sits at BOTH ends of the primary loop. A finding opens the
+  # job; a rescan of the rebuilt image closes it. That second half is why this
+  # policy exists: the validation agent must be able to ask an authority that is
+  # not itself whether the patch actually removed the CVE. An agent that grades
+  # its own work has produced an opinion, not evidence.
+  #
+  # SUSE Security is a PREREQUISITE, not something these Blueprints install —
+  # see ../integrations/suse-security-prereq.md. What is configured here is the
+  # integration: four calls, and an explicit refusal of everything else.
+  #
+  # DECISION: no `access:` preset. `read-write` on this host would let the agent
+  # rewrite the very rules it is being judged against — admission control,
+  # network rules, groups, the exported configuration. The most direct way to
+  # make a CVE disappear is to disable the scanner, and a policy that permits
+  # that turns the oracle into part of the attack surface. So the surface is
+  # enumerated, and the four dangerous families are ALSO denied explicitly.
+  suse_security:
+    name: suse-security
+    endpoints:
+      - host: neuvector-svc-controller.cattle-neuvector-system
+        port: 10443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          # exchange the injected API key for a session token (X-Auth-Token)
+          - allow: { method: POST, path: "/v1/auth" }
+          # scan the rebuilt image, then read the result
+          - allow: { method: POST, path: "/v1/scan/repository" }
+          - allow: { method: GET,  path: "/v1/scan/repository/**" }
+          # CVE-database freshness gate. A remediation graded against a stale
+          # database is not evidence — the job refuses to start if this call
+          # reports a cvedb older than the scan it is about to trust.
+          - allow: { method: GET,  path: "/v1/scan/scanner" }
+        deny_rules:
+          - { method: POST,   path: "/v1/policy/rule" }
+          - { method: PATCH,  path: "/v1/policy/rule" }
+          - { method: DELETE, path: "/v1/policy/rule/**" }
+          - { method: POST,   path: "/v1/admission/rules" }
+          - { method: PATCH,  path: "/v1/admission/rule/**" }
+          - { method: DELETE, path: "/v1/admission/rule/**" }
+          - { method: POST,   path: "/v1/group" }
+          - { method: PATCH,  path: "/v1/group/**" }
+          - { method: DELETE, path: "/v1/group/**" }
+          - { method: POST,   path: "/v1/file/config" }
+          - { method: GET,    path: "/v1/file/config" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # Authoritative vulnerability sources — read-only.
+  # -------------------------------------------------------------------------
+  # Present so the remediation agent can confirm a detail the corpus is missing
+  # or stale on. The corpus (blueprint 20) is the primary path; this is the
+  # exception path, and it is deliberately narrow — two hosts, GET only.
+  vulnerability_sources:
+    name: vulnerability-sources
+    endpoints:
+      - { host: nvd.nist.gov, port: 443, protocol: rest, enforcement: enforce, access: read-only }
+      - { host: www.suse.com, port: 443, protocol: rest, enforcement: enforce, access: read-only }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # DELIBERATELY ABSENT — and the absences matter more than the entries
+  # -------------------------------------------------------------------------
+  # pypi.org / files.pythonhosted.org / registry.npmjs.org — NVIDIA's research
+  #   policy grants these, and the SUSE tenant example grants them too, because
+  #   a research sandbox that cannot pip install is not much use. This sandbox
+  #   is different: it can write to a source repository. A sandbox that can
+  #   fetch and execute an arbitrary package from a public index, and then
+  #   commit, is a supply-chain attack with extra steps. Everything the
+  #   remediation toolchain needs is baked into the sandbox image — which is why
+  #   that image is a security artefact and not a convenience.
+  #
+  # integrate.api.nvidia.com — inference goes through the supervisor's
+  #   inference.local route, which injects the credential at the boundary.
+  #   Granting the hosted endpoint would give the agent a second, uninstrumented
+  #   path to a model, outside the cluster, holding its own key.
+  #
+  # pypi.org / files.pythonhosted.org — see the dp.apps.rancher.io block above.
+  #   Their absence is what gives the Application Collection's curated index its
+  #   teeth. With them present, `index-url` would be a preference; without them,
+  #   it is enforced by something the agent cannot argue with.
+  #
+  # The Kubernetes API — the agent proposes a change to a manifest in git. It
+  #   does not apply it. GitOps applies it, after a human approves the pull
+  #   request. Nothing in this policy lets the agent reach a cluster directly,
+  #   and that is the property that keeps "autonomous remediation" from meaning
+  #   "unreviewed production change".
+  #
+  # The SUSE Observability OTLP collector — deliberately NOT here, and the
+  #   reason is a limitation worth stating rather than hiding. OpenShell's
+  #   `protocol` field carries no gRPC value and the proxy does no OTLP framing
+  #   inspection, so a sandbox-to-collector span stream could be allowed but not
+  #   meaningfully governed. Telemetry therefore leaves through the GATEWAY's
+  #   own otlp.endpoint (blueprint 10), where it is emitted by a component the
+  #   agent does not control. The agent never holds a telemetry endpoint, which
+  #   also removes the obvious exfiltration channel: an allowed egress path that
+  #   accepts arbitrary attacker-chosen attribute values.
+
+# ---------------------------------------------------------------------------
+# Egress middleware — applied after policy admits a request and BEFORE
+# OpenShell injects provider credentials.
+# ---------------------------------------------------------------------------
+network_middlewares:
+  redact-secrets:
+    name: Redact secrets in outbound requests
+    # openshell/ is reserved for built-ins, which need no gateway.toml
+    # registration — so this is reachable declaratively. Custom gRPC middleware
+    # is not; it must be registered on the gateway out of band.
+    middleware: openshell/regex
+    order: 10
+    config:
+      mode: redact
+    # Deny the request if the stage fails. A fail_closed selector is rejected at
+    # validation if it could match a `tls: skip` endpoint, since that traffic
+    # cannot be inspected — none of the endpoints above skip TLS.
+    on_error: fail_closed
+    endpoints:
+      # Host globs only: * matches exactly one DNS label, ** matches one or
+      # more. Max 32 include+exclude patterns.
+      include:
+        - "api.github.com"
+        - "github.com"
+        - "registry.suse.com"
+        - "updates.suse.com"
+        - "scc.suse.com"
+        - "dp.apps.rancher.io"
+        - "nvd.nist.gov"
+        - "www.suse.com"
+        # Included for symmetry, not because a leak is expected here: the
+        # SUSE Security session token is injected at the boundary and never
+        # enters the sandbox, so what this catches is an agent echoing some
+        # OTHER credential into a scan request body.
+        - "neuvector-svc-controller.cattle-neuvector-system"
+    # Scope note, so nobody over-reads this control: it is regex-based, not
+    # parser-aware, and it initially matches simple sk-… token shapes. It is
+    # defence in depth against an agent pasting a key into a commit message or
+    # a pull-request body. It is not a guarantee, and it is not what keeps the
+    # git token safe — boundary injection is.

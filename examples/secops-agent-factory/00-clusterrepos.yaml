@@ -1,0 +1,89 @@
+# ClusterRepos consumed by the SecOps Agent Factory blueprints.
+#
+# Blueprint components reference a chart repository by the NAME of a Rancher
+# ClusterRepo, not by URL. There is no allowlist: if the name does not resolve
+# to a ClusterRepo on the target cluster, the HelmOp never produces a release
+# and the AIWorkload stalls without a useful message. Apply this file first.
+#
+#   kubectl apply -f 00-clusterrepos.yaml
+#   kubectl get clusterrepo -w      # wait for .status.downloadTime to be set
+#
+# The NGC repositories below are public index endpoints. Pulling the CHARTS is
+# anonymous; pulling the container IMAGES those charts reference is not — that
+# is what the operator's `vendor: nvidia` credential injection provides
+# (ngc-secret + ngc-api in the release namespace).
+#
+# NOTE: on a cluster already running SUSE AI Factory, most of these are normally
+# created for you — the Settings controller seeds the NGC repos and
+# examples/openshell/00-clusterrepo.yaml adds `openshell`. Every URL below was
+# checked against a live install and matches. Re-applying is harmless; if your
+# cluster defines one differently, keep the existing definition.
+#
+# ONE SUSE REPO IS USED BUT NOT DEFINED HERE, because it already exists on every
+# AI Factory cluster and redefining it would be worse than reusing it:
+#
+#   application-collection   oci://dp.apps.rancher.io/charts
+#       The SUSE Application Collection. Seeded by the AI Factory release
+#       manifest (uc-release-manifest/release_manifest.yaml) and used by the
+#       shipped SUSE blueprints for ollama, open-webui, vllm and milvus. This
+#       architecture uses the same Distribution Platform host outside Helm too —
+#       for the curated Python libraries baked into the remediation sandbox
+#       image. See sandbox-image/.
+#
+# NOTHING HERE INSTALLS SUSE OBSERVABILITY OR SUSE SECURITY. Both are platform
+# prerequisites the customer already runs, installed the way SUSE documents them
+# (SUSE Security through Rancher Cluster Tools; SUSE Observability through its
+# own Helm repo at charts.rancher.com/server-charts/prime/suse-observability).
+# What this directory contributes is the INTEGRATION: the endpoints, secrets and
+# policy that let the agent stack emit telemetry into one and drive scans in the
+# other. See integrations/README.md.
+---
+apiVersion: catalog.cattle.io/v1
+kind: ClusterRepo
+metadata:
+  name: nvidia
+spec:
+  url: https://helm.ngc.nvidia.com/nvidia
+---
+apiVersion: catalog.cattle.io/v1
+kind: ClusterRepo
+metadata:
+  name: nvidia-blueprints
+spec:
+  url: https://helm.ngc.nvidia.com/nvidia/blueprint
+---
+# Per-model NIM charts (embedding, reranking, OCR, …). Distinct from `nvidia`,
+# which carries the operators and the generic nim-llm chart.
+apiVersion: catalog.cattle.io/v1
+kind: ClusterRepo
+metadata:
+  name: nim-nvidia
+spec:
+  url: https://helm.ngc.nvidia.com/nim/nvidia
+---
+# NeMo microservices — Guardrails, Evaluator, Customizer, Data Store.
+#
+# DEPRECATION: NVIDIA sunsets NeMo Microservices on 1 October 2026. New work
+# moves to NeMo Platform (github.com/NVIDIA-NeMo/nemo-platform), which ships a
+# single all-in-one chart instead of four. See apps/nemo-flywheel.values.yaml.
+apiVersion: catalog.cattle.io/v1
+kind: ClusterRepo
+metadata:
+  name: nvidia-nemo-microservices
+spec:
+  url: https://helm.ngc.nvidia.com/nvidia/nemo-microservices
+---
+# OpenShell gateway chart. Identical to examples/openshell/00-clusterrepo.yaml.
+#
+# For an OCI repo the controller builds the chart reference as
+# `<spec.url>/<chartName>`, so this URL plus chartName `helm-chart` resolves to
+# oci://ghcr.io/nvidia/openshell/helm-chart. Rancher cannot index it (ghcr.io
+# exposes no catalog API under a namespace path), so it shows an empty DOWNLOAD
+# TIME and its charts never appear in the UI catalog browser. That affects
+# browsing only; the Blueprint install path does not read the index.
+apiVersion: catalog.cattle.io/v1
+kind: ClusterRepo
+metadata:
+  name: openshell
+spec:
+  url: oci://ghcr.io/nvidia/openshell

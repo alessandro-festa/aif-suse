@@ -1,0 +1,115 @@
+# Helm values for the DATA FLYWHEEL — NVIDIA NeMo Data Store, Evaluator and
+# Customizer.
+#
+# NOT A BLUEPRINT. All three charts are first-class SUSE AI Factory catalog apps
+# (`nemo-datastore`, `nemo-evaluator`, `nemo-customizer`). Install them from
+# AI Factory → Apps, all 25.6.0 from the `nvidia-nemo-microservices` ClusterRepo,
+# all into ns-secops-flywheel, under the release names used as the section
+# headings below.
+#
+# An earlier draft of this directory packaged them as a Blueprint marked
+# `deprecated: true`. That was the wrong shape twice over: they are catalog apps
+# like every other chart here, and a Blueprint whose only distinguishing property
+# is a deprecation warning is a warning wearing a costume.
+#
+# ---------------------------------------------------------------------------
+# WHY THE LOOP MATTERS — the part of the architecture hardest to add later
+# ---------------------------------------------------------------------------
+# Every remediation the platform performs leaves a complete record: the agent
+# trajectory from NeMo Relay, the human verdict at the plan gate, the pull
+# request outcome, and the SUSE Security rescan result. That record is a labelled
+# training example that nobody had to write — the label is "a security engineer
+# accepted this" or "a security engineer rejected this".
+#
+#   NeMo Data Store   collects accepted trajectories
+#   NeMo Evaluator    scores candidates against held-out cases, LLM-as-judge
+#   NeMo Customizer   LoRA-tunes Nemotron 3.5 Lightning on what was accepted
+#   NIM Operator      serves the resulting adapter alongside the base weights
+#
+# The effect compounds in the direction that matters economically: the cheap
+# executor tier absorbs progressively more of the routine caseload, and
+# escalation to the 550B orchestrator becomes rarer. Cost per remediation falls
+# as a function of remediations performed. That is the whole argument for owning
+# the inference rather than renting it — Anthropic's published figure is that a
+# multi-agent system burns roughly fifteen times the tokens of a chat
+# interaction, and a rented per-token bill has no mechanism that makes that
+# number go down.
+#
+# ---------------------------------------------------------------------------
+# DEPRECATION — READ BEFORE USING
+# ---------------------------------------------------------------------------
+# NVIDIA sunsets NeMo Microservices on 1 OCTOBER 2026, superseded by NeMo
+# Platform (github.com/NVIDIA-NeMo/nemo-platform): one all-in-one Helm chart with
+# embedded OPA, rather than the three separate charts below. As of this writing
+# that is roughly two weeks away.
+#
+# So treat this file as documenting the SHAPE of the flywheel, not as the chart
+# set to install. Anyone building this should start from NeMo Platform. The three
+# components are kept separate here because the separation is the explanatory
+# point — collect, evaluate, tune — and because the replacement chart's values
+# are not yet verifiable from this repo.
+#
+# REQUIRES: the NIM Operator app and the nemotron-lightning app. Customizer tunes
+# the Lightning tier, and the resulting adapter is served by setting
+# NIM_PEFT_SOURCE on that tier (see nim-llm-nemotron-lightning.values.yaml).
+#
+# REQUIRES: object storage for the Data Store, and PostgreSQL for Customizer and
+# Evaluator. SUSE Storage provides the volumes; the charts expect the services.
+#
+# REQUIRES: a trajectory source. The record this loop trains on comes from NeMo
+# Relay (agent trajectories, ATIF/OTLP) plus the OpenShell gateway's egress and
+# policy log. Neither is wired up here — that integration is described in the
+# architecture document and is not built.
+#
+# STATUS: UNTESTED, and built on charts with a two-week shelf life. Every value
+# below is UNVERIFIED: the nvidia-nemo-microservices repo is NGC-gated and
+# returns 403 to anonymous `helm show values`, so no key could be checked.
+
+# ===========================================================================
+# release: nemo-datastore — COLLECT
+# ===========================================================================
+# The corpus is the audit trail. Same artefacts, two consumers: a compliance
+# reviewer asking "why did this change get made" and Customizer asking "what does
+# a good remediation look like". Keeping them the same object is deliberate — a
+# training set that diverges from the audit record is a training set nobody can
+# defend.
+nemo-datastore:
+  persistence:
+    enabled: true
+    size: 200Gi
+
+# ===========================================================================
+# release: nemo-evaluator — EVALUATE
+# ===========================================================================
+# The judge runs on the ORCHESTRATOR tier, not the executor tier. A model must
+# not grade its own homework: scoring Lightning's output with Lightning launders
+# its blind spots into the training signal that produces the next Lightning.
+#
+# Rubric: Anthropic's five criteria for evaluating research agents — factual
+# accuracy, citation accuracy, completeness, source quality and tool efficiency —
+# with a sixth added for this workload: did the proposed change actually resolve
+# the finding on rescan. That last one is not a judgement, it is a measurement,
+# and it is the only criterion here that cannot be gamed by a persuasive
+# write-up.
+nemo-evaluator:
+  env:
+    NIM_ENDPOINT_URL: http://nemotron-ultra.ns-secops-models.svc.cluster.local:8000/v1
+
+# ===========================================================================
+# release: nemo-customizer — TUNE
+# ===========================================================================
+# LoRA, not full fine-tuning. Three reasons, in order of importance: the adapter
+# is small enough to evaluate and roll back as a unit; the base weights stay
+# byte-identical, so a regression is always attributable to the adapter; and it
+# fits in the GPU budget of a cluster that is already serving four models.
+#
+# Tuning runs on the same GPUs that serve inference. Schedule it off peak, or
+# give it its own node — a customization job competing with the executor tier
+# shows up as remediation latency, which is the number this whole architecture is
+# trying to reduce.
+nemo-customizer:
+  resources:
+    limits:
+      nvidia.com/gpu: 1
+    requests:
+      nvidia.com/gpu: 1

@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="780" viewBox="0 0 1160 780" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow-f4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0C322C"/>
+    </marker>
+    <marker id="arrow-f4-nv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#76B900"/>
+    </marker>
+  </defs>
+  <rect width="1160" height="780" fill="#ffffff"/>
+
+  <text x="40" y="38" font-size="20" font-weight="700" fill="#0C322C">From Blueprint to running stack — three apps, three Blueprints, one AIWorkload set</text>
+  <text x="40" y="60" font-size="12" fill="#5a6570">No imperative installer. The agent platform is a set of Kubernetes objects, which is what makes it versionable, air-gappable and auditable.</text>
+
+  <!-- ===================== Band A — authoring ===================== -->
+  <rect x="60" y="86" width="1040" height="64" rx="8" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="76" y="104" font-size="10" font-weight="700" fill="#5a6570">AUTHORING — GIT IS THE SOURCE OF RECORD, AND THE ONLY PLACE A HUMAN EDITS ANYTHING</text>
+  <rect x="76" y="110" width="244" height="32" rx="5" fill="#ffffff" stroke="#0C322C" stroke-width="1.2"/>
+  <text x="198" y="124" font-size="9.5" font-weight="700" fill="#1a1a1a" text-anchor="middle">Three Blueprint CRs</text>
+  <text x="198" y="136" font-size="8.5" fill="#5a6570" text-anchor="middle">10, 11, 20 — one YAML document per file</text>
+  <rect x="332" y="110" width="244" height="32" rx="5" fill="#ffffff" stroke="#0C322C" stroke-width="1.2"/>
+  <text x="454" y="124" font-size="9.5" font-weight="700" fill="#1a1a1a" text-anchor="middle">AI-Q workflow config</text>
+  <text x="454" y="136" font-size="8.5" fill="#5a6570" text-anchor="middle">configs/config_secops.yml</text>
+  <rect x="588" y="110" width="244" height="32" rx="5" fill="#ffffff" stroke="#0C322C" stroke-width="1.2"/>
+  <text x="710" y="124" font-size="9.5" font-weight="700" fill="#1a1a1a" text-anchor="middle">OpenShell policy</text>
+  <text x="710" y="136" font-size="8.5" fill="#5a6570" text-anchor="middle">policies/remediation-sandbox.yaml</text>
+  <rect x="844" y="110" width="244" height="32" rx="5" fill="#ffffff" stroke="#0C322C" stroke-width="1.2"/>
+  <text x="966" y="124" font-size="9.5" font-weight="700" fill="#1a1a1a" text-anchor="middle">AIWorkload set</text>
+  <text x="966" y="136" font-size="8.5" fill="#5a6570" text-anchor="middle">30-aiworkloads.yaml</text>
+
+  <path d="M 198 150 L 198 208" fill="none" stroke="#0C322C" stroke-width="1.6" marker-end="url(#arrow-f4)"/>
+  <path d="M 966 150 L 966 180 L 367 180 L 367 208" fill="none" stroke="#0C322C" stroke-width="1.6" marker-end="url(#arrow-f4)"/>
+
+  <!-- ===================== Stage row ===================== -->
+  <rect x="60" y="210" width="190" height="86" rx="7" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.6"/>
+  <text x="155" y="232" font-size="11" font-weight="700" fill="#1a1a1a" text-anchor="middle">Blueprint</text>
+  <text x="155" y="250" font-size="9" fill="#3d4852" text-anchor="middle">ai-factory.suse.com/v1alpha1</text>
+  <text x="155" y="263" font-size="9" fill="#5a6570" text-anchor="middle">cluster-scoped · components[] is a</text>
+  <text x="155" y="276" font-size="9" fill="#5a6570" text-anchor="middle">list-map keyed on chartName</text>
+
+  <rect x="272" y="210" width="190" height="86" rx="7" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.6"/>
+  <text x="367" y="232" font-size="11" font-weight="700" fill="#1a1a1a" text-anchor="middle">AIWorkload</text>
+  <text x="367" y="250" font-size="9" fill="#3d4852" text-anchor="middle">one instance of one Blueprint</text>
+  <text x="367" y="263" font-size="9" fill="#5a6570" text-anchor="middle">the name must be globally unique:</text>
+  <text x="367" y="276" font-size="9" fill="#5a6570" text-anchor="middle">the HelmOp is instance-chartName</text>
+
+  <rect x="484" y="210" width="190" height="86" rx="7" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.6"/>
+  <text x="579" y="232" font-size="11" font-weight="700" fill="#1a1a1a" text-anchor="middle">aif-operator</text>
+  <text x="579" y="250" font-size="9" fill="#3d4852" text-anchor="middle">creates the namespace, injects the</text>
+  <text x="579" y="263" font-size="9" fill="#5a6570" text-anchor="middle">pull secret by vendor, merges the</text>
+  <text x="579" y="276" font-size="9" fill="#5a6570" text-anchor="middle">values, emits one HelmOp per chart</text>
+
+  <rect x="696" y="210" width="190" height="86" rx="7" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.6"/>
+  <text x="791" y="232" font-size="11" font-weight="700" fill="#1a1a1a" text-anchor="middle">Fleet HelmOp</text>
+  <text x="791" y="250" font-size="9" fill="#3d4852" text-anchor="middle">one per component, in fleet-local</text>
+  <text x="791" y="263" font-size="9" fill="#5a6570" text-anchor="middle">pulls the chart from the named</text>
+  <text x="791" y="276" font-size="9" fill="#5a6570" text-anchor="middle">ClusterRepo and renders it</text>
+
+  <rect x="908" y="210" width="190" height="86" rx="7" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="1003" y="232" font-size="11" font-weight="700" fill="#1a1a1a" text-anchor="middle">Running stack</text>
+  <text x="1003" y="250" font-size="9" fill="#3d4852" text-anchor="middle">NIMService · rag-server · aiq2-web</text>
+  <text x="1003" y="263" font-size="9" fill="#5a6570" text-anchor="middle">OpenShell gateway · sandboxes</text>
+  <text x="1003" y="276" font-size="9" fill="#5a6570" text-anchor="middle">each in its own namespace</text>
+
+  <path d="M 252 253 L 268 253" fill="none" stroke="#0C322C" stroke-width="2" marker-end="url(#arrow-f4)"/>
+  <path d="M 464 253 L 480 253" fill="none" stroke="#0C322C" stroke-width="2" marker-end="url(#arrow-f4)"/>
+  <path d="M 676 253 L 692 253" fill="none" stroke="#0C322C" stroke-width="2" marker-end="url(#arrow-f4)"/>
+  <path d="M 888 253 L 904 253" fill="none" stroke="#0C322C" stroke-width="2" marker-end="url(#arrow-f4)"/>
+
+  <!-- ===================== Band B — content sources ===================== -->
+  <path d="M 791 340 L 791 300" fill="none" stroke="#76B900" stroke-width="1.8" marker-end="url(#arrow-f4-nv)"/>
+  <text x="799" y="322" font-size="9" font-weight="600" fill="#76B900">charts</text>
+  <path d="M 1003 340 L 1003 300" fill="none" stroke="#76B900" stroke-width="1.8" marker-end="url(#arrow-f4-nv)"/>
+  <text x="1011" y="322" font-size="9" font-weight="600" fill="#76B900">images</text>
+
+  <rect x="60" y="340" width="1040" height="80" rx="8" fill="#fbfcfc" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="76" y="358" font-size="10" font-weight="700" fill="#5a6570">CONTENT SOURCES — THE ONLY THREE HOSTS THAT HAVE TO BE MIRRORED TO RUN THIS AIR-GAPPED</text>
+  <rect x="76" y="364" width="328" height="50" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="240" y="382" font-size="10" font-weight="700" fill="#1a1a1a" text-anchor="middle">nvcr.io — NGC</text>
+  <text x="240" y="395" font-size="8.5" fill="#5a6570" text-anchor="middle">charts and NIM images · vendor: nvidia injects</text>
+  <text x="240" y="407" font-size="8.5" fill="#5a6570" text-anchor="middle">ngc-secret and ngc-api into the namespace</text>
+  <rect x="416" y="364" width="328" height="50" rx="5" fill="#ffffff" stroke="#0C322C" stroke-width="1.2"/>
+  <text x="580" y="382" font-size="10" font-weight="700" fill="#1a1a1a" text-anchor="middle">registry.suse.com</text>
+  <text x="580" y="395" font-size="8.5" fill="#5a6570" text-anchor="middle">SLE BCI 16 sandbox base · the precompiled</text>
+  <text x="580" y="407" font-size="8.5" fill="#5a6570" text-anchor="middle">NVIDIA driver 595 used by the GPU Operator</text>
+  <rect x="756" y="364" width="328" height="50" rx="5" fill="#ffffff" stroke="#0C322C" stroke-width="1.2"/>
+  <text x="920" y="382" font-size="10" font-weight="700" fill="#1a1a1a" text-anchor="middle">dp.apps.rancher.io</text>
+  <text x="920" y="395" font-size="8.5" fill="#5a6570" text-anchor="middle">SUSE Application Collection — charts, containers</text>
+  <text x="920" y="407" font-size="8.5" fill="#5a6570" text-anchor="middle">and the curated Python index the sandbox uses</text>
+
+  <!-- ===================== Three properties ===================== -->
+  <rect x="60" y="448" width="336" height="126" rx="8" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="76" y="470" font-size="11" font-weight="700" fill="#0C322C">IMMUTABILITY</text>
+  <text x="76" y="486" font-size="9.5" font-style="italic" fill="#30BA78">A Blueprint version is a contract.</text>
+  <text x="76" y="504" font-size="9" fill="#3d4852">AIWorkload.spec.componentValues is silently ignored on</text>
+  <text x="76" y="518" font-size="9" fill="#3d4852">the Blueprint path, so every knob is baked into the</text>
+  <text x="76" y="532" font-size="9" fill="#3d4852">Blueprint version. Changing a value means cutting a new</text>
+  <text x="76" y="546" font-size="9" fill="#3d4852">version — 1.0.0 to 1.0.1 — not editing a running system.</text>
+  <text x="76" y="560" font-size="9" fill="#3d4852">What runs can always be traced to one YAML document.</text>
+
+  <rect x="412" y="448" width="336" height="126" rx="8" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="428" y="470" font-size="11" font-weight="700" fill="#0C322C">AIR GAP</text>
+  <text x="428" y="486" font-size="9.5" font-style="italic" fill="#30BA78">chartRepo is a name, not a URL.</text>
+  <text x="428" y="504" font-size="9" fill="#3d4852">No Blueprint in this set encodes a public hostname.</text>
+  <text x="428" y="518" font-size="9" fill="#3d4852">chartRepo names a Rancher ClusterRepo, and the</text>
+  <text x="428" y="532" font-size="9" fill="#3d4852">ClusterRepo holds the URL. Mirror the three hosts above,</text>
+  <text x="428" y="546" font-size="9" fill="#3d4852">repoint the ClusterRepos, and the three Blueprints are</text>
+  <text x="428" y="560" font-size="9" fill="#3d4852">unchanged. The sandbox already builds from the mirror.</text>
+
+  <rect x="764" y="448" width="336" height="126" rx="8" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="780" y="470" font-size="11" font-weight="700" fill="#0C322C">DRIFT</text>
+  <text x="780" y="486" font-size="9.5" font-style="italic" fill="#30BA78">Reconciled, not repaired by hand.</text>
+  <text x="780" y="504" font-size="9" fill="#3d4852">Fleet compares the live objects against the rendered</text>
+  <text x="780" y="518" font-size="9" fill="#3d4852">manifest on every cycle. A hand-edited NIMService or a</text>
+  <text x="780" y="532" font-size="9" fill="#3d4852">loosened NetworkPolicy is reported and reverted from git</text>
+  <text x="780" y="546" font-size="9" fill="#3d4852">— including the OpenShell policy that bounds the agent.</text>
+  <text x="780" y="560" font-size="9" font-weight="600" fill="#0C322C">The agents cannot reach the plane that governs them.</text>
+
+  <!-- ===================== Install order ===================== -->
+  <rect x="60" y="596" width="1040" height="72" rx="8" fill="#fbfcfc" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="76" y="614" font-size="10" font-weight="700" fill="#5a6570">INSTALL ORDER — THREE APPS FROM THE CATALOG, THEN THREE BLUEPRINTS, THEN ONE AIWORKLOAD SET. NOTHING HERE HAS BEEN RUN END TO END.</text>
+  <rect x="76" y="620" width="138" height="40" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="1.8"/>
+  <text x="145" y="636" font-size="9" font-weight="700" fill="#1a1a1a" text-anchor="middle">APP · Platform</text>
+  <text x="145" y="649" font-size="8" fill="#5a6570" text-anchor="middle">NIM Operator 3.1.2</text>
+  <rect x="220" y="620" width="138" height="40" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="1.8"/>
+  <text x="289" y="636" font-size="9" font-weight="700" fill="#1a1a1a" text-anchor="middle">APP · Model</text>
+  <text x="289" y="649" font-size="8" fill="#5a6570" text-anchor="middle">Ultra — orchestrator</text>
+  <rect x="364" y="620" width="138" height="40" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="1.8"/>
+  <text x="433" y="636" font-size="9" font-weight="700" fill="#1a1a1a" text-anchor="middle">APP · Model</text>
+  <text x="433" y="649" font-size="8" fill="#5a6570" text-anchor="middle">Lightning — executor</text>
+  <rect x="508" y="620" width="138" height="40" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="1.8"/>
+  <text x="577" y="636" font-size="9" font-weight="700" fill="#1a1a1a" text-anchor="middle">10 · Action</text>
+  <text x="577" y="649" font-size="8" fill="#5a6570" text-anchor="middle">OpenShell gateway</text>
+  <rect x="652" y="620" width="138" height="40" rx="5" fill="#ffffff" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="721" y="636" font-size="9" font-weight="700" fill="#1a1a1a" text-anchor="middle">11 · Action</text>
+  <text x="721" y="649" font-size="8" fill="#5a6570" text-anchor="middle">SecOps workspace</text>
+  <rect x="796" y="620" width="138" height="40" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="1.8"/>
+  <text x="865" y="636" font-size="9" font-weight="700" fill="#1a1a1a" text-anchor="middle">20 · SecOps</text>
+  <text x="865" y="647" font-size="7.5" fill="#5a6570" text-anchor="middle">Embed · Guardrails</text>
+  <text x="865" y="656" font-size="7.5" fill="#5a6570" text-anchor="middle">RAG v2.6.0 · AI-Q 2.2</text>
+  <rect x="940" y="620" width="138" height="40" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="1.8"/>
+  <text x="1009" y="636" font-size="9" font-weight="700" fill="#1a1a1a" text-anchor="middle">APP · Flywheel</text>
+  <text x="1009" y="649" font-size="8" fill="#5a6570" text-anchor="middle">NeMo — weekly, optional</text>
+
+  <!-- ===================== Legend ===================== -->
+  <rect x="50" y="690" width="1060" height="62" rx="8" fill="#fbfcfc" stroke="#cfd8dc" stroke-width="1"/>
+  <rect x="68" y="704" width="20" height="13" rx="3" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="96" y="715" font-size="10" fill="#3d4852">NVIDIA-supplied chart, image or registry</text>
+  <rect x="400" y="704" width="20" height="13" rx="3" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="428" y="715" font-size="10" fill="#3d4852">SUSE-supplied platform object, chart or registry</text>
+  <text x="68" y="738" font-size="10" font-style="italic" fill="#5a6570">Every box above is a Kubernetes object. There is no imperative installer, no helm install run by hand, and no step that needs a kubeconfig on an operator's laptop.</text>
+</svg>

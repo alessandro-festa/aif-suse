@@ -1,0 +1,276 @@
+# Blueprint 1 of 3 — Action plane: NVIDIA OpenShell gateway (ONCE per cluster).
+#
+# The control that makes autonomous remediation defensible. Everything the
+# agents do to the world happens inside a sandbox this gateway creates, under a
+# policy the gateway enforces out of process — so the boundary holds whether or
+# not the agent cooperates. A prompt-injected agent is still an agent that
+# cannot reach an endpoint the policy does not name.
+#
+# ADAPTED FROM examples/openshell/10-blueprint-openshell-gateway.yaml, which is
+# installed and working on the local test cluster. The differences are: the
+# SecOps sandbox image, OTLP wired to SUSE Observability, the credential KEK
+# pinned for the GitOps path, and OIDC treated as required rather than optional.
+# The structural values — releaseName, workspaceResources, workspaceMode and
+# operatorNamespaceLabel — are carried over UNCHANGED and must stay that way;
+# each one is load-bearing for a reason spelled out in the comments below, and
+# every one of them fails silently when wrong.
+#
+# ---------------------------------------------------------------------------
+# CHART VERSION — a real conflict, stated rather than papered over
+# ---------------------------------------------------------------------------
+# NVIDIA's AI-Q 2.2 operator guide certifies OpenShell gateway 0.0.88. Chart
+# 0.0.88 exists on ghcr.io and was inspected: it has NO
+# server.drivers.kubernetes.workspaceMode, NO operatorNamespaceLabel, NO
+# workspaceResources and NO policyValidationFailureMode. Those keys arrive
+# later — workspaceMode and policyValidationFailureMode by 0.0.116,
+# workspaceResources only in dev builds after it.
+#
+# So the shared-gateway, one-namespace-per-tenant topology this architecture
+# depends on CANNOT be built on the version AI-Q certifies. The dev build
+# pinned below is the one verified working in this repo, and it is newer than
+# any numbered release. Reconciling the two — either AI-Q certifying a gateway
+# with operator workspace mode, or this architecture running on a numbered
+# release once these keys land in one — is a named item of the engineering gap,
+# not an oversight. AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION in blueprint 20 is
+# set to 0.0.88 to match what AI-Q expects; on this chart that check will not
+# pass, and that is the honest state of things today.
+#
+# Related: the companion `openshell-workspace` chart (blueprint 11) has ONLY
+# dev tags on ghcr.io — NVIDIA has cut no numbered release of it at all.
+#
+# PREREQUISITE — the Kubernetes Agent Sandbox CRDs and controller, cluster-wide:
+#   kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.0/sandbox-with-extensions.yaml
+#
+# STATUS: the closest thing in this directory to verified. The equivalent
+# blueprint in examples/openshell/ runs on the local cluster; the SecOps
+# customisations below do not, because the sandbox image they reference does
+# not exist.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: Blueprint
+metadata:
+  labels:
+    ai-factory.suse.com/blueprint-name: secops-openshell-gateway
+    ai-factory.suse.com/blueprint-version: 1.0.0
+  name: secops-openshell-gateway-1-0-0
+spec:
+  source: Nvidia
+  displayName: SecOps OpenShell Gateway
+  version: 1.0.0
+  description: |
+    NVIDIA OpenShell gateway, configured as the governed execution substrate
+    for the SecOps Agent Factory. Install once per cluster, then install
+    "SecOps OpenShell Workspace" (blueprint 11) into each namespace that should
+    be able to run remediation sandboxes.
+
+    REQUIRES: Kubernetes Agent Sandbox CRDs and controller, cluster-wide:
+      kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.0/sandbox-with-extensions.yaml
+    The chart's preflight fails the install with a clear message if they are
+    absent.
+
+    REQUIRES: an OIDC provider. Unlike the prototype in examples/openshell/,
+    this blueprint does NOT enable allowUnauthenticatedUsers. An unauthenticated
+    gateway makes every caller a Platform Admin, and a Platform Admin can change
+    the policy that governs a sandbox holding write access to a source
+    repository. Fill in server.oidc.* below before installing.
+
+    REQUIRES: a SecOps sandbox image. The default sandbox image below is
+    SPECIFIED BY THIS ARCHITECTURE AND DOES NOT EXIST — see blueprint 11.
+
+    NOTE: the gateway is pinned to the "openshell" namespace regardless of the
+    namespace chosen in the install wizard, because the workspace blueprint
+    references the gateway ServiceAccount at a fixed location.
+
+    NOTE: policy CONTENT is gateway runtime state, not a Helm value. Load
+    policies/remediation-sandbox.yaml with the `openshell` CLI after install.
+    The only policy-related Helm value is the failure mode, set to fail_closed
+    below.
+
+    NOTE: chart version conflict with AI-Q 2.2's certified gateway 0.0.88 — see
+    the comment block at the top of this file. This is a known gap.
+
+    STATUS: reference example. The upstream-equivalent blueprint in
+    examples/openshell/ is verified working; these SecOps values are not.
+  components:
+    # The upstream chart's Chart.yaml name is literally "helm-chart", which is
+    # also the OCI repository name — hence releaseName below.
+    - chartRepo: openshell
+      chartName: helm-chart
+      chartVersion: 0.0.0-dev.17171cd9337a2181d4bb5a9e711e1f2ad5f69388
+      # "suse", not "nvidia". OpenShell's images are public on ghcr.io; the
+      # nvidia injector wires in ngc-secret, which authenticates nvcr.io — the
+      # wrong registry for these images.
+      vendor: suse
+      targetNamespace: openshell
+      # CRITICAL. Without it the release name defaults to the chartName
+      # ("helm-chart"), the gateway ServiceAccount is no longer the "openshell"
+      # subject blueprint 11's RoleBinding grants, and the pod's
+      # app.kubernetes.io/instance label stops matching blueprint 11's
+      # NetworkPolicy selector. Both failures are silent: `sandbox exec` keeps
+      # working (gRPC to the gateway) while `sandbox connect` hangs (SSH from
+      # the gateway to the sandbox on :2222, now dropped).
+      releaseName: openshell
+      values:
+        # Shared-gateway topology: the per-namespace ServiceAccount, Role,
+        # RoleBinding and NetworkPolicy come from blueprint 11, once per tenant.
+        workspaceResources:
+          enabled: false
+
+        supervisor:
+          # Pinned rather than auto-detected from .Capabilities.KubeVersion, so
+          # the rendered result does not depend on what Helm reports. Drop on
+          # Kubernetes >= 1.35.
+          sideloadMethod: init-container
+          # DECISION: sidecar, not the "combined" default used by the prototype.
+          # Combined topology runs the egress proxy inside the sandbox
+          # container, alongside the process the agent controls. Sidecar puts
+          # network enforcement in a separate container the agent cannot touch.
+          # For a research sandbox that distinction is academic; for a sandbox
+          # that can push to a git remote it is the whole point of using
+          # OpenShell rather than a NetworkPolicy.
+          topology: sidecar
+
+        server:
+          auth:
+            # Explicitly false. See the REQUIRES note above — this is the one
+            # value that must never be flipped to match the prototype.
+            allowUnauthenticatedUsers: false
+
+          # Fill this in before installing. rolesClaim is IdP-specific:
+          #   Keycloak  realm_access.roles
+          #   Entra ID  roles
+          #   Okta      groups
+          # adminRole and userRole must BOTH be set or BOTH be empty; setting
+          # only one is a configuration error. caConfigMapName is required when
+          # the issuer's certificate is signed by a private CA, and the
+          # ConfigMap must have a ca.crt key.
+          # oidc:
+          #   issuer: "https://keycloak.example.com/realms/secops"
+          #   audience: "openshell-cli"
+          #   rolesClaim: "realm_access.roles"
+          #   adminRole: "secops-platform-admin"
+          #   userRole: "secops-analyst"
+          #   caConfigMapName: ""
+
+          drivers:
+            kubernetes:
+              # One gateway serving many pre-provisioned namespaces; a workspace
+              # name maps 1:1 to a namespace of the same name. "managed" mode
+              # would let the gateway create namespaces itself, which hands
+              # namespace creation to the component whose whole job is to run
+              # untrusted code.
+              workspaceMode: operator
+              # Operator mode requires exactly one of operatorNamespaceLabel or
+              # operatorNamespaceFile. A namespace missing this label is the
+              # single most common cause of "sandbox create" failing with an
+              # error that never mentions labels.
+              operatorNamespaceLabel: ai-factory.suse.com/openshell-workspace=true
+
+          # Default image for new sandboxes.
+          #
+          # UNVERIFIED — THIS IMAGE DOES NOT EXIST. This architecture specifies
+          # it: SLE BCI 16, plus the remediation toolchain (git, buildah, helm,
+          # kubectl, zypper, the SUSE Security CLI) and nothing else. It is
+          # named here because the sandbox image is a security artefact, not a
+          # convenience: the egress allowlist in configs/config_secops.yml
+          # deliberately excludes PyPI and npm, which is only safe if every tool
+          # the agent needs is already in the image. See blueprint 11.
+          #
+          # The nearest thing that exists today is
+          # ghcr.io/nvidia/openshell-community/sandboxes/suse, built from
+          # OpenShell-Community/sandboxes/suse in this workspace — SUSE-branded
+          # on SLE BCI 16, but without the remediation toolchain.
+          sandboxImage: "registry.suse.com/suse/ai/openshell-secops-sandbox:0.1.0"
+          # sandboxImagePullSecrets:
+          #   - name: openshell-sandbox-pull
+
+          # Empty = the cluster's default StorageClass. Set this on clusters
+          # with no default, otherwise the per-sandbox PVC stays Pending and the
+          # sandbox never starts.
+          workspaceStorageClass: ""
+          # A remediation sandbox clones a repo and builds a container image.
+          # The driver default is too small for a build cache.
+          workspaceDefaultStorageSize: "20Gi"
+
+          # DECISION: consider a hardened runtime here. OpenShell's own controls
+          # are process- and network-level; a sandboxed runtime adds kernel
+          # isolation underneath them. Left unset because it depends on what the
+          # cluster has installed, but for a sandbox with write access to
+          # production source, defence in depth is the right posture.
+          # defaultRuntimeClassName: "kata"
+
+          # fail_closed: a policy that fails validation is deactivated and the
+          # traffic it governed is denied. retain_last_valid would keep serving
+          # the previous policy — convenient, and exactly wrong here, because it
+          # means a rejected tightening leaves the looser policy in force.
+          policyValidationFailureMode: fail_closed
+
+          # Pin the key-encryption key. By default the chart generates it with
+          # Helm's `lookup`, which returns nothing under `helm template` — and
+          # Fleet renders the chart, so on the GitOps path the key is
+          # regenerated on every render and previously stored provider
+          # credentials become undecryptable. Create it out of band:
+          #
+          #   kubectl -n openshell create secret generic openshell-credential-kek \
+          #     --from-literal=key-encryption-key="$(head -c 32 /dev/urandom | base64)"
+          credentialStorage:
+            existingSecret: "openshell-credential-kek"
+
+          # Every sandbox action, every policy decision and every egress attempt
+          # as OTLP traces. This is half the audit trail (the other half is the
+          # NeMo Relay agent trajectory from the AI-Q side) and it is the half
+          # that is not self-reported by the agent — it comes from the enforcer.
+          # SUSE Observability's collector already normalises gen_ai.* semantic
+          # conventions and infers a topology from traces, so the sandbox shows
+          # up in the same service map as everything else.
+          #
+          # SUSE Observability is a PREREQUISITE — nothing in this directory
+          # installs it (see integrations/README.md). What is configured here is
+          # the integration, and the Service name below is load-bearing: the
+          # collector Service is named <release>-otel-collector, and SUSE's
+          # documented release name is `suse-observability`. Rendering chart
+          # 2.10.3 gives `suse-observability-otel-collector` with ports 4317
+          # (otlp), 4318 (otlp-http) and 8888 (metrics). If the customer
+          # installed under a different release name, this string changes — and
+          # it fails silently, as traces that are simply never delivered.
+          #
+          # 4317, not 4318: this is the gateway's native gRPC OTLP exporter. The
+          # 4318 override in integrations/otel-instrumentation.yaml applies to
+          # the Python auto-instrumentation on the AI-Q side, which defaults to
+          # HTTP. Two ports, two different clients, both correct.
+          otlp:
+            endpoint: "http://suse-observability-otel-collector.suse-observability.svc.cluster.local:4317"
+            serviceName: "openshell-gateway-secops"
+          telemetryEnabled: true
+
+          # The default database is SQLite on the StatefulSet volume, which caps
+          # the gateway at one replica. The gateway is in the path of every
+          # remediation, so point it at Postgres before this matters.
+          # externalDbSecret: "openshell-db"
+
+        # Exposure. The prototype reaches the gateway with `kubectl
+        # port-forward`; a real cluster needs one of two routes, which differ in
+        # who terminates TLS and therefore in what authenticates the caller.
+        #
+        # Route 1 — Gateway API. Envoy terminates TLS, the gateway never sees a
+        # client certificate, and OIDC becomes mandatory. Pair with
+        # server.disableTls=true and set server.grpcEndpoint to the external URL.
+        #
+        # Route 2 — OpenShift Route with TLS passthrough. The gateway keeps
+        # terminating its own TLS/mTLS. The server certificate's SANs must
+        # include the Route hostname (pkiInitJob.serverDnsNames or
+        # certManager.serverDnsNames).
+        #
+        # grpcRoute:
+        #   enabled: true
+        #   hostnames:
+        #     - openshell-secops.example.com
+        #   gateway:
+        #     create: true
+        #     className: eg
+        #     listener:
+        #       port: 443
+        #       protocol: HTTPS
+        #       allowedRoutes: Same
+        #       tls:
+        #         certificateRefs:
+        #           - name: openshell-secops-tls

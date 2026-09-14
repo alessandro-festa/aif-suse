@@ -1,0 +1,111 @@
+# The install set — the same payload the Rancher install wizard would produce
+# for each of the three Blueprints in this directory, in dependency order.
+#
+# DO NOT APPLY THIS FILE AS ONE UNIT. `kubectl apply -f` submits all of it at
+# once, and these have hard ordering constraints: the gateway must exist before a
+# workspace grants it authority over a namespace, and the agent plane's sandbox
+# configuration is validated at first use rather than at startup, so installing
+# it first produces a system that looks healthy and fails on the first
+# remediation. Apply one document, wait for it to be Ready, apply the next.
+#
+# THE APPS COME FIRST, BEFORE ANY OF THIS. These Blueprints install no operator
+# and no LLM. Install from AI Factory → Apps and wait for each to be Ready:
+#
+#   k8s-nim-operator 3.1.2   cluster-wide; wait for the NIMService/NIMCache CRDs
+#   nim-llm 2.0.4-pb6.6      ns-secops-models, release `nemotron-ultra`
+#   nim-llm 2.0.4-pb6.6      ns-secops-models, release `nemotron-lightning`
+#   Elasticsearch (ECK)      cluster-wide; RAG v2.6.0 defaults to Elasticsearch
+#
+# Values for the two nim-llm installs are in apps/. The release names are part of
+# the contract — every endpoint in blueprint 20 and configs/config_secops.yml
+# addresses them by DNS.
+#
+# NAMESPACES AND SECRETS NEXT. See README.md — the blueprints require namespaces,
+# a label and a Secret that must exist beforehand, and the resulting failures are
+# unhelpful:
+#
+#   kubectl create namespace ns-secops-models
+#   kubectl create namespace ns-secops-knowledge
+#   kubectl create namespace ns-secops-agents
+#   kubectl create namespace ns-secops-sandboxes
+#   kubectl create namespace openshell
+#   kubectl label namespace ns-secops-sandboxes \
+#     ai-factory.suse.com/openshell-workspace=true
+#
+# WORKLOAD NAMES ARE GLOBAL. The Fleet HelmOp is named
+# "<aiworkload-name>-<chartName>" and always lands in fleet-local, so the
+# AIWorkload's own namespace is NOT part of the name. Two AIWorkloads sharing a
+# name collide on one HelmOp regardless of which namespaces they are in — which
+# is why every name below carries a "secops-" prefix.
+#
+# spec.componentValues is NOT read on the Blueprint path; the operator takes
+# values from the Blueprint CR only. To change a value, author a new Blueprint
+# version rather than adding overrides here.
+#
+# STATUS: UNTESTED. Nothing in this file has been applied to a cluster.
+# ---------------------------------------------------------------------------
+
+# 1. Action plane, before the agent plane — gateway first.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: AIWorkload
+metadata:
+  name: secops-openshell-gateway
+  namespace: openshell
+spec:
+  displayName: SecOps OpenShell Gateway
+  source:
+    sourceType: Blueprint
+    blueprint:
+      name: secops-openshell-gateway
+      version: 1.0.0
+  targetNamespace: openshell
+  targetClusters: ["local"]
+  deployStrategy: FleetBundle
+---
+# 2. One per namespace that should be able to run sandboxes. The namespace name
+#    becomes the OpenShell workspace name and must match AIQ_OPENSHELL_WORKSPACE
+#    in blueprint 20. To onboard a second one, copy this document, change the
+#    name suffix and both namespace fields, and label the new namespace.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: AIWorkload
+metadata:
+  name: secops-openshell-ws-sandboxes
+  namespace: ns-secops-sandboxes
+spec:
+  displayName: SecOps OpenShell Workspace
+  source:
+    sourceType: Blueprint
+    blueprint:
+      name: secops-openshell-workspace
+      version: 1.0.0
+  targetNamespace: ns-secops-sandboxes
+  targetClusters: ["local"]
+  deployStrategy: FleetBundle
+---
+# 3. The stack. Requires the aiq-credentials Secret and both ConfigMaps in
+#    ns-secops-agents — see blueprint 20's description for the exact commands.
+#
+#    targetNamespace is ns-secops-agents, but three of the four components
+#    override it: the embedding and guardrails components land in
+#    ns-secops-models and the RAG component in ns-secops-knowledge. All three
+#    namespaces must exist first.
+#
+#    Expect a noisy first few minutes. There is no ordering WITHIN a Blueprint —
+#    the operator emits one Fleet HelmOp per component and Fleet applies them
+#    concurrently — so rag-server crash-loops until the embedding NIM serves, and
+#    AI-Q restarts until rag-server answers. Both recover without intervention.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: AIWorkload
+metadata:
+  name: secops-agent-factory
+  namespace: ns-secops-agents
+spec:
+  displayName: SecOps Agent Factory
+  source:
+    sourceType: Blueprint
+    blueprint:
+      name: secops-agent-factory
+      version: 1.0.0
+  targetNamespace: ns-secops-agents
+  targetClusters: ["local"]
+  deployStrategy: FleetBundle

@@ -1,0 +1,125 @@
+# syntax=docker/dockerfile:1
+#
+# SecOps remediation sandbox — the image the two acting agents run inside.
+#
+# This is the container referenced as
+# registry.suse.com/suse/ai/openshell-secops-sandbox:0.1.0 by
+# ../10-blueprint-openshell-gateway.yaml and ../configs/config_secops.yml.
+#
+# IT DOES NOT EXIST. This file is the specification for building it, not a
+# record of something built. Nothing here has been through `docker build`.
+#
+# WHY THE SUPPLY CHAIN OF *THIS* IMAGE IS THE WHOLE ARGUMENT
+#
+# The remediation sandbox is the only place in this architecture where code
+# nobody reviewed executes with a write credential within reach. Assembling that
+# container from packages pulled off the open internet at build time would undo
+# every other control in the design: an agent that patches CVEs using a
+# toolchain of unsigned PyPI wheels is not a security product, it is a new
+# attack surface with a compliance story stapled to it.
+#
+# So every layer comes from SUSE:
+#
+#   base image      registry.suse.com/bci/bci-base:16.0, via the OpenShell
+#                   Community SUSE sandbox — same base SUSE already ships for
+#                   OpenShell sandboxes (OpenShell-Community/sandboxes/suse)
+#   OS packages     SUSE repositories through zypper
+#   Python packages https://dp.apps.rancher.io/libraries/python/simple/ — the
+#                   SUSE Application Collection curated index, 809 packages
+#
+# The Python index is set as `index-url`, NOT `extra-index-url`. That is the
+# load-bearing detail: with index-url, pip and uv resolve from the curated index
+# ONLY and cannot silently fall back to public PyPI when a name is missing. A
+# dependency SUSE does not curate fails the build, loudly, at build time —
+# rather than arriving as an unsigned wheel that nobody notices until it is
+# running next to a git token.
+#
+# The second-order effect shows up in ../policies/remediation-sandbox.yaml:
+# because the whole dependency set comes from one host, the egress policy for
+# dp.apps.rancher.io can be narrow and read-only, and every other package host
+# on the internet stays denied. Supply-chain policy stops being a document and
+# becomes a network rule.
+
+ARG BASE_IMAGE=openshell-suse:latest
+FROM ${BASE_IMAGE}
+
+LABEL org.opencontainers.image.title="OpenShell SecOps remediation sandbox" \
+      org.opencontainers.image.vendor="SUSE" \
+      org.opencontainers.image.base.name="registry.suse.com/bci/bci-base:16.0" \
+      org.opencontainers.image.description="Rootless build + patch + scan tooling for autonomous CVE remediation"
+
+USER root
+
+# --------------------------------------------------------------- OS packages --
+# buildah and skopeo, not docker: the sandbox has no daemon and no privileged
+# socket, and handing an agent a Docker socket is equivalent to handing it root
+# on the node. buildah builds rootless; the policy grants /sandbox/.buildah as
+# the only writable path it needs.
+#
+# patch + diffutils: the remediation agent produces a patch, and a patch that
+# cannot be applied and re-diffed inside the sandbox cannot be validated before
+# it becomes a pull request.
+#
+# No kubectl, deliberately. The sandbox has no path to the Kubernetes API — see
+# the DELIBERATE ABSENCES block in the policy. Changes reach the cluster through
+# a reviewed pull request and GitOps, never through an agent holding a
+# kubeconfig.
+RUN zypper --non-interactive refresh && \
+    zypper --non-interactive install --no-recommends \
+        buildah \
+        skopeo \
+        patch \
+        diffutils \
+        jq \
+        tar \
+        gzip \
+    && zypper clean --all
+
+# ------------------------------------------------- Application Collection pip --
+# uv does not read pip.conf; it needs its own file. Both are written so that
+# whichever tool the agent reaches for lands on the curated index.
+#
+# The credential never enters a layer. It arrives as a BuildKit secret mount,
+# which is present only for the duration of the RUN that consumes it, and the
+# config files written into the image carry the index host with NO embedded
+# credentials — at runtime the sandbox reads them from a mounted secret instead.
+#
+# Build with:
+#   export DP_USER='you@example.com'
+#   export DP_TOKEN='<Distribution Platform token>'
+#   buildah build \
+#     --secret id=dp,src=<(printf '%s:%s' "$DP_USER" "$DP_TOKEN") \
+#     -t openshell-secops-sandbox:0.1.0 .
+COPY uv.toml /etc/uv/uv.toml
+COPY requirements.txt /tmp/requirements.txt
+
+RUN --mount=type=secret,id=dp,required=true \
+    DP_AUTH="$(cat /run/secrets/dp)" && \
+    UV_INDEX_URL="https://${DP_AUTH}@dp.apps.rancher.io/libraries/python/simple/" \
+    uv pip install --python /sandbox/.venv/bin/python \
+        --index-url "https://${DP_AUTH}@dp.apps.rancher.io/libraries/python/simple/" \
+        --require-hashes=false \
+        -r /tmp/requirements.txt && \
+    uv cache clean && \
+    rm -f /tmp/requirements.txt && \
+    chown -R sandbox:sandbox /sandbox/.venv
+
+# ---------------------------------------------------------- runtime pip config --
+# What ships in the image points at the index WITHOUT credentials. At runtime
+# OpenShell injects the Distribution Platform credential at the egress boundary,
+# exactly as it does for the git forge token and the SUSE Security API key — so
+# an agent that reads this file learns the index hostname and nothing else.
+RUN printf '[global]\nindex-url = https://dp.apps.rancher.io/libraries/python/simple/\n' \
+        > /sandbox/.venv/pip.conf && \
+    chown sandbox:sandbox /sandbox/.venv/pip.conf
+
+# ------------------------------------------------------------------ workspace --
+# /sandbox/.buildah is the only writable path buildah needs, and it is the only
+# one the Landlock policy grants it. Creating it here means the first build does
+# not fail on a directory the agent is not allowed to create.
+RUN mkdir -p /sandbox/.buildah /sandbox/work && \
+    chown -R sandbox:sandbox /sandbox/.buildah /sandbox/work
+
+USER sandbox
+WORKDIR /sandbox
+ENTRYPOINT ["/bin/bash"]

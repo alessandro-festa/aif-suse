@@ -1,0 +1,97 @@
+# OpenTelemetry auto-instrumentation for the SecOps agent plane.
+#
+# NOT a Blueprint and not installed by one. This is the integration artefact:
+# it assumes SUSE Observability and the OpenTelemetry Operator are already on
+# the cluster, and wires the agent namespaces into them.
+#
+# Adapted from SUSE AI Factory's own monitoring guide ("Monitoring SUSE AI with
+# OpenTelemetry and SUSE Observability"), which is the reason the shape below is
+# what it is rather than something invented here. Three things are changed from
+# that guide: the collector namespace, the service-name attribute, and the
+# sampler.
+#
+# REQUIRES:
+#   - cert-manager (the OpenTelemetry Operator's webhooks need it)
+#   - the OpenTelemetry Operator, which SUSE installs from the Application
+#     Collection:
+#
+#       helm install opentelemetry-operator \
+#         oci://dp.apps.rancher.io/charts/opentelemetry-operator \
+#         --namespace suse-observability --version <CHART-VERSION> \
+#         --set manager.autoInstrumentation.go.enabled=true \
+#         --set global.imagePullSecrets={application-collection}
+#
+#   - SUSE Observability, with its in-cluster collector Service reachable at
+#     suse-observability-otel-collector.suse-observability.svc.cluster.local
+#
+# STATUS: illustrative. Never applied. The endpoint hostname and ports were
+# verified by rendering suse-observability 2.10.3; the CR shape follows SUSE's
+# published example; the combination has not been run.
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: otel-instrumentation
+  # DECISION: created in the agent namespace, not the observability namespace.
+  # The inject annotation on a workload is "<namespace>/<instrumentation-name>",
+  # and keeping the CR next to the workloads it instruments means deleting the
+  # agent plane deletes its instrumentation with it.
+  namespace: ns-secops-agents
+spec:
+  exporter:
+    # OTLP/gRPC. This is the default endpoint for SDKs that speak gRPC.
+    endpoint: http://suse-observability-otel-collector.suse-observability.svc.cluster.local:4317
+  propagators:
+    - tracecontext
+    - baggage
+  defaults:
+    useLabelsForResourceAttributes: true
+  python:
+    env:
+      # DECISION: port 4318, not 4317. Python auto-instrumentation defaults to
+      # OTLP over HTTP/protobuf, so pointing it at the gRPC port produces a
+      # workload that starts cleanly and exports nothing. This is the single
+      # most common way this integration is silently broken, and SUSE's own
+      # guide calls it out for Python, .NET and Go specifically.
+      - name: OTEL_EXPORTER_OTLP_ENDPOINT
+        value: http://suse-observability-otel-collector.suse-observability.svc.cluster.local:4318
+      # gen_ai.* semantic-convention spans — model, token counts, finish reason —
+      # are what make the Anthropic token-economics argument measurable rather
+      # than asserted. AI-Q is a Python application, so this is where they come
+      # from.
+      #
+      # UNVERIFIED: that AI-Q 2.2's own instrumentation emits gen_ai.* attributes
+      # unaided. SUSE's guide reaches for the OpenLIT SDK to get LLM-level spans;
+      # if AI-Q does not emit them natively, OpenLIT is the documented way to add
+      # them, and it is a Python package available from the Application
+      # Collection index.
+      - name: OTEL_SERVICE_NAME
+        value: secops-agent-plane
+  sampler:
+    # DECISION: sample everything. The usual reason to sample is volume, and the
+    # usual volume is per-request web traffic. Here a "request" is one CVE
+    # remediation that runs for minutes and costs real GPU time — there are tens
+    # per day, not thousands per second, and a dropped trace is a remediation
+    # with no audit trail. Sampling this is a false economy.
+    #
+    # Revisit if the triage agent is ever pointed at a full 4,000-finding backlog
+    # in one pass; the shallow-research path is high-cardinality and cheap, and
+    # is the part worth sampling first.
+    type: parentbased_traceidratio
+    argument: "1"
+---
+# How a workload opts in.
+#
+# The AI-Q backend Deployment is created by the aiq2-web chart, so this
+# annotation has to be set through the chart's pod-annotation values rather than
+# patched onto the Deployment — a patch is reverted on the next Helm sync.
+#
+# Blueprint 40 is where that belongs. The annotation is:
+#
+#   instrumentation.opentelemetry.io/inject-python: ns-secops-agents/otel-instrumentation
+#
+# UNVERIFIED: that aiq2-web 2.2.1 exposes a pod-annotation value for the backend
+# Deployment. `helm show values` was read for this chart and the env/volume/
+# volumeMount keys used in blueprint 20 are real; a podAnnotations key under
+# aiq.apps.backend was NOT confirmed. If it is absent, the fallback is a
+# Kyverno/Kubewarden mutating policy that adds the annotation, which is uglier
+# but does not fight Helm.

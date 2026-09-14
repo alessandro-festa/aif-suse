@@ -1,0 +1,106 @@
+# Blueprint 2 of 3 — Action plane: OpenShell workspace (ONCE PER namespace).
+#
+# Creates only the namespace-scoped prerequisites the shared gateway needs in
+# order to run sandboxes in a namespace: a sandbox ServiceAccount, a
+# Role/RoleBinding granting the gateway's ServiceAccount sandbox CRUD *in this
+# namespace only*, and a NetworkPolicy restricting sandbox SSH ingress to
+# gateway pods. No workloads.
+#
+# That "in this namespace only" is the multi-tenancy boundary. The gateway is
+# shared, but its authority is granted one namespace at a time by installing
+# this blueprint — so onboarding a tenant is an explicit, auditable act, and a
+# namespace nobody onboarded cannot host a sandbox even if its name is passed
+# to the API.
+#
+# ADAPTED FROM examples/openshell/20-blueprint-openshell-workspace.yaml, which
+# is installed and working on the local test cluster. Nothing structural is
+# changed — the values below are the upstream ones, and the reasons they cannot
+# be changed are the reasons recorded there.
+#
+# CHART RELEASE STATUS: the `openshell-workspace` chart has ONLY dev tags on
+# ghcr.io — NVIDIA has cut no numbered release of it. The pin below is the dev
+# build verified working in this repo, matched to the gateway's chart version in
+# blueprint 10. Keep the two in lockstep.
+#
+# STATUS: the upstream-equivalent blueprint is verified working on the local
+# cluster. This one differs from it only in name, version and description.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: Blueprint
+metadata:
+  labels:
+    ai-factory.suse.com/blueprint-name: secops-openshell-workspace
+    ai-factory.suse.com/blueprint-version: 1.0.0
+  name: secops-openshell-workspace-1-0-0
+spec:
+  source: Nvidia
+  displayName: SecOps OpenShell Workspace
+  version: 1.0.0
+  description: |
+    Onboards one namespace to the shared SecOps OpenShell gateway. Install
+    "SecOps OpenShell Gateway" (blueprint 10) first, then install this once per
+    namespace that should be able to run remediation sandboxes, choosing that
+    namespace in the install wizard. The namespace name becomes the OpenShell
+    workspace name, and must match AIQ_OPENSHELL_WORKSPACE in blueprint 20 —
+    ns-secops-sandboxes for the reference install.
+
+    REQUIRES: the namespace must carry the label the gateway watches, or sandbox
+    creation fails with an error that never mentions labels:
+
+      kubectl create namespace ns-secops-sandboxes
+      kubectl label namespace ns-secops-sandboxes \
+        ai-factory.suse.com/openshell-workspace=true
+
+    REQUIRES: a globally unique AIWorkload name per install (e.g.
+    secops-openshell-ws-<namespace>). The Fleet HelmOp is named
+    "<aiworkload-name>-<chartName>" and always lands in fleet-local, so the
+    AIWorkload's own namespace is not part of the name and two installs sharing
+    an instance name collide on one HelmOp.
+
+    SCOPE: this creates the Kubernetes side of a workspace. The OpenShell
+    workspace itself, its members and their roles are gateway state, created
+    with `openshell workspace create` and `openshell workspace member add`.
+    The sandbox policy is gateway state too — load
+    policies/remediation-sandbox.yaml after install.
+
+    WHY A SEPARATE SANDBOX NAMESPACE. The remediation sandbox is the only thing
+    in this architecture that runs code nobody reviewed, and it holds a write
+    credential. Keeping it out of ns-secops-agents means the blast radius of a
+    sandbox escape is a namespace containing nothing but other sandboxes — not
+    one containing the orchestrator, its job store and its checkpoints.
+
+    STATUS: reference example. The upstream-equivalent blueprint in
+    examples/openshell/ is verified working on the local test cluster.
+  components:
+    - chartRepo: openshell
+      chartName: openshell-workspace
+      chartVersion: 0.0.0-dev.17171cd9337a2181d4bb5a9e711e1f2ad5f69388
+      vendor: suse
+      # Deliberately no targetNamespace: this component follows the AIWorkload's
+      # targetNamespace, i.e. whatever namespace is picked in the install
+      # wizard. That is what makes the blueprint reusable per tenant.
+      values:
+        gateway:
+          serviceAccount:
+            # The RoleBinding subject. Must match the gateway's ServiceAccount,
+            # which blueprint 10 makes "openshell" in namespace "openshell" by
+            # setting its component's releaseName to "openshell".
+            name: openshell
+            namespace: openshell
+          # gateway.networkPolicy.podSelector is deliberately NOT set. Its
+          # upstream default — {app.kubernetes.io/name: openshell,
+          # app.kubernetes.io/instance: openshell} — already matches the gateway
+          # pod labels, because the instance label is the Helm release name and
+          # blueprint 10 sets it to "openshell".
+          #
+          # If blueprint 10's releaseName ever changes, this NetworkPolicy stops
+          # selecting the gateway pod and the failure is silent: `openshell
+          # sandbox exec` still works (gRPC to the gateway) while `openshell
+          # sandbox connect` hangs (SSH from the gateway to the sandbox on
+          # :2222, which the policy now drops).
+        sandboxServiceAccount:
+          create: true
+          # Must match the gateway's sandboxServiceAccount.name; both default to
+          # openshell-sandbox.
+          name: openshell-sandbox
+        networkPolicy:
+          enabled: true

@@ -1,0 +1,19 @@
+# uv configuration for the SecOps remediation sandbox.
+#
+# uv does not read pip.conf — it has its own configuration, looked up by walking
+# up the directory tree from the working directory, or read from /etc/uv/uv.toml
+# system-wide. This file is installed system-wide so that an agent running `uv
+# pip install` from anywhere under /sandbox lands on the curated index.
+#
+# `default = true` is the equivalent of pip's `index-url` (as opposed to
+# `extra-index-url`): it makes this the ONLY index uv resolves from. A package
+# the SUSE Application Collection does not curate is a resolution failure, not a
+# silent fetch from public PyPI. That is the intended behaviour.
+#
+# No credentials here. The image ships the index host; the credential is
+# injected at the OpenShell egress boundary at runtime, and supplied as a
+# BuildKit secret at build time. See the Containerfile.
+
+[[index]]
+url = "https://dp.apps.rancher.io/libraries/python/simple/"
+default = true

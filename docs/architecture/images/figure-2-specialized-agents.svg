@@ -1,0 +1,198 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow-f2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#76B900"/>
+    </marker>
+    <marker id="arrow-f2-dark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0C322C"/>
+    </marker>
+    <marker id="arrow-f2-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2453FF"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="900" fill="#ffffff"/>
+
+  <text x="36" y="40" font-size="20" font-weight="700" fill="#0C322C">Ten specialized agents — and the line they may not cross</text>
+  <text x="36" y="62" font-size="12" fill="#5a6570">Agents that reason run in AI-Q. The two that change the world run inside an OpenShell sandbox, under a policy enforced out of process.</text>
+
+  <!-- ================= Signals ================= -->
+  <text x="36" y="108" font-size="11" font-weight="700" fill="#5a6570">SIGNALS</text>
+  <rect x="36" y="120" width="150" height="48" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4" stroke-dasharray="5 3"/>
+  <text x="111" y="140" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">SUSE Security</text>
+  <text x="111" y="155" font-size="9" fill="#5a6570" text-anchor="middle">NeuVector finding</text>
+  <rect x="36" y="176" width="150" height="48" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="111" y="196" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">CVE / SUSE-SU feed</text>
+  <text x="111" y="211" font-size="9" fill="#5a6570" text-anchor="middle">nightly ingest</text>
+  <rect x="36" y="232" width="150" height="48" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="111" y="252" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">SBOM + inventory</text>
+  <text x="111" y="267" font-size="9" fill="#5a6570" text-anchor="middle">what runs where</text>
+
+  <line x1="186" y1="144" x2="196" y2="144" stroke="#0C322C" stroke-width="1.4"/>
+  <line x1="186" y1="200" x2="196" y2="200" stroke="#0C322C" stroke-width="1.4"/>
+  <line x1="186" y1="256" x2="196" y2="256" stroke="#0C322C" stroke-width="1.4"/>
+  <line x1="196" y1="144" x2="196" y2="256" stroke="#0C322C" stroke-width="1.4"/>
+  <path d="M 196 144 L 224 143" fill="none" stroke="#0C322C" stroke-width="1.6" marker-end="url(#arrow-f2-dark)"/>
+
+  <!-- SUSE Security is both ends of the loop: the finding that opens the job,
+       and the independent rescan that grades it. -->
+  <path d="M 1148 309 L 1178 309 L 1178 74 L 111 74 L 111 118"
+        fill="none" stroke="#2453FF" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrow-f2-loop)"/>
+  <text x="1170" y="68" font-size="10" font-weight="700" fill="#2453FF" text-anchor="end">SUSE Security closes the loop it opened</text>
+
+  <!-- ================= AI-Q panel ================= -->
+  <rect x="206" y="86" width="560" height="470" rx="10" fill="#fcfdfa" stroke="#76B900" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="224" y="108" font-size="11" font-weight="700" fill="#76B900">NVIDIA AI-Q 2.2 — REASONING PLANE · NO SIDE EFFECTS</text>
+
+  <rect x="226" y="120" width="520" height="46" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="486" y="138" font-size="12" font-weight="700" fill="#1a1a1a" text-anchor="middle">Intent classifier</text>
+  <text x="486" y="151" font-size="9" fill="#5a6570" text-anchor="middle">Support · Nemotron 3.5 Lightning · thinking off</text>
+  <text x="486" y="162" font-size="9" fill="#3d4852" text-anchor="middle">route the incoming signal — the cheapest call in the system</text>
+  <path d="M 486 166 L 486 178" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow-f2)"/>
+
+  <rect x="226" y="178" width="520" height="46" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="486" y="196" font-size="12" font-weight="700" fill="#1a1a1a" text-anchor="middle">Triage agent</text>
+  <text x="486" y="209" font-size="9" fill="#5a6570" text-anchor="middle">Worker · Nemotron 3.5 Lightning · shallow_research_agent</text>
+  <text x="486" y="220" font-size="9" fill="#3d4852" text-anchor="middle">dedupe, rank by exploitability and reachability — most findings end here</text>
+  <path d="M 486 224 L 486 236" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow-f2)"/>
+
+  <rect x="226" y="236" width="520" height="46" rx="5" fill="#fff6f0" stroke="#FE7C3F" stroke-width="2"/>
+  <text x="486" y="254" font-size="12" font-weight="700" fill="#1a1a1a" text-anchor="middle">Clarifier — plan gate</text>
+  <text x="486" y="267" font-size="9" fill="#5a6570" text-anchor="middle">Service · Nemotron 3 Ultra · clarifier_agent</text>
+  <text x="486" y="278" font-size="9" fill="#3d4852" text-anchor="middle">states the plan and waits for a human — the blast-radius control</text>
+  <path d="M 486 282 L 486 294" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow-f2)"/>
+
+  <rect x="226" y="294" width="520" height="46" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="486" y="312" font-size="12" font-weight="700" fill="#1a1a1a" text-anchor="middle">Research orchestrator</text>
+  <text x="486" y="325" font-size="9" fill="#5a6570" text-anchor="middle">Service · Nemotron 3 Ultra · orchestrator_llm + planner_llm</text>
+  <text x="486" y="336" font-size="9" fill="#3d4852" text-anchor="middle">decompose the finding into subtasks that can run in parallel</text>
+  <path d="M 486 340 L 486 352" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow-f2)"/>
+
+  <rect x="226" y="352" width="250" height="62" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="351" y="372" font-size="12" font-weight="700" fill="#1a1a1a" text-anchor="middle">Source router</text>
+  <text x="351" y="386" font-size="9" fill="#5a6570" text-anchor="middle">Support · Nemotron 3 Ultra</text>
+  <text x="351" y="399" font-size="9" fill="#3d4852" text-anchor="middle">corpus vs advisory vs SBOM,</text>
+  <text x="351" y="409" font-size="9" fill="#3d4852" text-anchor="middle">steered by the domain catalog</text>
+
+  <rect x="496" y="352" width="250" height="62" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="621" y="372" font-size="12" font-weight="700" fill="#1a1a1a" text-anchor="middle">Researcher workers × N</text>
+  <text x="621" y="386" font-size="9" fill="#5a6570" text-anchor="middle">Worker · Nemotron 3.5 Lightning</text>
+  <text x="621" y="399" font-size="9" fill="#3d4852" text-anchor="middle">run concurrently — the fan-out,</text>
+  <text x="621" y="409" font-size="9" fill="#3d4852" text-anchor="middle">and the token volume</text>
+  <path d="M 486 414 L 486 426" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow-f2)"/>
+
+  <rect x="226" y="426" width="520" height="46" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="486" y="444" font-size="12" font-weight="700" fill="#1a1a1a" text-anchor="middle">Writer + citation verifier</text>
+  <text x="486" y="457" font-size="9" fill="#5a6570" text-anchor="middle">Service · Nemotron 3 Ultra · writer_llm, 32k output budget</text>
+  <text x="486" y="468" font-size="9" fill="#3d4852" text-anchor="middle">cited remediation brief — fails closed on an unsupported claim</text>
+
+  <rect x="226" y="486" width="520" height="52" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="486" y="505" font-size="12" font-weight="700" fill="#1a1a1a" text-anchor="middle">Guardrail agent</text>
+  <text x="486" y="519" font-size="9" fill="#5a6570" text-anchor="middle">Service · NeMo Guardrails — intercepts every model call above</text>
+  <text x="486" y="532" font-size="9" fill="#3d4852" text-anchor="middle">keeps the agents on task, and stops a prompt-injected advisory from steering them off it</text>
+
+  <!-- retrieval loop, routed down the left gutter -->
+  <path d="M 226 383 L 196 383 L 196 722 L 224 722" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow-f2)" marker-start="url(#arrow-f2)"/>
+  <text x="190" y="470" font-size="10" font-weight="600" fill="#76B900" text-anchor="end">retrieve</text>
+  <text x="190" y="484" font-size="10" font-weight="600" fill="#76B900" text-anchor="end">and rerank</text>
+
+  <!-- ================= Hand-off to the action plane ================= -->
+  <path d="M 766 300 L 788 300" fill="none" stroke="#0C322C" stroke-width="2" marker-end="url(#arrow-f2-dark)"/>
+  <text x="777" y="270" font-size="10" font-weight="700" fill="#0C322C" text-anchor="middle" transform="rotate(-90 777 270)">the only path to side effects</text>
+
+  <!-- ================= OpenShell panel ================= -->
+  <rect x="790" y="86" width="374" height="470" rx="10" fill="#fcfdfa" stroke="#76B900" stroke-width="2" stroke-dasharray="7 5"/>
+  <text x="806" y="108" font-size="11" font-weight="700" fill="#76B900">NVIDIA OPENSHELL — ACTION PLANE</text>
+
+  <rect x="806" y="120" width="342" height="58" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="977" y="139" font-size="12" font-weight="700" fill="#1a1a1a" text-anchor="middle">Sandbox policy — fail closed</text>
+  <text x="977" y="153" font-size="9" fill="#5a6570" text-anchor="middle">Landlock hard_requirement · L7 egress allowlist</text>
+  <text x="977" y="166" font-size="9" fill="#3d4852" text-anchor="middle">enforced out of process — the agent cannot widen it</text>
+
+  <rect x="806" y="192" width="342" height="70" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="977" y="212" font-size="12" font-weight="700" fill="#1a1a1a" text-anchor="middle">Remediation engineer</text>
+  <text x="977" y="226" font-size="9" fill="#5a6570" text-anchor="middle">Worker · Nemotron 3 Ultra via inference.local</text>
+  <text x="977" y="240" font-size="9" fill="#3d4852" text-anchor="middle">edit the Containerfile / Helm values, build, test,</text>
+  <text x="977" y="252" font-size="9" fill="#3d4852" text-anchor="middle">open a pull request — never holds the git token</text>
+  <path d="M 977 262 L 977 274" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow-f2)"/>
+
+  <rect x="806" y="274" width="342" height="70" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="977" y="294" font-size="12" font-weight="700" fill="#1a1a1a" text-anchor="middle">Validation agent</text>
+  <text x="977" y="308" font-size="9" fill="#5a6570" text-anchor="middle">Service · Nemotron 3.5 Lightning</text>
+  <text x="977" y="322" font-size="9" fill="#3d4852" text-anchor="middle">rebuild, rescan with SUSE Security,</text>
+  <text x="977" y="334" font-size="9" fill="#3d4852" text-anchor="middle">gate the PR on the scan diff</text>
+  <path d="M 977 344 L 977 356" fill="none" stroke="#76B900" stroke-width="1.6" marker-end="url(#arrow-f2)"/>
+
+  <rect x="806" y="356" width="342" height="52" rx="5" fill="#fff6f0" stroke="#FE7C3F" stroke-width="2"/>
+  <text x="977" y="376" font-size="12" font-weight="700" fill="#1a1a1a" text-anchor="middle">Human review — pull request</text>
+  <text x="977" y="390" font-size="9" fill="#5a6570" text-anchor="middle">the agent may open a PR; policy denies merge, review</text>
+  <text x="977" y="402" font-size="9" fill="#3d4852" text-anchor="middle">and branch-protection changes</text>
+
+  <text x="977" y="428" font-size="10" font-weight="600" fill="#5a6570" text-anchor="middle">One sandbox per job · created on demand · destroyed on exit</text>
+  <text x="977" y="443" font-size="10" fill="#5a6570" text-anchor="middle">No Kubernetes API access — GitOps applies the change, after approval</text>
+
+  <rect x="806" y="456" width="342" height="46" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="977" y="474" font-size="12" font-weight="700" fill="#1a1a1a" text-anchor="middle">Artifacts</text>
+  <text x="977" y="487" font-size="9" fill="#3d4852" text-anchor="middle">patch · scan diff · build log · cited brief</text>
+  <text x="977" y="498" font-size="9" fill="#3d4852" text-anchor="middle">ATIF trajectory + gateway egress log = audit trail</text>
+
+  <rect x="806" y="508" width="342" height="42" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="977" y="524" font-size="11" font-weight="700" fill="#1a1a1a" text-anchor="middle">Sandbox image — SLE BCI 16 + SUSE App Collection</text>
+  <text x="977" y="537" font-size="9" fill="#3d4852" text-anchor="middle">curated Python index is the ONLY index · pypi.org denied by policy</text>
+
+  <!-- ================= Observability band ================= -->
+  <!-- Every box above emits into one collector. Drawn as a rail rather than as
+       arrows to each agent, because an arrow per agent would say the same thing
+       twenty times. -->
+  <path d="M 486 556 L 486 578" fill="none" stroke="#2453FF" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrow-f2-loop)"/>
+  <path d="M 977 556 L 977 578" fill="none" stroke="#2453FF" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrow-f2-loop)"/>
+
+  <rect x="206" y="580" width="958" height="76" rx="8" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4" stroke-dasharray="5 3"/>
+  <text x="224" y="600" font-size="11" font-weight="700" fill="#0C322C">SUSE OBSERVABILITY — PLATFORM PREREQUISITE · ONE 4T TOPOLOGY OVER MODELS, RETRIEVAL, AGENTS AND SANDBOXES</text>
+  <rect x="224" y="610" width="223" height="34" rx="5" fill="#ffffff" stroke="#0C322C" stroke-width="1.2"/>
+  <text x="335" y="624" font-size="10" font-weight="600" fill="#1a1a1a" text-anchor="middle">OTLP from AI-Q · :4318 HTTP</text>
+  <text x="335" y="636" font-size="9" fill="#5a6570" text-anchor="middle">agent spans · gen_ai.* conventions</text>
+  <rect x="457" y="610" width="223" height="34" rx="5" fill="#ffffff" stroke="#0C322C" stroke-width="1.2"/>
+  <text x="568" y="624" font-size="10" font-weight="600" fill="#1a1a1a" text-anchor="middle">OTLP from the gateway · :4317 gRPC</text>
+  <text x="568" y="636" font-size="9" fill="#5a6570" text-anchor="middle">every policy decision, not self-reported</text>
+  <rect x="690" y="610" width="223" height="34" rx="5" fill="#ffffff" stroke="#0C322C" stroke-width="1.2"/>
+  <text x="801" y="624" font-size="10" font-weight="600" fill="#1a1a1a" text-anchor="middle">MCP server — agents query topology</text>
+  <text x="801" y="636" font-size="9" fill="#5a6570" text-anchor="middle">ai.mcp.enabled · no external LLM</text>
+  <rect x="923" y="610" width="223" height="34" rx="5" fill="#ffffff" stroke="#0C322C" stroke-width="1.2"/>
+  <text x="1034" y="624" font-size="10" font-weight="600" fill="#1a1a1a" text-anchor="middle">AI Assistant deliberately OFF</text>
+  <text x="1034" y="636" font-size="9" fill="#5a6570" text-anchor="middle">bedrock / anthropic only — tokens would leave</text>
+
+  <!-- ================= Knowledge band ================= -->
+  <rect x="206" y="668" width="560" height="100" rx="8" fill="#fbfcfc" stroke="#cfd8dc"/>
+  <text x="224" y="690" font-size="11" font-weight="700" fill="#5a6570">KNOWLEDGE PLANE</text>
+  <rect x="226" y="700" width="250" height="52" rx="5" fill="#f7f9fa" stroke="#0C322C" stroke-width="1.4"/>
+  <text x="351" y="720" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">Vulnerability corpus</text>
+  <text x="351" y="734" font-size="9" fill="#5a6570" text-anchor="middle">CVE · SUSE-SU · SBOM · scan exports</text>
+  <text x="351" y="746" font-size="9" fill="#5a6570" text-anchor="middle">· internal remediation runbooks</text>
+  <rect x="496" y="700" width="250" height="52" rx="5" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="621" y="720" font-size="11" font-weight="600" fill="#1a1a1a" text-anchor="middle">NVIDIA RAG Blueprint v2.6.0</text>
+  <text x="621" y="734" font-size="9" fill="#5a6570" text-anchor="middle">Nemotron 3 Embed 1B + Rerank VL 1B</text>
+  <text x="621" y="746" font-size="9" fill="#5a6570" text-anchor="middle">hybrid search, weighted toward sparse</text>
+
+  <!-- ================= Outcomes band ================= -->
+  <rect x="790" y="668" width="374" height="100" rx="8" fill="#f2fbf6" stroke="#30BA78" stroke-width="1.6"/>
+  <text x="806" y="690" font-size="11" font-weight="700" fill="#0C322C">BUSINESS OUTCOMES</text>
+  <text x="806" y="712" font-size="10" font-weight="600" fill="#1a1a1a">MTTR on critical CVEs: hours, not weeks</text>
+  <text x="806" y="730" font-size="10" font-weight="600" fill="#1a1a1a">Analyst effort redirected from triage to exceptions</text>
+  <text x="806" y="748" font-size="10" font-weight="600" fill="#1a1a1a">Per-remediation audit trail usable as compliance evidence</text>
+
+  <!-- ================= Legend ================= -->
+  <rect x="36" y="788" width="1128" height="86" rx="8" fill="#fbfcfc" stroke="#cfd8dc"/>
+  <rect x="56" y="802" width="24" height="18" rx="4" fill="#f4f8ee" stroke="#76B900" stroke-width="2"/>
+  <text x="90" y="816" font-size="11" font-weight="600" fill="#3d4852">NVIDIA component</text>
+  <rect x="240" y="802" width="24" height="18" rx="4" fill="#f7f9fa" stroke="#0C322C" stroke-width="2"/>
+  <text x="274" y="816" font-size="11" font-weight="600" fill="#3d4852">SUSE component</text>
+  <rect x="420" y="802" width="24" height="18" rx="4" fill="#f7f9fa" stroke="#0C322C" stroke-width="2" stroke-dasharray="5 3"/>
+  <text x="454" y="816" font-size="11" font-weight="600" fill="#3d4852">SUSE platform prerequisite — integrated, not installed</text>
+  <rect x="784" y="802" width="24" height="18" rx="4" fill="#fff6f0" stroke="#FE7C3F" stroke-width="2"/>
+  <text x="818" y="816" font-size="11" font-weight="600" fill="#3d4852">Human-in-the-loop gate</text>
+  <rect x="984" y="802" width="24" height="18" rx="4" fill="#f2fbf6" stroke="#30BA78" stroke-width="2"/>
+  <text x="1018" y="816" font-size="11" font-weight="600" fill="#3d4852">Business outcome</text>
+  <line x1="56" y1="838" x2="92" y2="838" stroke="#2453FF" stroke-width="1.6" stroke-dasharray="6 4"/>
+  <text x="102" y="842" font-size="11" font-weight="600" fill="#3d4852">Feedback and telemetry — see Figure 3</text>
+  <text x="56" y="862" font-size="10" fill="#5a6570">Agent classes follow the Worker / Service / Support taxonomy of arXiv 2601.13671. The orchestrator–worker split and the cited-brief pattern follow Anthropic's multi-agent research system.</text>
+</svg>

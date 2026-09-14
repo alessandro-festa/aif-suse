@@ -1,0 +1,358 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1600" height="1092" viewBox="0 0 1600 1092" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <symbol id="logo-suse" viewBox="26 24 219 46" overflow="visible"><g id="Layer_1"> <g> <path d="M224.908,59.781 C221.623,59.781 218.95,57.109 218.95,53.824 L218.95,36.165 C218.95,32.88 221.623,30.206 224.908,30.206 L238.463,30.206 C239.525,30.206 240.389,31.07 240.389,32.131 C240.389,33.192 239.525,34.055 238.463,34.055 L224.908,34.055 C223.746,34.055 222.801,35.002 222.801,36.165 L222.801,43.115 L236.095,43.115 C237.101,43.115 237.919,43.934 237.919,44.94 C237.919,45.946 237.101,46.764 236.095,46.764 L222.801,46.764 L222.801,53.824 C222.801,54.987 223.746,55.931 224.908,55.931 L238.463,55.931 C239.525,55.931 240.389,56.796 240.389,57.857 C240.389,58.919 239.525,59.781 238.463,59.781 z M164.126,60.17 C160.217,60.17 157.206,59.178 155.176,57.22 C153.148,55.266 152.12,52.326 152.12,48.481 L152.12,32.053 C152.12,30.822 153.12,29.821 154.35,29.821 C155.581,29.821 156.582,30.822 156.582,32.053 L156.582,47.892 C156.582,50.769 157.202,52.926 158.425,54.3 C159.654,55.684 161.571,56.385 164.126,56.385 C166.679,56.385 168.598,55.684 169.827,54.3 C171.049,52.925 171.668,50.769 171.668,47.892 L171.668,32.053 C171.668,30.822 172.67,29.821 173.901,29.821 C175.132,29.821 176.133,30.822 176.133,32.053 L176.133,48.481 C176.133,52.324 175.103,55.264 173.074,57.22 C171.044,59.178 168.035,60.17 164.126,60.17 M197.652,60.17 C192.619,60.17 188.784,58.74 186.258,55.92 C185.527,55.104 185.573,53.845 186.364,53.055 L186.372,53.046 L186.38,53.038 C186.781,52.64 187.313,52.422 187.879,52.422 C188.478,52.422 189.042,52.677 189.429,53.125 C190.133,53.938 190.938,54.6 191.825,55.091 C193.372,55.95 195.318,56.385 197.608,56.385 C199.781,56.385 201.515,56.002 202.762,55.245 C204.046,54.469 204.698,53.35 204.698,51.918 C204.698,50.76 204.108,49.815 202.944,49.113 C201.812,48.432 199.902,47.847 197.104,47.322 C194.386,46.815 192.195,46.181 190.591,45.437 C189.005,44.703 187.84,43.786 187.127,42.706 C186.414,41.634 186.053,40.303 186.053,38.75 C186.053,37.111 186.513,35.597 187.42,34.252 C188.329,32.904 189.662,31.817 191.383,31.023 C193.113,30.225 195.161,29.821 197.471,29.821 C200.171,29.821 202.506,30.315 204.412,31.291 C205.692,31.945 206.851,32.847 207.86,33.971 C208.63,34.832 208.558,36.165 207.697,36.942 C207.309,37.291 206.808,37.483 206.288,37.483 C205.629,37.483 205.019,37.183 204.617,36.662 C204.045,35.918 203.401,35.312 202.7,34.862 C201.404,34.029 199.661,33.607 197.517,33.607 C195.401,33.607 193.73,34.039 192.551,34.891 C191.352,35.758 190.743,36.89 190.743,38.253 C190.743,39.532 191.339,40.559 192.516,41.305 C193.659,42.032 195.638,42.642 198.565,43.168 C201.221,43.645 203.357,44.257 204.915,44.984 C206.455,45.701 207.592,46.605 208.292,47.67 C208.989,48.731 209.342,50.069 209.342,51.647 C209.342,53.343 208.854,54.854 207.892,56.138 C206.922,57.429 205.544,58.433 203.799,59.122 C202.037,59.817 199.97,60.17 197.652,60.17 M130.822,60.178 C125.787,60.178 121.954,58.747 119.427,55.927 C118.696,55.112 118.743,53.853 119.533,53.062 L119.545,53.05 C119.947,52.65 120.481,52.43 121.049,52.43 C121.649,52.43 122.214,52.686 122.598,53.133 C123.3,53.945 124.105,54.607 124.993,55.099 C126.541,55.959 128.487,56.394 130.777,56.394 C132.949,56.394 134.683,56.011 135.932,55.254 C137.216,54.478 137.867,53.359 137.867,51.928 C137.867,50.768 137.276,49.825 136.113,49.123 C134.98,48.44 133.069,47.854 130.272,47.329 C127.555,46.823 125.364,46.188 123.759,45.446 C122.174,44.711 121.007,43.792 120.295,42.715 C119.583,41.642 119.222,40.311 119.222,38.759 C119.222,37.119 119.682,35.607 120.588,34.262 C121.497,32.912 122.831,31.826 124.552,31.032 C126.28,30.235 128.328,29.83 130.64,29.83 C133.34,29.83 135.676,30.325 137.58,31.3 C138.862,31.955 140.021,32.857 141.027,33.98 C141.799,34.841 141.725,36.172 140.866,36.95 C140.478,37.299 139.977,37.491 139.456,37.491 C138.797,37.491 138.188,37.192 137.786,36.671 C137.217,35.928 136.57,35.321 135.869,34.87 C134.572,34.036 132.829,33.614 130.686,33.614 C128.569,33.614 126.899,34.047 125.718,34.899 C124.52,35.769 123.912,36.9 123.912,38.261 C123.912,39.54 124.508,40.567 125.684,41.314 C126.828,42.041 128.806,42.65 131.735,43.177 C134.388,43.652 136.525,44.263 138.086,44.992 C139.626,45.712 140.76,46.616 141.46,47.677 C142.158,48.737 142.512,50.075 142.512,51.656 C142.512,53.353 142.024,54.863 141.06,56.145 C140.09,57.437 138.713,58.442 136.966,59.131 C135.205,59.826 133.138,60.178 130.822,60.178" fill="#FFFFFF"/> <path d="M101.541,40.263 C101.064,39.771 100.279,39.771 99.803,40.263 C99.267,40.797 99.331,41.719 99.995,42.16 C100.401,42.429 100.943,42.429 101.348,42.16 C102.01,41.719 102.075,40.797 101.541,40.263 M99.952,36.084 C96.668,35.315 93.718,38.266 94.489,41.548 C94.88,43.219 96.208,44.546 97.881,44.938 C101.165,45.71 104.117,42.757 103.344,39.473 C102.95,37.801 101.623,36.475 99.952,36.084 M78.271,54.571 C76.131,53.78 75.304,53.939 72.568,53.977 C70.672,54.001 70.603,53.936 68.439,53.936 C67.77,53.936 67.524,57.141 69.943,57.807 C71.002,58.098 72.146,58.282 72.943,59.096 C73.296,59.456 73.494,60 72.679,60 L66.673,60 C65.622,60 64.63,60.024 63.827,59.344 C62.614,58.319 62.048,56.909 61.441,55.51 C60.811,54.055 60.132,52.622 59.334,51.251 C57.748,48.525 55.651,46.059 52.838,44.552 C49.326,42.668 43.365,41.734 38.645,45.359 C33.671,49.178 34.736,56.332 39.087,59.832 C40.805,61.215 43.045,61.793 45.247,61.663 C49.55,61.414 52.723,58.243 51.935,54.34 C51.672,53.034 50.91,51.797 49.762,51.123 C48.946,50.646 47.978,50.477 47.033,50.475 C46.017,50.472 44.936,50.681 44.205,51.388 C43.341,52.225 43.201,53.704 43.892,54.689 C44.274,55.235 44.896,55.696 44.791,56.407 C44.719,56.888 44.322,57.246 43.848,57.352 C43.041,57.532 42.302,57.072 41.757,56.51 C40.359,55.07 39.921,52.778 40.691,50.923 C41.697,48.494 44.495,47.158 47.122,47.245 C50.509,47.359 53.702,49.593 55.09,52.684 C56.479,55.777 56.063,59.572 54.149,62.37 C49.896,68.586 39.393,67.852 34.513,62.61 C31.452,59.321 29.789,56.13 30.022,50.187 C30.186,45.988 32.609,41.851 35.698,38.941 C40.731,34.198 47.359,30.955 54.104,29.557 C58.2,28.71 62.429,28.512 66.587,28.927 C70.254,29.291 73.899,29.963 77.423,31.054 C79.173,31.599 80.894,32.247 82.558,33.011 C84.026,33.685 85.95,34.42 87.093,35.584 C87.093,33.476 87.011,31.16 87.011,29.547 C87.011,28.932 87.658,28.516 88.212,28.779 C90.597,29.886 96.247,32.555 100.014,34.278 C105.064,36.585 105.421,42.028 105.597,46.854 C105.601,46.962 105.606,47.073 105.558,47.169 C105.399,47.5 104.548,47.41 104.236,47.414 C103.632,47.42 102.721,47.416 102.117,47.444 C100.912,47.496 99.738,47.474 98.532,47.414 C96.303,47.306 94.148,46.312 92.705,45.105 C92.561,44.983 92.095,44.851 91.876,45.079 C91.648,45.314 91.726,45.682 91.849,45.808 C92.677,46.643 93.574,47.183 94.618,47.722 C95.944,48.403 97.39,48.576 98.856,48.661 C100.426,48.754 102.007,48.73 103.574,48.57 C104.882,48.436 105.22,48.346 103.929,49.305 C102.795,50.148 101.48,50.754 100.146,51.202 C98.232,51.854 96.212,52.175 94.195,52.231 C92.972,52.264 91.749,52.201 90.536,52.043 C89.908,51.965 89.285,51.851 88.655,51.787 C88.144,51.735 87.614,51.64 87.105,51.75 C86.642,51.851 86.215,52.101 85.924,52.478 C85.525,52.999 85.387,54.429 85.618,55.049 C86.063,56.25 87.042,56.948 88.076,57.564 C89.196,58.23 90.669,58.458 90.956,59.731 C91.015,59.997 88.634,60.004 88.364,60 L85.195,60 C85.195,60 83.473,60.041 82.802,59.797 C82.781,59.791 82.763,59.781 82.741,59.77 C82.377,59.574 82.219,59.086 82.095,58.716 C81.918,58.195 81.608,57.674 81.231,57.135 C80.515,56.113 79.415,54.995 78.271,54.571 M102.268,40.509 C102.268,42.367 100.764,43.871 98.907,43.871 C97.051,43.871 95.547,42.367 95.547,40.509 C95.547,38.654 97.051,37.15 98.907,37.15 C100.764,37.15 102.268,38.654 102.268,40.509" fill="#30BA78"/> </g> </g></symbol>
+    <symbol id="logo-nvidia" viewBox="175 483 2149 473" overflow="visible"><path id="Eye_Mark" fill="#76b900" d="M436.93785,640.78361v-35.49175c3.4459-.24553,6.92613-.42918,10.4726-.54024,97.07249-3.05104,160.75618,83.40761,160.75618,83.40761,0,0-68.78225,95.53503-142.53101,95.53503-10.62215,0-20.12751-1.71234-28.69777-4.58826v-107.62396c37.79122,4.56486,45.3879,21.25692,68.11388,59.12728l50.52954-42.60379s-36.88389-48.37696-99.0625-48.37696c-6.76609,0-13.23133.47815-19.58092,1.15504M436.93785,523.54106v53.0144c3.48438-.27548,6.97313-.49739,10.4726-.62333,134.99401-4.54781,222.93894,110.70911,222.93894,110.70911,0,0-101.01819,122.83652-206.25515,122.83652-9.64223,0-18.67162-.89028-27.15639-2.39142v32.76954c7.25714.92242,14.77052,1.46463,22.61492,1.46463,97.93719,0,168.75864-50.01037,237.34237-109.20595,11.3631,9.10406,57.91698,31.25152,67.49078,40.95975-65.2126,54.58595-217.17638,98.58388-303.32785,98.58388-8.30134,0-16.28653-.50177-24.12021-1.25321v46.05397h372.23407v-392.91789h-372.23407ZM436.93785,779.10599v27.98036c-90.57969-16.14985-115.72071-110.3077-115.72071-110.3077,0,0,43.48994-48.18696,115.72071-55.99504v30.69842c-.05553,0-.09183-.01487-.14102-.01487-37.90229-4.55218-67.51832,30.86283-67.51832,30.86283,0,0,16.59175,59.61825,67.65934,76.776M276.05771,692.6985s53.68509-79.21639,160.88014-87.40665v-28.7364c-118.72891,9.52895-221.54711,110.08578-221.54711,110.08578,0,0,58.23072,168.35047,221.54711,183.76373v-30.54909c-119.84569-15.0781-160.88014-147.15739-160.88014-147.15739Z"/><path id="NVIDIA" fill="#FFFFFF" d="M1479.66576,597.78723l.02592,257.90666h72.83585v-257.90223l-72.86177-.00443ZM906.67774,597.43677v258.25712h73.48583v-196.09803l56.92818.01949c18.8585,0,32.28898,4.69251,41.37629,14.3888,11.5213,12.27737,16.22358,32.06825,16.22358,68.28803v113.4017l71.18818-.01297.01297-142.67253c0-101.83834-64.91535-115.57162-128.42042-115.57162h-130.7946M1596.94459,597.79587v257.89802h118.13971c62.94459,0,83.48829-10.46877,105.70657-33.93954,15.70652-16.47653,25.85275-52.64668,25.85275-92.1744,0-36.24991-8.58863-68.59087-23.57472-88.73-26.98413-36.0142-65.86086-43.05408-123.8987-43.05408h-102.22561ZM1669.19603,653.95164h31.31755c45.4339,0,74.81747,20.40298,74.81747,73.34165,0,52.95174-29.38356,73.35472-74.81747,73.35472h-31.31755v-146.69636ZM1374.64705,597.79587l-60.78862,204.3991-58.24896-204.38603-78.62696-.01307,83.18745,257.89802h104.97972l83.84098-257.89802h-74.3436ZM1880.53784,855.69389h72.84869v-257.88495l-72.86597-.01307.01728,257.89802ZM2084.72543,597.88892l-101.70877,257.71614h71.82122l16.09133-45.55054h120.36811l15.23266,45.55054h77.97807l-102.48525-257.73763-97.29737.02149ZM2132.0067,644.90644l44.12286,120.73556h-89.63895l45.51609-120.73556Z"/></symbol>
+    <symbol id="logo-aif" viewBox="0 0 360.87 36.56" overflow="visible"><g id="Layer_1-2" data-name="Layer 1"> <path fill="#42b177" d="M66.24,10.77c-.44-.46-1.17-.46-1.61,0-.5.49-.44,1.35.18,1.76.38.25.88.25,1.25,0,.61-.41.67-1.26.18-1.76M64.77,6.9c-3.04-.71-5.77,2.02-5.06,5.06.36,1.55,1.59,2.78,3.14,3.14,3.04.71,5.77-2.02,5.06-5.06-.36-1.55-1.59-2.78-3.14-3.14M44.7,24.02c-1.98-.73-2.75-.59-5.28-.55-1.76.02-1.82-.04-3.82-.04-.62,0-.85,2.97,1.39,3.58.98.27,2.04.44,2.78,1.2.33.33.51.84-.24.84h-5.56c-.97,0-1.89.02-2.64-.61-1.12-.95-1.65-2.25-2.21-3.55-.58-1.35-1.21-2.67-1.95-3.94-1.47-2.52-3.41-4.81-6.02-6.2-3.25-1.74-8.77-2.61-13.14.75-4.61,3.54-3.62,10.16.41,13.4,1.59,1.28,3.66,1.82,5.7,1.7,3.98-.23,6.92-3.17,6.19-6.78-.24-1.21-.95-2.35-2.01-2.98-.76-.44-1.65-.6-2.53-.6-.94,0-1.94.19-2.62.85-.8.78-.93,2.14-.29,3.06.35.5.93.93.83,1.59-.07.45-.43.78-.87.87-.75.17-1.43-.26-1.93-.78-1.3-1.33-1.7-3.46-.99-5.17.93-2.25,3.52-3.49,5.96-3.41,3.14.11,6.09,2.17,7.38,5.04,1.29,2.86.9,6.38-.87,8.97-3.94,5.76-13.66,5.08-18.18.22C1.35,28.42-.2,25.46.02,19.96c.15-3.89,2.4-7.72,5.26-10.41C9.94,5.15,16.07,2.15,22.32.85c3.79-.78,7.71-.97,11.56-.58,3.4.34,6.77.96,10.03,1.97,1.62.5,3.21,1.1,4.75,1.81,1.36.62,3.14,1.3,4.2,2.38,0-1.95-.08-4.1-.08-5.59,0-.57.6-.96,1.11-.71,2.21,1.03,7.44,3.5,10.93,5.09,4.68,2.14,5.01,7.18,5.17,11.64,0,.1,0,.2-.04.29-.15.31-.94.22-1.23.23-.56,0-1.4,0-1.96.03-1.12.05-2.2.03-3.32-.03-2.06-.1-4.06-1.02-5.4-2.14-.13-.11-.56-.23-.77-.02-.21.22-.14.56-.02.68.77.77,1.6,1.27,2.56,1.77,1.23.63,2.57.79,3.92.87,1.45.09,2.92.06,4.37-.08,1.21-.12,1.52-.21.33.68-1.05.78-2.27,1.34-3.5,1.76-1.77.6-3.64.9-5.51.95-1.13.03-2.26-.03-3.39-.17-.58-.07-1.16-.18-1.74-.24-.47-.05-.96-.14-1.44-.04-.43.09-.82.33-1.09.67-.37.48-.5,1.81-.28,2.38.41,1.11,1.32,1.76,2.28,2.33,1.04.62,2.4.83,2.67,2.01.06.25-2.15.25-2.4.25h-2.93s-1.6.04-2.22-.19c-.02,0-.04-.02-.06-.02-.34-.18-.49-.63-.6-.98-.16-.48-.45-.97-.8-1.47-.66-.94-1.68-1.98-2.74-2.37M66.91,11c0,1.72-1.39,3.11-3.11,3.11s-3.11-1.39-3.11-3.11,1.39-3.11,3.11-3.11,3.11,1.39,3.11,3.11"/> </g> <g> <path fill="#f2f2f2" d="M88.15,29.12c-2.08,0-3.89-.39-5.44-1.16-1.55-.77-2.87-1.8-3.96-3.08l3.04-3.04c1.09,1.12,2.16,1.92,3.2,2.4s2.15.72,3.32.72c1.57,0,2.81-.37,3.7-1.1.89-.73,1.34-1.69,1.34-2.86,0-.91-.25-1.65-.76-2.22-.51-.57-1.17-1.04-2-1.4-.83-.36-1.74-.68-2.74-.96-1-.28-1.99-.59-2.98-.94-.99-.35-1.89-.8-2.72-1.36-.83-.56-1.49-1.29-2-2.2-.51-.91-.76-2.04-.76-3.4,0-1.76.4-3.27,1.2-4.54.8-1.27,1.94-2.25,3.42-2.94,1.48-.69,3.19-1.04,5.14-1.04,1.81,0,3.45.32,4.9.96,1.45.64,2.65,1.49,3.58,2.56l-3.12,3.12c-.8-.83-1.63-1.45-2.48-1.86-.85-.41-1.83-.62-2.92-.62-1.47,0-2.64.35-3.52,1.06s-1.32,1.65-1.32,2.82c0,.85.25,1.55.76,2.08.51.53,1.18.95,2.02,1.26.84.31,1.76.59,2.76.84s2.01.55,3.02.9c1.01.35,1.93.8,2.76,1.36.83.56,1.49,1.31,2,2.24.51.93.76,2.12.76,3.56,0,1.79-.43,3.34-1.28,4.66-.85,1.32-2.05,2.35-3.58,3.08-1.53.73-3.31,1.1-5.34,1.1Z"/> <path fill="#f2f2f2" d="M113.51,29.12c-3.28,0-5.91-.85-7.88-2.54-1.97-1.69-2.96-4.26-2.96-7.7V.56h4.92v17.92c0,2.03.53,3.55,1.6,4.56,1.07,1.01,2.51,1.52,4.32,1.52s3.26-.51,4.34-1.52c1.08-1.01,1.62-2.53,1.62-4.56V.56h4.92v18.32c0,2.27-.45,4.16-1.36,5.68-.91,1.52-2.17,2.66-3.8,3.42-1.63.76-3.53,1.14-5.72,1.14Z"/> <path fill="#f2f2f2" d="M137.91,29.12c-2.08,0-3.89-.39-5.44-1.16-1.55-.77-2.87-1.8-3.96-3.08l3.04-3.04c1.09,1.12,2.16,1.92,3.2,2.4s2.15.72,3.32.72c1.57,0,2.81-.37,3.7-1.1.89-.73,1.34-1.69,1.34-2.86,0-.91-.25-1.65-.76-2.22-.51-.57-1.17-1.04-2-1.4-.83-.36-1.74-.68-2.74-.96-1-.28-1.99-.59-2.98-.94-.99-.35-1.89-.8-2.72-1.36-.83-.56-1.49-1.29-2-2.2-.51-.91-.76-2.04-.76-3.4,0-1.76.4-3.27,1.2-4.54.8-1.27,1.94-2.25,3.42-2.94,1.48-.69,3.19-1.04,5.14-1.04,1.81,0,3.45.32,4.9.96,1.45.64,2.65,1.49,3.58,2.56l-3.12,3.12c-.8-.83-1.63-1.45-2.48-1.86-.85-.41-1.83-.62-2.92-.62-1.47,0-2.64.35-3.52,1.06s-1.32,1.65-1.32,2.82c0,.85.25,1.55.76,2.08.51.53,1.18.95,2.02,1.26.84.31,1.76.59,2.76.84s2.01.55,3.02.9c1.01.35,1.93.8,2.76,1.36.83.56,1.49,1.31,2,2.24.51.93.76,2.12.76,3.56,0,1.79-.43,3.34-1.28,4.66-.85,1.32-2.05,2.35-3.58,3.08-1.53.73-3.31,1.1-5.34,1.1Z"/> <path fill="#f2f2f2" d="M157.07,28.56c-1.36,0-2.47-.44-3.34-1.32-.87-.88-1.3-2-1.3-3.36V5.24c0-1.36.43-2.48,1.3-3.36.87-.88,1.98-1.32,3.34-1.32h13.64v4.48h-12c-.4,0-.74.14-1.02.42s-.42.62-.42,1.02v16.16c0,.4.14.74.42,1.02s.62.42,1.02.42h12v4.48h-13.64ZM154.79,16.64v-4.28h15.08v4.28h-15.08Z"/> <path fill="#f2f2f2" d="M182.59,28.56L193.43.56h3.16l10.88,28h-2.76l-9.92-25.92h.52l-10,25.92h-2.72ZM186.95,20.56l.92-2.32h14.36l.92,2.32h-16.2Z"/> <path fill="#f2f2f2" d="M209.51,3V.56h12.84v2.44h-12.84ZM209.51,28.56v-2.44h12.84v2.44h-12.84ZM214.55,27.72V1.4h2.68v26.32h-2.68Z"/> <path fill="#f2f2f2" d="M236.95,28.56V4.88c0-1.23.41-2.25,1.22-3.08s1.85-1.24,3.1-1.24h12.36v2.44h-11.56c-.69,0-1.28.24-1.76.72s-.72,1.07-.72,1.76v23.08h-2.64ZM238.35,16.56v-2.44h14.44v2.44h-14.44Z"/> <path fill="#f2f2f2" d="M262.71,28.96c-2.24,0-4.02-.51-5.34-1.54-1.32-1.03-1.98-2.38-1.98-4.06,0-1.09.29-2.07.88-2.94.59-.87,1.45-1.55,2.6-2.06,1.15-.51,2.52-.76,4.12-.76,2.21,0,3.93.49,5.14,1.48,1.21.99,1.82,2.29,1.82,3.92h-.48c0,1.87-.56,3.33-1.68,4.38-1.12,1.05-2.81,1.58-5.08,1.58ZM268.59,28.56l-.04-6.96-.28-.76v-4.68c0-1.65-.41-2.87-1.24-3.64-.83-.77-2.03-1.16-3.6-1.16-1.04,0-2.11.2-3.22.6-1.11.4-2.07,1.01-2.9,1.84l-1.24-1.8c.91-.99,2.02-1.73,3.34-2.22,1.32-.49,2.69-.74,4.1-.74s2.71.26,3.8.78c1.09.52,1.95,1.3,2.56,2.34.61,1.04.92,2.36.92,3.96v6.08c0,1.07,0,2.13.02,3.18.01,1.05.05,2.11.1,3.18h-2.32ZM263.19,27c1.6,0,2.85-.34,3.74-1.02.89-.68,1.34-1.57,1.34-2.66s-.45-2.01-1.34-2.66c-.89-.65-2.15-.98-3.78-.98s-2.87.33-3.8.98c-.93.65-1.4,1.54-1.4,2.66s.47,1.98,1.4,2.66c.93.68,2.21,1.02,3.84,1.02Z"/> <path fill="#f2f2f2" d="M285.31,28.96c-1.89,0-3.57-.41-5.02-1.24-1.45-.83-2.6-1.97-3.44-3.44-.84-1.47-1.26-3.15-1.26-5.04v-.52c0-1.89.42-3.57,1.26-5.02.84-1.45,1.99-2.59,3.44-3.42,1.45-.83,3.13-1.24,5.02-1.24,1.39,0,2.64.24,3.76.72,1.12.48,2.08,1.17,2.88,2.08l-1.6,1.6c-.64-.64-1.38-1.14-2.22-1.5-.84-.36-1.79-.54-2.86-.54-1.36,0-2.59.31-3.68.92-1.09.61-1.95,1.47-2.56,2.58-.61,1.11-.92,2.38-.92,3.82v.52c0,1.47.31,2.75.94,3.84.63,1.09,1.48,1.95,2.56,2.58,1.08.63,2.31.94,3.7.94,1.04,0,1.99-.17,2.84-.5.85-.33,1.61-.85,2.28-1.54l1.56,1.6c-.8.88-1.77,1.57-2.9,2.06-1.13.49-2.39.74-3.78.74Z"/> <path fill="#f2f2f2" d="M293.99,11.68v-2.24h11.4v2.24h-11.4ZM302.55,28.56c-.64,0-1.26-.09-1.86-.28s-1.13-.48-1.6-.88c-.47-.4-.83-.9-1.1-1.5-.27-.6-.4-1.33-.4-2.18V4.68h2.52v19.2c0,.72.24,1.31.72,1.78.48.47,1.05.7,1.72.7h2.84v2.2h-2.84Z"/> <path fill="#f2f2f2" d="M317.27,28.96c-1.81,0-3.43-.42-4.84-1.26-1.41-.84-2.52-2-3.32-3.48s-1.2-3.19-1.2-5.14v-.36c0-1.89.4-3.57,1.2-5.02.8-1.45,1.91-2.59,3.32-3.42,1.41-.83,3.03-1.24,4.84-1.24s3.39.41,4.8,1.22c1.41.81,2.52,1.95,3.32,3.4.8,1.45,1.2,3.11,1.2,4.98v.44c0,1.95-.4,3.66-1.2,5.14-.8,1.48-1.91,2.64-3.32,3.48-1.41.84-3.01,1.26-4.8,1.26ZM317.27,26.68c1.33,0,2.51-.33,3.54-.98,1.03-.65,1.83-1.55,2.4-2.68.57-1.13.86-2.45.86-3.94v-.44c0-1.44-.29-2.71-.86-3.8-.57-1.09-1.37-1.95-2.4-2.58-1.03-.63-2.21-.94-3.54-.94s-2.51.32-3.54.96c-1.03.64-1.83,1.51-2.42,2.62-.59,1.11-.88,2.38-.88,3.82v.36c0,1.49.29,2.81.88,3.94.59,1.13,1.39,2.03,2.42,2.68,1.03.65,2.21.98,3.54.98Z"/> <path fill="#f2f2f2" d="M331.59,28.56V9.44h2.48v4.56l-.4-.04c.24-1.23.63-2.17,1.18-2.82.55-.65,1.21-1.11,2-1.36.79-.25,1.65-.38,2.58-.38h1.64v2.52h-1.84c-1.57,0-2.81.4-3.72,1.2-.91.8-1.36,2.08-1.36,3.84v11.6h-2.56Z"/> <path fill="#f2f2f2" d="M350.83,29.64l-8.32-20.2h2.8l7.04,17.48-1.52,2.72ZM342.79,36.56v-2.2h3.64c.67,0,1.19-.23,1.58-.7.39-.47.7-1.01.94-1.62l2.52-5.56,6.6-17.04h2.8l-9.32,22.68c-.29.72-.65,1.42-1.06,2.1-.41.68-.95,1.24-1.62,1.68-.67.44-1.52.66-2.56.66h-3.52Z"/> </g></symbol>
+    <symbol id="ico-cube" viewBox="0 0 24 24">
+      <polygon points="12,2.5 20.2,7.25 12,12 3.8,7.25" fill="#A8E05F"/>
+      <polygon points="3.8,7.25 12,12 12,21.5 3.8,16.75" fill="#76B900"/>
+      <polygon points="20.2,7.25 20.2,16.75 12,21.5 12,12" fill="#4F7A00"/>
+    </symbol>
+    <symbol id="ico-laptop" viewBox="0 0 24 24">
+      <rect x="4" y="5.5" width="16" height="10.5" rx="1.4" fill="none" stroke="#FF9A5C" stroke-width="1.6"/>
+      <path d="M1.5 18.5h21" fill="none" stroke="#FF9A5C" stroke-width="1.6" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="ico-k8s" viewBox="0 0 24 24">
+      <path d="M12 2.2 20.8 6.6v10.8L12 21.8 3.2 17.4V6.6z" fill="none" stroke="#e5e7eb" stroke-width="1.4"/>
+      <circle cx="12" cy="12" r="2.7" fill="none" stroke="#e5e7eb" stroke-width="1.4"/>
+      <path d="M12 4.5v4.8M12 14.7v4.8M5 8.2l4.3 2.4M14.7 13.4l4.3 2.4M19 8.2l-4.3 2.4M9.3 13.4 5 15.8" stroke="#e5e7eb" stroke-width="1"/>
+    </symbol>
+    <symbol id="ico-shield" viewBox="0 0 24 24">
+      <path d="M12 2.4 20.4 5.9v6.6c0 4.9-3.8 7.9-8.4 9.3-4.6-1.4-8.4-4.4-8.4-9.3V5.9z" fill="none" stroke="#30BA78" stroke-width="1.5"/>
+      <path d="M8 12.2l2.9 2.9 5.1-5.9" fill="none" stroke="#30BA78" stroke-width="1.7" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="ico-graph" viewBox="0 0 24 24">
+      <path d="M3.6 3v17.4h17.4" fill="none" stroke="#30BA78" stroke-width="1.6" stroke-linecap="round"/>
+      <polyline points="6.5,16.6 10.4,11.2 13.9,13.8 20.4,5.2" fill="none" stroke="#30BA78" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="ico-db" viewBox="0 0 24 24">
+      <ellipse cx="12" cy="5.6" rx="7.6" ry="3" fill="none" stroke="#9ca3af" stroke-width="1.5"/>
+      <path d="M4.4 5.6v12.8c0 1.66 3.4 3 7.6 3s7.6-1.34 7.6-3V5.6" fill="none" stroke="#9ca3af" stroke-width="1.5"/>
+      <path d="M4.4 12c0 1.66 3.4 3 7.6 3s7.6-1.34 7.6-3" fill="none" stroke="#9ca3af" stroke-width="1.3"/>
+    </symbol>
+    <symbol id="ico-lock" viewBox="0 0 24 24">
+      <rect x="4.6" y="10.4" width="14.8" height="10.2" rx="2" fill="none" stroke="#C8E600" stroke-width="1.5"/>
+      <path d="M8 10.4V7.6a4 4 0 0 1 8 0v2.8" fill="none" stroke="#C8E600" stroke-width="1.5"/>
+    </symbol>
+    <marker id="a-d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9ca3af"/>
+    </marker>
+    <marker id="a-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#30BA78"/>
+    </marker>
+    <marker id="a-o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#FF9A5C"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="1092" fill="#000000"/>
+
+  <!-- ===================== Partner lockup ===================== -->
+  <use xlink:href="#logo-suse" href="#logo-suse" x="514" y="36" width="240" height="50"/>
+  <path d="M 792 34 L 792 88" stroke="#4b5563" stroke-width="1.4"/>
+  <use xlink:href="#logo-nvidia" href="#logo-nvidia" x="826" y="33" width="260" height="57"/>
+  <text x="800" y="112" font-size="12" font-style="italic" fill="#6b7280" text-anchor="middle">Autonomous vulnerability remediation — a reference architecture for long-running, specialized agents that are allowed to act</text>
+
+  <!-- ===================== Customer estate ===================== -->
+  <rect x="52" y="128" width="1496" height="872" rx="22" fill="none" stroke="#4b5563" stroke-width="1.4"/>
+  <text x="72" y="150" font-size="10" font-weight="700" fill="#6b7280" letter-spacing="1.2">CUSTOMER ESTATE — SOVEREIGN, AIR-GAPPABLE, ONE SUPPORT CONTRACT ACROSS EVERY COMPONENT BELOW</text>
+
+  <!-- ===================== Left band labels ===================== -->
+  <text x="176" y="206" font-size="9.5" font-weight="700" fill="#9ca3af" letter-spacing="0.8" text-anchor="end">HUMAN</text>
+  <text x="176" y="460" font-size="9.5" font-weight="700" fill="#9ca3af" letter-spacing="0.8" text-anchor="end">AGENTS &amp; ACTION</text>
+  <text x="176" y="634" font-size="9.5" font-weight="700" fill="#9ca3af" letter-spacing="0.8" text-anchor="end">MODELS, DATA</text>
+  <text x="176" y="648" font-size="9.5" font-weight="700" fill="#9ca3af" letter-spacing="0.8" text-anchor="end">AND LEARNING</text>
+  <text x="176" y="784" font-size="9.5" font-weight="700" fill="#9ca3af" letter-spacing="0.8" text-anchor="end">PLATFORM</text>
+  <text x="176" y="798" font-size="9.5" font-weight="700" fill="#9ca3af" letter-spacing="0.8" text-anchor="end">SERVICES</text>
+  <text x="176" y="920" font-size="9.5" font-weight="700" fill="#9ca3af" letter-spacing="0.8" text-anchor="end">INFRASTRUCTURE</text>
+  <text x="176" y="934" font-size="9.5" font-weight="700" fill="#9ca3af" letter-spacing="0.8" text-anchor="end">AND COMPUTE</text>
+
+  <!-- ===================== Analyst workstation ===================== -->
+  <rect x="190" y="164" width="1342" height="92" rx="10" fill="#0b0f14" stroke="#FF9A5C" stroke-width="1.4"/>
+  <use xlink:href="#ico-laptop" href="#ico-laptop" x="212" y="186" width="34" height="34"/>
+  <text x="258" y="200" font-size="13" font-weight="700" fill="#ffffff">ANALYST WORKSTATION — OUTSIDE THE CLUSTER</text>
+  <text x="258" y="218" font-size="9.5" fill="#9ca3af">No kubeconfig. No cluster credentials. No kubectl. The only three ways in are the ones on the right.</text>
+  <text x="258" y="234" font-size="9" fill="#6b7280">Every action a person takes here is an explicit gate. Everything between the gates runs unattended.</text>
+
+  <rect x="780" y="180" width="234" height="60" rx="6" fill="#12181f" stroke="#3a4553" stroke-width="1"/>
+  <text x="792" y="198" font-size="10" font-weight="700" fill="#ffffff">nemoclaw connect</text>
+  <text x="792" y="212" font-size="8.5" fill="#9ca3af">SSH over HTTP CONNECT to the gateway —</text>
+  <text x="792" y="224" font-size="8.5" fill="#9ca3af">attach to a running sandbox and watch</text>
+  <rect x="1026" y="180" width="234" height="60" rx="6" fill="#12181f" stroke="#3a4553" stroke-width="1"/>
+  <text x="1038" y="198" font-size="10" font-weight="700" fill="#ffffff">AI-Q web UI</text>
+  <text x="1038" y="212" font-size="8.5" fill="#9ca3af">submit a finding, accept or narrow the</text>
+  <text x="1038" y="224" font-size="8.5" fill="#9ca3af">plan, read the cited brief</text>
+  <rect x="1272" y="180" width="234" height="60" rx="6" fill="#12181f" stroke="#3a4553" stroke-width="1"/>
+  <text x="1284" y="198" font-size="10" font-weight="700" fill="#ffffff">git review</text>
+  <text x="1284" y="212" font-size="8.5" fill="#9ca3af">the only path to production. The agent</text>
+  <text x="1284" y="224" font-size="8.5" fill="#9ca3af">opens the PR; it cannot merge it.</text>
+
+  <!-- ===================== RKE2 cluster ===================== -->
+  <rect x="190" y="276" width="1342" height="580" rx="14" fill="#05070a" stroke="#6b7280" stroke-width="1.6"/>
+  <use xlink:href="#ico-k8s" href="#ico-k8s" x="206" y="288" width="18" height="18"/>
+  <text x="232" y="302" font-size="11" font-weight="700" fill="#ffffff" letter-spacing="0.8">RKE2 CLUSTER</text>
+  <text x="340" y="302" font-size="9.5" fill="#6b7280">· managed by Rancher Prime</text>
+
+  <!-- arrows from the workstation into the cluster -->
+  <path d="M 560 256 L 560 348" fill="none" stroke="#9ca3af" stroke-width="1.4" marker-end="url(#a-d)"/>
+  <text x="568" y="300" font-size="8.5" fill="#9ca3af">submit · approve</text>
+  <path d="M 880 256 L 880 348" fill="none" stroke="#9ca3af" stroke-width="1.4" marker-end="url(#a-d)"/>
+  <text x="888" y="300" font-size="8.5" fill="#9ca3af">nemoclaw connect</text>
+  <path d="M 1400 312 L 1400 260" fill="none" stroke="#FF9A5C" stroke-width="1.4" marker-end="url(#a-o)"/>
+  <text x="1392" y="292" font-size="8.5" fill="#FF9A5C" text-anchor="end">plan and PR, back for review</text>
+
+  <!-- ===================== SUSE AI Factory with NVIDIA ===================== -->
+  <rect x="206" y="312" width="1310" height="396" rx="12" fill="#060d0b" stroke="#30BA78" stroke-width="1.6"/>
+  <use xlink:href="#logo-aif" href="#logo-aif" x="222" y="320" width="220" height="22"/>
+  <text x="452" y="338" font-size="15" fill="#ffffff">with NVIDIA</text>
+  <text x="1500" y="337" font-size="9" fill="#6b7280" text-anchor="end">Blueprints → AIWorkloads → Fleet HelmOps · three Blueprints, three catalog apps</text>
+
+  <!-- AI-Q agent plane -->
+  <rect x="218" y="348" width="568" height="222" rx="10" fill="none" stroke="#C8E600" stroke-width="1.8" stroke-dasharray="7 5"/>
+  <rect x="222" y="352" width="560" height="214" rx="8" fill="#0d1117" stroke="#2b3440" stroke-width="1"/>
+  <use xlink:href="#ico-cube" href="#ico-cube" x="236" y="363" width="16" height="16"/>
+  <text x="258" y="376" font-size="12" font-weight="700" fill="#ffffff">NVIDIA AI-Q — agent orchestration</text>
+  <text x="236" y="392" font-size="8.5" fill="#6b7280">aiq2-web 2.2.1 · NeMo Agent Toolkit · async jobs, checkpointed, resumable</text>
+  <text x="768" y="374" font-size="8.5" font-weight="700" fill="#C8E600" text-anchor="end">NVIDIA AI-Q BLUEPRINT</text>
+
+  <rect x="236" y="404" width="150" height="148" rx="7" fill="#101806" stroke="#76B900" stroke-width="1.6"/>
+  <use xlink:href="#ico-cube" href="#ico-cube" x="300" y="412" width="22" height="22"/>
+  <text x="311" y="450" font-size="9.5" font-weight="700" fill="#ffffff" text-anchor="middle">Nemotron 3 Ultra</text>
+  <text x="311" y="462" font-size="8" fill="#9ca3af" text-anchor="middle">orchestrating agent</text>
+  <rect x="246" y="470" width="130" height="16" rx="3" fill="#12233a" stroke="#2f4a6d" stroke-width="1"/>
+  <text x="311" y="481" font-size="8" fill="#cbd5e1" text-anchor="middle">Intent detection</text>
+  <rect x="246" y="490" width="130" height="16" rx="3" fill="#12233a" stroke="#2f4a6d" stroke-width="1"/>
+  <text x="311" y="501" font-size="8" fill="#cbd5e1" text-anchor="middle">Planning</text>
+  <rect x="246" y="510" width="130" height="16" rx="3" fill="#12233a" stroke="#2f4a6d" stroke-width="1"/>
+  <text x="311" y="521" font-size="8" fill="#cbd5e1" text-anchor="middle">Refinement</text>
+  <rect x="246" y="530" width="130" height="16" rx="3" fill="#12233a" stroke="#2f4a6d" stroke-width="1"/>
+  <text x="311" y="541" font-size="8" fill="#cbd5e1" text-anchor="middle">Citation verification</text>
+
+  <text x="398" y="412" font-size="8.5" font-weight="700" fill="#6b7280" letter-spacing="0.6">SPECIALIZED AGENTS</text>
+  <rect x="398" y="418" width="180" height="40" rx="5" fill="#101806" stroke="#76B900" stroke-width="1.2"/>
+  <text x="408" y="433" font-size="9" font-weight="700" fill="#ffffff">Triage</text>
+  <text x="408" y="446" font-size="7.8" fill="#9ca3af">Lightning · rank by reachability</text>
+  <rect x="588" y="418" width="180" height="40" rx="5" fill="#1a1206" stroke="#FF9A5C" stroke-width="1.2"/>
+  <text x="598" y="433" font-size="9" font-weight="700" fill="#ffffff">Clarifier — the plan gate</text>
+  <text x="598" y="446" font-size="7.8" fill="#FF9A5C">Ultra · holds for a human</text>
+  <rect x="398" y="462" width="180" height="40" rx="5" fill="#101806" stroke="#76B900" stroke-width="1.2"/>
+  <text x="408" y="477" font-size="9" font-weight="700" fill="#ffffff">Source router</text>
+  <text x="408" y="490" font-size="7.8" fill="#9ca3af">Ultra · corpus vs SBOM vs web</text>
+  <rect x="588" y="462" width="180" height="40" rx="5" fill="#101806" stroke="#76B900" stroke-width="1.2"/>
+  <text x="598" y="477" font-size="9" font-weight="700" fill="#ffffff">Researchers × N, in parallel</text>
+  <text x="598" y="490" font-size="7.8" fill="#9ca3af">Lightning · most of the tokens</text>
+  <rect x="398" y="506" width="180" height="40" rx="5" fill="#101806" stroke="#76B900" stroke-width="1.2"/>
+  <text x="408" y="521" font-size="9" font-weight="700" fill="#ffffff">Writer + citation verifier</text>
+  <text x="408" y="534" font-size="7.8" fill="#9ca3af">Ultra · every claim resolves</text>
+  <rect x="588" y="506" width="180" height="40" rx="5" fill="#101806" stroke="#76B900" stroke-width="1.2"/>
+  <text x="598" y="521" font-size="9" font-weight="700" fill="#ffffff">NeMo Guardrails</text>
+  <text x="598" y="534" font-size="7.8" fill="#9ca3af">intercepts every call above</text>
+
+  <!-- OpenShell gateway -->
+  <path d="M 790 459 L 810 459" fill="none" stroke="#9ca3af" stroke-width="1.4" marker-end="url(#a-d)"/>
+  <rect x="814" y="352" width="132" height="214" rx="8" fill="#101806" stroke="#76B900" stroke-width="2"/>
+  <use xlink:href="#ico-cube" href="#ico-cube" x="869" y="368" width="22" height="22"/>
+  <text x="880" y="408" font-size="10.5" font-weight="700" fill="#ffffff" text-anchor="middle">NVIDIA OpenShell</text>
+  <text x="880" y="422" font-size="10.5" font-weight="700" fill="#ffffff" text-anchor="middle">Gateway</text>
+  <text x="880" y="442" font-size="8" fill="#9ca3af" text-anchor="middle">eBPF-backed policy</text>
+  <text x="880" y="454" font-size="8" fill="#9ca3af" text-anchor="middle">enforced out of process</text>
+  <text x="880" y="466" font-size="8" fill="#9ca3af" text-anchor="middle">L7 egress allow-list</text>
+  <text x="880" y="478" font-size="8" fill="#9ca3af" text-anchor="middle">credentials injected here</text>
+  <text x="880" y="490" font-size="8" fill="#9ca3af" text-anchor="middle">full session recording</text>
+  <text x="880" y="520" font-size="8.5" font-weight="700" fill="#C8E600" text-anchor="middle">FAIL-CLOSED</text>
+  <text x="880" y="534" font-size="7.8" fill="#6b7280" text-anchor="middle">deny unless named</text>
+  <path d="M 950 459 L 970 459" fill="none" stroke="#9ca3af" stroke-width="1.4" marker-end="url(#a-d)"/>
+
+  <!-- Secure agent sandboxes -->
+  <rect x="974" y="348" width="522" height="222" rx="10" fill="none" stroke="#C8E600" stroke-width="1.8" stroke-dasharray="7 5"/>
+  <rect x="978" y="352" width="514" height="214" rx="8" fill="#0d1117" stroke="#2b3440" stroke-width="1"/>
+  <use xlink:href="#ico-lock" href="#ico-lock" x="990" y="360" width="16" height="16"/>
+  <text x="1012" y="373" font-size="11.5" font-weight="700" fill="#ffffff">SUSE SLE BCI 16 sandboxes</text>
+  <text x="990" y="389" font-size="8.5" fill="#6b7280">curated Python index only · no public PyPI · exactly one writable git remote</text>
+  <text x="1480" y="368" font-size="8.5" font-weight="700" fill="#C8E600" text-anchor="end">SECURE AGENT SANDBOXES</text>
+
+  <rect x="990" y="396" width="240" height="116" rx="6" fill="#101806" stroke="#76B900" stroke-width="1.4"/>
+  <text x="1002" y="414" font-size="10" font-weight="700" fill="#ffffff">Remediation engineer</text>
+  <text x="1002" y="427" font-size="8.5" fill="#A8E05F">Nemotron 3 Ultra · the only agent that writes</text>
+  <text x="1002" y="443" font-size="7.5" font-weight="700" fill="#6b7280" letter-spacing="0.6">SKILLS</text>
+  <rect x="1002" y="448" width="104" height="20" rx="3" fill="#0a0e08" stroke="#3a4553" stroke-width="1"/>
+  <text x="1054" y="462" font-size="7.8" fill="#cbd5e1" text-anchor="middle">git clone / push</text>
+  <rect x="1112" y="448" width="104" height="20" rx="3" fill="#0a0e08" stroke="#3a4553" stroke-width="1"/>
+  <text x="1164" y="462" font-size="7.8" fill="#cbd5e1" text-anchor="middle">buildah build</text>
+  <rect x="1002" y="472" width="104" height="20" rx="3" fill="#0a0e08" stroke="#3a4553" stroke-width="1"/>
+  <text x="1054" y="486" font-size="7.8" fill="#cbd5e1" text-anchor="middle">zypper patch</text>
+  <rect x="1112" y="472" width="104" height="20" rx="3" fill="#0a0e08" stroke="#3a4553" stroke-width="1"/>
+  <text x="1164" y="486" font-size="7.8" fill="#cbd5e1" text-anchor="middle">pytest</text>
+
+  <rect x="1240" y="396" width="240" height="116" rx="6" fill="#101806" stroke="#76B900" stroke-width="1.4"/>
+  <text x="1252" y="414" font-size="10" font-weight="700" fill="#ffffff">Validation agent</text>
+  <text x="1252" y="427" font-size="8.5" fill="#A8E05F">Nemotron 3.5 Lightning · grades the fix</text>
+  <text x="1252" y="443" font-size="7.5" font-weight="700" fill="#6b7280" letter-spacing="0.6">SKILLS</text>
+  <rect x="1252" y="448" width="104" height="20" rx="3" fill="#0a0e08" stroke="#3a4553" stroke-width="1"/>
+  <text x="1304" y="462" font-size="7.8" fill="#cbd5e1" text-anchor="middle">rebuild image</text>
+  <rect x="1362" y="448" width="104" height="20" rx="3" fill="#0a0e08" stroke="#3a4553" stroke-width="1"/>
+  <text x="1414" y="462" font-size="7.8" fill="#cbd5e1" text-anchor="middle">SUSE Security scan</text>
+  <rect x="1252" y="472" width="104" height="20" rx="3" fill="#0a0e08" stroke="#3a4553" stroke-width="1"/>
+  <text x="1304" y="486" font-size="7.8" fill="#cbd5e1" text-anchor="middle">scan diff</text>
+  <rect x="1362" y="472" width="104" height="20" rx="3" fill="#0a0e08" stroke="#3a4553" stroke-width="1"/>
+  <text x="1414" y="486" font-size="7.8" fill="#cbd5e1" text-anchor="middle">gate the PR</text>
+
+  <rect x="990" y="520" width="490" height="40" rx="5" fill="#0a0e08" stroke="#2b3440" stroke-width="1"/>
+  <text x="1002" y="535" font-size="8.5" fill="#9ca3af">One sandbox per agent per job · scaled 0→1 on connect-intent, torn down after · snapshot and restore, not restart</text>
+  <text x="1002" y="549" font-size="8.5" fill="#6b7280">No kubeconfig is ever mounted. The agent's blast radius is one policy file, and Fleet reconciles that file.</text>
+
+  <!-- Model plane -->
+  <path d="M 460 568 L 460 578" fill="none" stroke="#9ca3af" stroke-width="1.2" marker-end="url(#a-d)"/>
+  <rect x="222" y="580" width="490" height="120" rx="8" fill="#0d1117" stroke="#2b3440" stroke-width="1"/>
+  <use xlink:href="#ico-cube" href="#ico-cube" x="234" y="588" width="16" height="16"/>
+  <text x="256" y="601" font-size="11" font-weight="700" fill="#ffffff">NVIDIA NIM Operator 3.1.2</text>
+  <rect x="414" y="591" width="27" height="11" rx="2" fill="#76B900"/>
+  <text x="427.5" y="599.5" font-size="6.8" font-weight="700" letter-spacing="0.6" fill="#07120a" text-anchor="middle">APP</text>
+  <text x="234" y="617" font-size="8.5" fill="#9ca3af">NIMCache / NIMService · LiteLLM virtual keys and budgets in front of every model</text>
+  <rect x="234" y="624" width="112" height="48" rx="5" fill="#101806" stroke="#76B900" stroke-width="1.2"/>
+  <text x="290" y="639" font-size="8.3" font-weight="700" fill="#ffffff" text-anchor="middle">Nemotron 3 Ultra</text>
+  <text x="290" y="651" font-size="7.8" fill="#9ca3af" text-anchor="middle">550B-A55B</text>
+  <text x="290" y="664" font-size="7.5" font-style="italic" fill="#A8E05F" text-anchor="middle">plans</text>
+  <rect x="314" y="654" width="27" height="11" rx="2" fill="#76B900"/>
+  <text x="327.5" y="662.5" font-size="6.8" font-weight="700" letter-spacing="0.6" fill="#07120a" text-anchor="middle">APP</text>
+  <rect x="352" y="624" width="112" height="48" rx="5" fill="#101806" stroke="#76B900" stroke-width="1.2"/>
+  <text x="408" y="639" font-size="8.3" font-weight="700" fill="#ffffff" text-anchor="middle">Nemotron 3.5</text>
+  <text x="408" y="651" font-size="7.8" fill="#9ca3af" text-anchor="middle">Lightning 30B-A3B</text>
+  <text x="408" y="664" font-size="7.5" font-style="italic" fill="#A8E05F" text-anchor="middle">executes</text>
+  <rect x="432" y="654" width="27" height="11" rx="2" fill="#76B900"/>
+  <text x="445.5" y="662.5" font-size="6.8" font-weight="700" letter-spacing="0.6" fill="#07120a" text-anchor="middle">APP</text>
+  <rect x="470" y="624" width="112" height="48" rx="5" fill="#101806" stroke="#76B900" stroke-width="1.2"/>
+  <text x="526" y="639" font-size="8.3" font-weight="700" fill="#ffffff" text-anchor="middle">Nemotron 3 Embed</text>
+  <text x="526" y="651" font-size="7.8" fill="#9ca3af" text-anchor="middle">+ Rerank VL 1B</text>
+  <text x="526" y="664" font-size="7.5" font-style="italic" fill="#A8E05F" text-anchor="middle">retrieval</text>
+  <rect x="588" y="624" width="112" height="48" rx="5" fill="#101806" stroke="#76B900" stroke-width="1.2"/>
+  <text x="644" y="639" font-size="8.3" font-weight="700" fill="#ffffff" text-anchor="middle">NeMo Guardrails</text>
+  <text x="644" y="651" font-size="7.8" fill="#9ca3af" text-anchor="middle">25.6.0</text>
+  <text x="644" y="664" font-size="7.5" font-style="italic" fill="#A8E05F" text-anchor="middle">every call</text>
+  <text x="234" y="688" font-size="8" fill="#6b7280">Ultra plans, Lightning executes — NVIDIA's system-of-models split, and the reason the flywheel pays</text>
+
+  <!-- Knowledge plane -->
+  <rect x="724" y="580" width="380" height="120" rx="8" fill="#0d1117" stroke="#2b3440" stroke-width="1"/>
+  <use xlink:href="#ico-db" href="#ico-db" x="736" y="588" width="16" height="16"/>
+  <text x="758" y="601" font-size="11" font-weight="700" fill="#ffffff">Knowledge plane</text>
+  <text x="736" y="617" font-size="8.5" fill="#9ca3af">NVIDIA RAG Blueprint v2.6.0 · nv-ingest · Elasticsearch</text>
+  <rect x="736" y="624" width="114" height="48" rx="5" fill="#12181f" stroke="#3a4553" stroke-width="1"/>
+  <text x="793" y="643" font-size="8.3" font-weight="700" fill="#ffffff" text-anchor="middle">CVE + SUSE-SU</text>
+  <text x="793" y="656" font-size="7.8" fill="#9ca3af" text-anchor="middle">public feeds, nightly</text>
+  <rect x="857" y="624" width="114" height="48" rx="5" fill="#12181f" stroke="#3a4553" stroke-width="1"/>
+  <text x="914" y="643" font-size="8.3" font-weight="700" fill="#ffffff" text-anchor="middle">SBOMs</text>
+  <text x="914" y="656" font-size="7.8" fill="#9ca3af" text-anchor="middle">from the customer build</text>
+  <rect x="978" y="624" width="114" height="48" rx="5" fill="#0b1a16" stroke="#30BA78" stroke-width="1.2"/>
+  <text x="1035" y="643" font-size="8.3" font-weight="700" fill="#ffffff" text-anchor="middle">Scan exports</text>
+  <text x="1035" y="656" font-size="7.8" fill="#9ca3af" text-anchor="middle">from SUSE Security</text>
+  <text x="736" y="688" font-size="8" fill="#6b7280">hybrid search, sparse-weighted — a package NEVRA has to match literally, not approximately</text>
+
+  <!-- Data flywheel -->
+  <path d="M 1150 568 L 1150 578" fill="none" stroke="#9ca3af" stroke-width="1.2" marker-end="url(#a-d)"/>
+  <rect x="1116" y="580" width="384" height="120" rx="8" fill="#0d1117" stroke="#2b3440" stroke-width="1"/>
+  <use xlink:href="#ico-cube" href="#ico-cube" x="1128" y="588" width="16" height="16"/>
+  <text x="1150" y="601" font-size="11" font-weight="700" fill="#ffffff">NVIDIA NeMo — the data flywheel</text>
+  <text x="1128" y="617" font-size="8.5" fill="#9ca3af">accepted trajectories and human verdicts, graded and folded back in weekly</text>
+  <rect x="1128" y="624" width="87" height="48" rx="5" fill="#101806" stroke="#76B900" stroke-width="1.2"/>
+  <text x="1171" y="643" font-size="8.3" font-weight="700" fill="#ffffff" text-anchor="middle">Relay</text>
+  <text x="1171" y="656" font-size="7.5" fill="#9ca3af" text-anchor="middle">ATIF traces</text>
+  <rect x="1219" y="624" width="87" height="48" rx="5" fill="#101806" stroke="#76B900" stroke-width="1.2"/>
+  <text x="1262" y="643" font-size="8.3" font-weight="700" fill="#ffffff" text-anchor="middle">Data Store</text>
+  <text x="1262" y="656" font-size="7.5" fill="#9ca3af" text-anchor="middle">what it did</text>
+  <rect x="1310" y="624" width="87" height="48" rx="5" fill="#101806" stroke="#76B900" stroke-width="1.2"/>
+  <text x="1353" y="643" font-size="8.3" font-weight="700" fill="#ffffff" text-anchor="middle">Evaluator</text>
+  <text x="1353" y="656" font-size="7.5" fill="#9ca3af" text-anchor="middle">LLM-as-judge</text>
+  <rect x="1401" y="624" width="87" height="48" rx="5" fill="#101806" stroke="#76B900" stroke-width="1.2"/>
+  <text x="1444" y="643" font-size="8.3" font-weight="700" fill="#ffffff" text-anchor="middle">Customizer</text>
+  <text x="1444" y="656" font-size="7.5" fill="#9ca3af" text-anchor="middle">LoRA on the 30B</text>
+  <text x="1128" y="682" font-size="8" fill="#6b7280">Data Store, Evaluator and Customizer install as catalog apps; Relay ships in the sandbox image</text>
+  <text x="1128" y="694" font-size="8" fill="#6b7280">NeMo Microservices is superseded by NeMo Platform from 1 October 2026</text>
+
+  <!-- ===================== Platform services (prerequisites) ===================== -->
+  <path d="M 340 712 L 340 724" fill="none" stroke="#30BA78" stroke-width="1.4" marker-end="url(#a-g)" marker-start="url(#a-g)"/>
+  <text x="350" y="722" font-size="7.8" fill="#30BA78">signal in · rescan out</text>
+  <path d="M 1180 712 L 1180 724" fill="none" stroke="#30BA78" stroke-width="1.4" marker-end="url(#a-g)" marker-start="url(#a-g)"/>
+  <text x="1190" y="722" font-size="7.8" fill="#30BA78">OTLP out · MCP back</text>
+
+  <rect x="206" y="728" width="647" height="112" rx="8" fill="#07140f" stroke="#30BA78" stroke-width="1.4" stroke-dasharray="6 4"/>
+  <use xlink:href="#ico-shield" href="#ico-shield" x="220" y="736" width="20" height="20"/>
+  <text x="248" y="752" font-size="12" font-weight="700" fill="#ffffff">SUSE Security (NeuVector)</text>
+  <text x="839" y="750" font-size="8" font-weight="700" fill="#6b7280" text-anchor="end">CUSTOMER PREREQUISITE — INTEGRATED, NOT INSTALLED</text>
+  <text x="220" y="770" font-size="8.5" fill="#9ca3af">Raises the signal and grades the fix. The agent may read the scanner; policy denies it the scanner's own rules.</text>
+  <rect x="220" y="780" width="150" height="46" rx="5" fill="#0b1a16" stroke="#2f6b52" stroke-width="1"/>
+  <text x="230" y="797" font-size="8.6" font-weight="700" fill="#ffffff">Registry scanning</text>
+  <text x="230" y="811" font-size="7.8" fill="#9ca3af">which images are affected</text>
+  <rect x="376" y="780" width="150" height="46" rx="5" fill="#0b1a16" stroke="#2f6b52" stroke-width="1"/>
+  <text x="386" y="797" font-size="8.6" font-weight="700" fill="#ffffff">Runtime enforcer</text>
+  <text x="386" y="811" font-size="7.8" fill="#9ca3af">which code paths actually run</text>
+  <rect x="532" y="780" width="150" height="46" rx="5" fill="#0b1a16" stroke="#2f6b52" stroke-width="1"/>
+  <text x="542" y="797" font-size="8.6" font-weight="700" fill="#ffffff">Admission control</text>
+  <text x="542" y="811" font-size="7.8" fill="#9ca3af">blocks the unscanned image</text>
+  <rect x="688" y="780" width="150" height="46" rx="5" fill="#0b1a16" stroke="#2f6b52" stroke-width="1"/>
+  <text x="698" y="797" font-size="8.6" font-weight="700" fill="#ffffff">REST API :10443</text>
+  <text x="698" y="811" font-size="7.8" fill="#9ca3af">read-only to the agent</text>
+
+  <rect x="869" y="728" width="647" height="112" rx="8" fill="#07140f" stroke="#30BA78" stroke-width="1.4" stroke-dasharray="6 4"/>
+  <use xlink:href="#ico-graph" href="#ico-graph" x="883" y="736" width="20" height="20"/>
+  <text x="911" y="752" font-size="12" font-weight="700" fill="#ffffff">SUSE Observability</text>
+  <text x="1502" y="750" font-size="8" font-weight="700" fill="#6b7280" text-anchor="end">CUSTOMER PREREQUISITE — INTEGRATED, NOT INSTALLED</text>
+  <text x="883" y="770" font-size="8.5" fill="#9ca3af">One topology over models, retrieval, agents, sandboxes and the cluster underneath all of them.</text>
+  <rect x="883" y="780" width="150" height="46" rx="5" fill="#0b1a16" stroke="#2f6b52" stroke-width="1"/>
+  <text x="893" y="797" font-size="8.6" font-weight="700" fill="#ffffff">OTLP :4318 HTTP</text>
+  <text x="893" y="811" font-size="7.8" fill="#9ca3af">from AI-Q and the RAG server</text>
+  <rect x="1039" y="780" width="150" height="46" rx="5" fill="#0b1a16" stroke="#2f6b52" stroke-width="1"/>
+  <text x="1049" y="797" font-size="8.6" font-weight="700" fill="#ffffff">OTLP :4317 gRPC</text>
+  <text x="1049" y="811" font-size="7.8" fill="#9ca3af">from the OpenShell gateway</text>
+  <rect x="1195" y="780" width="150" height="46" rx="5" fill="#0b1a16" stroke="#2f6b52" stroke-width="1"/>
+  <text x="1205" y="797" font-size="8.6" font-weight="700" fill="#ffffff">MCP server</text>
+  <text x="1205" y="811" font-size="7.8" fill="#9ca3af">agents query the topology</text>
+  <rect x="1351" y="780" width="150" height="46" rx="5" fill="#0b1a16" stroke="#2f6b52" stroke-width="1"/>
+  <text x="1361" y="797" font-size="8.6" font-weight="700" fill="#ffffff">AI assistant OFF</text>
+  <text x="1361" y="811" font-size="7.8" fill="#9ca3af">its providers are off-estate</text>
+
+  <!-- ===================== Infrastructure and compute ===================== -->
+  <rect x="190" y="870" width="1342" height="112" rx="10" fill="#0b0f14" stroke="#2b3440" stroke-width="1"/>
+  <text x="206" y="888" font-size="10" font-weight="700" fill="#6b7280" letter-spacing="1">INFRASTRUCTURE AND ACCELERATED COMPUTE — CO-ENGINEERED AND SHIPPED AS ONE RELEASE MANIFEST</text>
+  <rect x="206" y="898" width="208" height="68" rx="6" fill="#0b1a16" stroke="#30BA78" stroke-width="1.2"/>
+  <text x="218" y="918" font-size="9.3" font-weight="700" fill="#ffffff">SUSE Linux Enterprise</text>
+  <text x="218" y="934" font-size="7.9" fill="#9ca3af">SLES 16 · SL Micro on every node</text>
+  <text x="218" y="947" font-size="7.9" fill="#9ca3af">the host OS under the whole stack</text>
+  <rect x="426" y="898" width="208" height="68" rx="6" fill="#0b1a16" stroke="#30BA78" stroke-width="1.2"/>
+  <text x="438" y="918" font-size="9.3" font-weight="700" fill="#ffffff">Rancher Prime 2.14.3</text>
+  <text x="438" y="934" font-size="7.9" fill="#9ca3af">cluster lifecycle · ClusterRepos</text>
+  <text x="438" y="947" font-size="7.9" fill="#9ca3af">Fleet GitOps · the UI extension</text>
+  <rect x="646" y="898" width="208" height="68" rx="6" fill="#0b1a16" stroke="#30BA78" stroke-width="1.2"/>
+  <text x="658" y="918" font-size="9.3" font-weight="700" fill="#ffffff">RKE2 1.35.6</text>
+  <text x="658" y="934" font-size="7.9" fill="#9ca3af">CIS-hardened Kubernetes</text>
+  <text x="658" y="947" font-size="7.9" fill="#9ca3af">FIPS-capable, air-gap installable</text>
+  <rect x="866" y="898" width="208" height="68" rx="6" fill="#0b1a16" stroke="#30BA78" stroke-width="1.2"/>
+  <text x="878" y="918" font-size="9.3" font-weight="700" fill="#ffffff">SUSE Storage 1.11.3</text>
+  <text x="878" y="934" font-size="7.9" fill="#9ca3af">PVCs for the model cache, the</text>
+  <text x="878" y="947" font-size="7.9" fill="#9ca3af">vector store and agent checkpoints</text>
+  <rect x="1086" y="898" width="208" height="68" rx="6" fill="#101806" stroke="#76B900" stroke-width="1.4"/>
+  <use xlink:href="#ico-cube" href="#ico-cube" x="1272" y="904" width="14" height="14"/>
+  <text x="1098" y="918" font-size="9.3" font-weight="700" fill="#ffffff">NVIDIA GPU Operator</text>
+  <text x="1098" y="934" font-size="7.9" fill="#9ca3af">v26.3.1 · precompiled driver 595</text>
+  <text x="1098" y="947" font-size="7.9" fill="#9ca3af">from registry.suse.com · CDI by NRI</text>
+  <rect x="1306" y="898" width="208" height="68" rx="6" fill="#101806" stroke="#76B900" stroke-width="1.4"/>
+  <use xlink:href="#ico-cube" href="#ico-cube" x="1492" y="904" width="14" height="14"/>
+  <text x="1318" y="918" font-size="9.3" font-weight="700" fill="#ffffff">NVIDIA accelerated compute</text>
+  <text x="1318" y="934" font-size="7.9" fill="#9ca3af">MIG and DRA · Network Operator</text>
+  <text x="1318" y="947" font-size="7.9" fill="#9ca3af">optionally Run:ai / KAI scheduler</text>
+
+  <!-- ===================== Legend ===================== -->
+  <rect x="68" y="1018" width="20" height="12" rx="3" fill="#101806" stroke="#76B900" stroke-width="1.6"/>
+  <text x="96" y="1028" font-size="9.5" fill="#9ca3af">NVIDIA — models, agent toolkit, sandbox runtime, GPU stack</text>
+  <rect x="450" y="1018" width="20" height="12" rx="3" fill="#0b1a16" stroke="#30BA78" stroke-width="1.6"/>
+  <text x="478" y="1028" font-size="9.5" fill="#9ca3af">SUSE — OS, Kubernetes, packaging, GitOps</text>
+  <rect x="742" y="1018" width="20" height="12" rx="3" fill="#07140f" stroke="#30BA78" stroke-width="1.4" stroke-dasharray="4 3"/>
+  <text x="770" y="1028" font-size="9.5" fill="#9ca3af">SUSE platform prerequisite — integrated, not installed</text>
+  <rect x="1100" y="1018" width="20" height="12" rx="3" fill="none" stroke="#C8E600" stroke-width="1.6" stroke-dasharray="4 3"/>
+  <text x="1128" y="1028" font-size="9.5" fill="#9ca3af">the hinge: AI-Q agents in OpenShell sandboxes</text>
+  <rect x="1440" y="1018" width="20" height="12" rx="3" fill="#1a1206" stroke="#FF9A5C" stroke-width="1.6"/>
+  <text x="1468" y="1028" font-size="9.5" fill="#9ca3af">human</text>
+  <rect x="68" y="1042" width="27" height="12" rx="3" fill="#76B900"/>
+  <text x="81.5" y="1051.5" font-size="7.4" font-weight="700" letter-spacing="0.6" fill="#07120a" text-anchor="middle">APP</text>
+  <text x="104" y="1052" font-size="9.5" fill="#9ca3af">installed from the AI Factory catalog as an app, not carried by a Blueprint — the NIM Operator, both Nemotron LLM releases and the three NeMo flywheel charts</text>
+  <text x="68" y="1076" font-size="9" font-style="italic" fill="#6b7280">Reference architecture. OpenShell, NemoClaw and the sandbox lifecycle are verified on a live SUSE cluster; the SecOps agent layer, the data flywheel and the three portfolio integrations are designed, not built.</text>
+</svg>

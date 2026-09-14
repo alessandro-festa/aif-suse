@@ -1,0 +1,368 @@
+# AI-Q 2.2 workflow configuration — SecOps Agent Factory.
+#
+# ADAPTED FROM, NOT INVENTED: this file is NVIDIA's own
+#   NVIDIA-AI-Blueprints/aiq @ v2.2.0 : configs/config_openshell.yml
+# with four changes and nothing else:
+#
+#   1. every `base_url` points at an in-cluster NIM Service instead of
+#      https://integrate.api.nvidia.com/v1  — no inference leaves the cluster;
+#   2. `knowledge_search` switches from the `llamaindex` backend to
+#      `foundational_rag`, pointed at the RAG Blueprint deployed by
+#      20-blueprint-secops-agent-factory.yaml (this backend and these key names
+#      come from the same upstream tag, configs/config_web_frag.yml);
+#   3. `deep_research_sandbox.network_allow` is narrowed from the upstream
+#      research allowlist to the SecOps egress set;
+#   4. a domain catalog scopes source routing to vulnerability work.
+#
+# EVERY `_type` BELOW EXISTS UPSTREAM. AI-Q's `_type` is a plugin registry, not
+# free text — you cannot declare `_type: triage_agent` and get a triage agent.
+# The ten specialized agents named in the architecture document are therefore
+# realised through the constructs AI-Q actually has: built-in agent roles bound
+# to different model tiers, `deep_research_skills` role→skill grants, the
+# domain catalog, and the OpenShell sandbox. The mapping is spelled out in the
+# comments at each binding so the document and this file cannot drift apart.
+#
+# MOUNTED BY: the aiq2-web component of 20-blueprint-secops-agent-factory.yaml,
+# as a ConfigMap with a subPath mount
+# over /app/configs/config_secops.yml, and selected with CONFIG_FILE.
+#
+# STATUS: UNTESTED. Never executed — see examples/secops-agent-factory/README.md.
+
+general:
+  use_uvloop: true
+  telemetry:
+    logging:
+      console:
+        _type: console
+        level: INFO
+
+  front_end:
+    _type: aiq_api
+    runner_class: aiq_api.plugin.AIQAPIWorker
+    # The async Job API is what makes these agents long-running rather than
+    # request-scoped: a remediation job survives the HTTP connection that
+    # submitted it, and the caller polls. Backed by PostgreSQL in-cluster (the
+    # aiq2-web chart provisions it); the sqlite fallback below is upstream's
+    # laptop default and must not be used in the cluster.
+    db_url: ${NAT_JOB_STORE_DB_URL:-sqlite+aiosqlite:///./jobs.db}
+    expiry_seconds: 86400
+    cors:
+      allow_origin_regex: 'http://localhost(:\d+)?|http://127.0.0.1(:\d+)?'
+      allow_methods: [GET, POST, DELETE, OPTIONS]
+      allow_headers: ["*"]
+      allow_credentials: true
+      expose_headers: ["*"]
+
+# =============================================================================
+# Model bindings — the Ultra-plans / Lightning-executes split
+# =============================================================================
+# NVIDIA's stated "system of models" pattern, and the same split Anthropic
+# describes as orchestrator-worker: one expensive model that decomposes and
+# synthesises, many cheap calls that execute. Here it is literally two NIM
+# Services, so the cost of each tier is a line item you can see.
+#
+# api_key: NIM Services deployed by the NIM Operator do not require a token,
+# but the `nim` LLM client sends an Authorization header regardless. Keep the
+# variable so the same config works unchanged against integrate.api.nvidia.com
+# during development; in-cluster the value is ignored.
+llms:
+  # --- Executor tier → nemotron-lightning.ns-secops-models (an Apps install,
+  # --- see apps/nim-llm-nemotron-lightning.values.yaml) ----------------------
+  nemotron_lightning_intent_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
+    base_url: "http://nemotron-lightning.ns-secops-models.svc.cluster.local:8000/v1"
+    api_key: ${NVIDIA_API_KEY:-not-used-in-cluster}
+    temperature: 0.1
+    top_p: 0.9
+    max_tokens: 1024
+    num_retries: 5
+    parallel_tool_calls: false
+    chat_template_kwargs:
+      # Thinking off: classification is a single label, and reasoning tokens on
+      # the highest-frequency call in the system are pure cost.
+      enable_thinking: false
+
+  nemotron_lightning_agent_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
+    base_url: "http://nemotron-lightning.ns-secops-models.svc.cluster.local:8000/v1"
+    api_key: ${NVIDIA_API_KEY:-not-used-in-cluster}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 8192
+    num_retries: 5
+    parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: true
+
+  # --- Orchestrator tier → nemotron-ultra.ns-secops-models (an Apps install,
+  # --- see apps/nim-llm-nemotron-ultra.values.yaml) --------------------------
+  nemotron_ultra_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "http://nemotron-ultra.ns-secops-models.svc.cluster.local:8000/v1"
+    api_key: ${NVIDIA_API_KEY:-not-used-in-cluster}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 16384
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
+
+  nemotron_ultra_writer_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "http://nemotron-ultra.ns-secops-models.svc.cluster.local:8000/v1"
+    api_key: ${NVIDIA_API_KEY:-not-used-in-cluster}
+    temperature: 0.2
+    top_p: 0.7
+    # Larger than the orchestrator budget: the writer emits the full cited
+    # remediation brief in one call.
+    max_tokens: 32768
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
+
+  # DECISION: upstream binds summary_llm to google/gemma-4-31b-it. Substituting
+  # Lightning keeps the model plane to two generative tiers — one fewer model to
+  # cache, licence, air-gap and patch — and document summarisation is well
+  # inside what a 30B-A3B model does. The cost is losing upstream's exact
+  # published behaviour for this one call.
+  summary_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
+    base_url: "http://nemotron-lightning.ns-secops-models.svc.cluster.local:8000/v1"
+    api_key: ${NVIDIA_API_KEY:-not-used-in-cluster}
+    temperature: 0.1
+    max_tokens: 100
+
+functions:
+  # ===========================================================================
+  # Source router inputs
+  # ===========================================================================
+  # DECISION: no web search. Upstream registers Tavily and Serper; both send the
+  # query text to a third party, and in this workload the query text is "which
+  # of our images is exposed to CVE-2026-xxxxx". That is exactly the information
+  # a sovereignty-motivated customer deployed this stack to keep inside. The
+  # vulnerability corpus is ingested instead (feedback loop 5), so the facts are
+  # present without the egress.
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: knowledge_layer
+        name: "Vulnerability Knowledge Base"
+        description: >-
+          CVE records, SUSE security advisories (SUSE-SU), upstream changelogs,
+          SBOMs for the images in scope, SUSE Security (NeuVector) scan exports,
+          and the platform team's own remediation runbooks.
+        tools:
+          - knowledge_search
+
+  knowledge_search:
+    _type: knowledge_retrieval
+    # `foundational_rag` is the backend that talks to the NVIDIA RAG Blueprint.
+    # Upstream uses it in configs/config_web_frag.yml; config_openshell.yml uses
+    # the local `llamaindex`/Chroma backend, which is a laptop convenience and
+    # cannot serve a shared, continuously-ingested corpus.
+    backend: foundational_rag
+    collection_name: ${COLLECTION_NAME:-secops_vulnerability_corpus}
+    # Higher than upstream's 5. A remediation decision usually needs the CVE
+    # record, the vendor advisory, the affected-version matrix, the SBOM entry
+    # and the runbook — five documents before any corroboration.
+    top_k: 10
+    rag_url: ${RAG_SERVER_URL:-http://rag-server.ns-secops-knowledge.svc.cluster.local:8081}
+    ingest_url: ${RAG_INGEST_URL:-http://ingestor-server.ns-secops-knowledge.svc.cluster.local:8082}
+    timeout: 300
+
+  # ===========================================================================
+  # Agents
+  # ===========================================================================
+
+  # ARCHITECTURE: "Intent classifier" (Support agent).
+  intent_classifier:
+    _type: intent_classifier
+    llm: nemotron_lightning_intent_llm
+    verbose: true
+
+  # ARCHITECTURE: "Clarifier / plan gate" (Service agent) — feedback loop 4,
+  # human approval. This is the one place a human is structurally in the path
+  # rather than reviewing after the fact: the agent states the plan, and waits.
+  # For an autonomous remediation loop that is not a usability nicety, it is the
+  # control that keeps the blast radius bounded.
+  clarifier_agent:
+    _type: clarifier_agent
+    llm: nemotron_ultra_llm
+    max_turns: 3
+    log_response_max_chars: 2000
+    verbose: true
+
+  # ARCHITECTURE: "Triage agent" (Worker) — dedupe an incoming scan finding,
+  # rank it by exploitability and reachability, and decide whether it warrants
+  # deep research at all. Realised as the shallow research path: a cheap,
+  # bounded agent whose whole job is to answer without escalating. Most findings
+  # end here, which is what makes the economics work.
+  shallow_research_agent:
+    _type: shallow_research_agent
+    llm: nemotron_lightning_agent_llm
+    verbose: true
+    # Bounds the per-turn loop (feedback loop 1). Deliberately tight — if triage
+    # needs more than this, escalation to deep research is the correct answer,
+    # not a longer shallow loop.
+    max_llm_turns: 10
+    max_tool_iterations: 5
+
+  # ARCHITECTURE: "Remediation engineer" and "Validation agent" (Worker and
+  # Service) — the two agents that may change the world.
+  #
+  # `deep_research_skills` grants skills to agent ROLES. `require_sandbox` is
+  # the load-bearing line: it declares that the `research` skill may only run
+  # inside the sandbox, so the agent that edits files and runs builds cannot
+  # execute anywhere else. That is the research/action separation drawn in
+  # Figure 2, expressed as configuration rather than as a diagram convention.
+  deep_research_skills:
+    _type: deep_research_skills
+    agents:
+      researcher-agent: [research]
+      writer-agent: [synthesis, research]
+    require_sandbox:
+      - research
+
+  # ARCHITECTURE: the governed action plane. One physical OpenShell sandbox per
+  # deep-research job (NVIDIA's documented behaviour, docs/source/deployment/
+  # openshell.md), created on demand and destroyed on exit.
+  deep_research_sandbox:
+    _type: deep_research_sandbox
+    provider: openshell
+    # Built on SLE BCI 16 with the remediation toolchain (git, buildah, helm,
+    # kubectl, zypper, the SUSE Security CLI) — see the sandbox image note in
+    # 11-blueprint-openshell-workspace.yaml. UNVERIFIED: that image does not
+    # exist yet; this architecture specifies it, it is not shipped.
+    openshell_image: ${AIQ_OPENSHELL_IMAGE:-registry.suse.com/suse/ai/openshell-secops-sandbox:0.1.0}
+    # Must match the workspace the gateway blueprint creates. In operator
+    # workspace mode this is the namespace labelled
+    # ai-factory.suse.com/openshell-workspace=true.
+    workspace: ${AIQ_OPENSHELL_WORKSPACE:-ns-secops-sandboxes}
+    # The authoritative policy: examples/secops-agent-factory/policies/
+    # remediation-sandbox.yaml, mounted into the AI-Q pod.
+    policy: ${AIQ_OPENSHELL_POLICY_FILE:-/app/configs/openshell/remediation-sandbox.yaml}
+    workdir: /sandbox
+    # Upstream's comment, kept verbatim because it is the single most
+    # misunderstood line in the file:
+    #   The OpenShell policy is authoritative. This declaration is an upper
+    #   bound: startup fails if the policy grants a hostname not listed here.
+    # In other words this list never GRANTS anything. It can only refuse to
+    # start a sandbox whose policy is broader than the config admits — a
+    # second, independent chance to catch a policy that was widened by mistake.
+    network: allowlist
+    network_allow:
+      # The git forge holding the manifests and Containerfiles being patched.
+      # Narrow this to your own host; github.com is the example, not the
+      # recommendation.
+      - api.github.com
+      - github.com
+      # SUSE update infrastructure — resolving a CVE to a fixed package version
+      # means reading the errata, and rebuilding means pulling the package.
+      - updates.suse.com
+      - scc.suse.com
+      - registry.suse.com
+      # Authoritative vulnerability sources.
+      - nvd.nist.gov
+      - www.suse.com
+      # DECISION: pypi.org, files.pythonhosted.org, huggingface.co,
+      # cdn-lfs.huggingface.co and registry.npmjs.org are in upstream's list and
+      # are REMOVED here. A sandbox that is allowed to install arbitrary
+      # packages from a public index at run time can execute arbitrary code, and
+      # this sandbox has write access to a source repository. Everything the
+      # remediation toolchain needs is baked into the image.
+      #
+      # DECISION: integrate.api.nvidia.com is REMOVED. The sandbox reaches
+      # inference through OpenShell's built-in `inference.local` route, which
+      # the supervisor short-circuits before network_policies are consulted and
+      # which injects the credential at the boundary — the agent never holds a
+      # model token. Leaving the hosted endpoint open would give the agent a
+      # second, uninstrumented path to a model outside the cluster.
+    # A build-and-rescan cycle is minutes, not seconds. Upstream's 1200s is a
+    # research-task budget; remediation needs room for a container rebuild.
+    timeout: 3600
+    idle_timeout: 1800
+    policy_load_timeout_seconds: 30
+    delete_on_exit: true
+    # Attestation on, hard Landlock required. `attest: true` makes the sandbox
+    # verify that the policy the supervisor actually loaded is the policy that
+    # was sent; `require_hard_landlock` refuses to start if the kernel cannot
+    # enforce the filesystem policy rather than degrading to best-effort. Both
+    # must stay true: an unattested sandbox with write access to a git remote is
+    # not a control, it is a claim.
+    attest: true
+    require_hard_landlock: ${AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK:-true}
+    artifact_capture:
+      enabled: true
+      max_file_bytes: 50000000
+      # Narrowed from upstream's plotting-oriented list to what a remediation
+      # job produces: the patch, the scan diff, the build log, the brief.
+      allow_extensions: [.md, .json, .csv, .patch, .diff, .log, .sarif, .yaml]
+
+  # ARCHITECTURE: the orchestrator-worker core. One `deep_research_agent`
+  # declaration instantiates five of the ten specialized agents, each bound to
+  # its own model — which is exactly why the two-tier model plane exists:
+  #
+  #   orchestrator_llm  → "Research orchestrator" (Service) — decomposes the
+  #                       finding into parallel subtasks.
+  #   source_router_llm → "Source router" (Support) — corpus vs SBOM vs
+  #                       advisory, steered by the domain catalog below.
+  #   planner_llm       → the plan the clarifier puts in front of a human.
+  #   researcher_llm    → "Researcher workers" (Worker), run concurrently.
+  #   writer_llm        → "Writer + citation verifier" (Service).
+  #
+  # DECISION: researcher_llm is Lightning, where upstream uses Ultra for all
+  # five. The researchers are the fan-out — N concurrent workers, the highest
+  # token volume in the system — and this is NVIDIA's stated design point for
+  # Lightning. The risk is real and worth stating: weaker researchers produce
+  # weaker evidence for the writer. It is mitigated by
+  # enable_citation_verification below, which fails closed on an unsupported
+  # claim, and it is exactly the tradeoff feedback loop 6 exists to improve —
+  # as the flywheel tunes Lightning on accepted remediations, this substitution
+  # gets safer, and that improvement is measurable.
+  deep_research_agent:
+    _type: deep_research_agent
+    # Non-negotiable here. A remediation brief that cites an advisory which does
+    # not say what the brief claims is worse than no brief: it launders a
+    # hallucination into a change request. AI-Q fails closed when verification
+    # fails.
+    enable_citation_verification: true
+    orchestrator_llm: nemotron_ultra_llm
+    source_router_llm: nemotron_ultra_llm
+    researcher_llm: nemotron_lightning_agent_llm
+    planner_llm: nemotron_ultra_llm
+    writer_llm: nemotron_ultra_writer_llm
+    verbose: true
+    # Scopes source routing to vulnerability work. This is upstream's supported
+    # mechanism for domain specialization — data, not code — and it is how the
+    # SecOps specialization is expressed without inventing agent types. Path is
+    # relative to the AI-Q working directory; the file is mounted from the same
+    # ConfigMap as this one.
+    domain_catalog_path: configs/secops_domain_catalog.yml
+    skills: deep_research_skills
+    sandbox: deep_research_sandbox
+
+# The `chat_deepresearcher_agent` workflow wires intent → clarifier → shallow →
+# (escalate) → deep. `deep_research_workflow` is the other upstream option and
+# skips straight to deep research; it is the wrong choice here, because the
+# whole economic argument is that most findings are resolved by the cheap path.
+workflow:
+  _type: chat_deepresearcher_agent
+  verbose: true
+  # Feedback loop 2. Shallow triage that cannot conclude promotes itself to deep
+  # research, which means Ultra and a sandbox. Effort scales to difficulty
+  # instead of being fixed per finding.
+  enable_escalation: true
+  # Feedback loop 4, the human plan gate.
+  enable_clarifier: true
+  # Feedback loop 1 made durable: jobs run asynchronously and checkpoint, so a
+  # multi-hour remediation resumes from its last good state after a pod restart
+  # instead of starting over. For stateful agents that have already written to a
+  # sandbox, resume-from-error is not an optimisation — restarting repeats side
+  # effects.
+  use_async_deep_research: true
+  checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}

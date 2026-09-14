@@ -1,0 +1,107 @@
+# Helm values for the ORCHESTRATOR tier — Nemotron 3 Ultra (550B total / 55B
+# active), served as a NIM.
+#
+# NOT A BLUEPRINT. This is a values file for the `nim-llm` app, which SUSE AI
+# Factory publishes in its own catalog as "NVIDIA NIM for LLMs" (Supported).
+# Install it from AI Factory → Apps:
+#
+#   chart        nim-llm 2.0.4-pb6.6, from the `nvidia` ClusterRepo
+#   namespace    ns-secops-models
+#   release      nemotron-ultra        <- load-bearing, see below
+#
+# THE RELEASE NAME IS PART OF THE CONTRACT. Every endpoint in
+# 20-blueprint-secops-agent-factory.yaml and configs/config_secops.yml addresses
+# this model as `nemotron-ultra.ns-secops-models.svc.cluster.local:8000`. Install
+# it under a different name and the agent plane starts cleanly and 404s on its
+# first planning call.
+#
+# WHAT THIS TIER DOES. It plans. The AI-Q clarifier, the deep-research
+# orchestrator, the source router, the planner and the writer all bind here. It
+# is the expensive, low-call-volume tier; nemotron-lightning is the cheap,
+# high-call-volume one. That split is NVIDIA's "system of models" and it is what
+# makes the token economics of a long-running agent survivable.
+#
+# WHY THIS IS AN APP AND NOT A BLUEPRINT COMPONENT. Both shipped NVIDIA
+# blueprints in this repo serve a Nemotron model and ship no LLM — they name the
+# NIM Operator as a prerequisite and expect the model to exist. This follows that
+# convention. It also sidesteps a hard constraint: `Blueprint.spec.components` is
+# a CEL list-map keyed on chartName, and Ultra and Lightning are the same chart,
+# so they could never be two components of one Blueprint anyway.
+#
+# REQUIRES: substantial GPU. A 550B-A55B model does not fit the single-card
+# footprint that examples like "NVIDIA RAG (minimal, low-GPU)" target. See the
+# "Sizing and deployment profiles" section of
+# docs/architecture/sovereign-agentic-secops.md for the three profiles, and for
+# the downgrade path that swaps this tier for Nemotron 3 Super (120B-A12B) or
+# Llama 3.3 Nemotron Super 49B.
+#
+# STATUS: UNTESTED. The `nim-llm` chart is gated on NGC (anonymous
+# `helm show values` returns 403), so the value KEYS below were taken from the
+# same chart as rendered inside nvidia-blueprint-rag v2.6.0, where it appears as
+# the `nimOperator.nim-llm` subchart. Keys marked UNVERIFIED could not be checked
+# at all. The NIM image tag is a placeholder. See ../README.md.
+
+image:
+  # The model ID is confirmed: NVIDIA's own AI-Q v2.2.0
+  # configs/config_openshell.yml binds `nvidia/nemotron-3-ultra-550b-a55b`.
+  # The NIM container repository follows the nvcr.io/nim/<org>/<model>
+  # convention used by every other NIM in this repo.
+  repository: nvcr.io/nim/nvidia/nemotron-3-ultra-550b-a55b
+  # UNVERIFIED — placeholder. NIM tags are model-specific and a wrong tag fails
+  # the NIM Operator's hardware-profile lookup with a message that does not
+  # mention the tag. Check the NGC catalog and pin an exact version; never use
+  # "latest" (see the tag notes in
+  # charts/aif-operator/files/blueprints/nvidia-rag-minimal-2-6-0.yaml).
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+# UNVERIFIED key name. Inside nvidia-blueprint-rag the subchart takes
+# `service.name` to fix the Service name; confirm the standalone chart does the
+# same, because the AI-Q config and the OpenShell inference route both address
+# this by DNS.
+service:
+  name: nemotron-ultra
+
+model:
+  # vLLM rather than TensorRT-LLM: the RAG chart already uses vLLM for the large
+  # MoE Nemotron 3 Super, and a JIT TensorRT-LLM engine build for a 550B model is
+  # impractical. Set an exact tensorParallelism to match the GPUs actually
+  # present.
+  engine: vllm
+  precision: "fp8"
+  tensorParallelism: "8"
+
+resources:
+  limits:
+    nvidia.com/gpu: 8
+  requests:
+    nvidia.com/gpu: 8
+
+storage:
+  pvc:
+    create: true
+    # Weights for a 550B model in fp8 dominate this. 120Gi is the chart default
+    # and is far too small here; size the PVC from the actual profile before
+    # installing.
+    size: 900Gi
+    volumeAccessMode: ReadWriteOnce
+  sharedMemorySizeLimit: "32Gi"
+
+# NB: the chart renders `env` with toYaml, so supplying a list REPLACES the
+# chart's default list rather than merging with it. Every variable the deployment
+# needs must therefore appear here.
+env:
+  - name: NIM_HTTP_API_PORT
+    value: "8000"
+  - name: NIM_SERVED_MODEL_NAME
+    # Must match `model_name` in the AI-Q workflow config exactly, or every call
+    # returns a 404 for an unknown model.
+    value: "nvidia/nemotron-3-ultra-550b-a55b"
+
+# Run:ai / KAI Scheduler fractional GPU. Not used here — this tier claims whole
+# GPUs — but the chart supports it, and it is how the executor tier is packed
+# alongside the retrieval NIMs on a shared node. NVIDIA documents these exact
+# annotations in the RAG chart.
+# podAnnotations:
+#   gpu-fraction: "0.25"
+#   gpu-fraction-num-devices: "1"

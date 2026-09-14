@@ -1,0 +1,59 @@
+# Python dependencies for the SecOps remediation sandbox.
+#
+# Resolved EXCLUSIVELY from the SUSE Application Collection curated index:
+#   https://dp.apps.rancher.io/libraries/python/simple/
+#
+# The index carries 809 Python packages. That is a curated set, not a mirror of
+# PyPI, and the whole point of `index-url` (rather than `extra-index-url`) is
+# that a name absent from it fails the build instead of falling through to an
+# unsigned wheel from the open internet.
+#
+# CONSEQUENCE, STATED PLAINLY: this list is a build-time gate on the
+# architecture. If the sandbox needs a library SUSE does not curate, the options
+# are (a) do without it, (b) ask SUSE to curate it, or (c) vendor it and own its
+# CVEs yourself. Silently widening the index is not on the list — it would
+# reintroduce exactly the supply-chain exposure this image exists to avoid.
+#
+# VERIFICATION STATUS
+#   confirmed present in the index (read from apps.rancher.io/libraries):
+#       aiohttp, anyio, attrs, asyncssh
+#   UNVERIFIED — every other name below. The index's search is client-side, so
+#   individual names could not be checked without Distribution Platform
+#   credentials. Before the first build, check each one:
+#
+#       pip index versions <name>      # with .venv/pip.conf in place
+#
+# Versions are deliberately unpinned here because the available versions are
+# whatever the index carries, and guessing a pin that does not exist produces a
+# build failure that reads like a network problem. Pin them from the index once
+# it has been read, and keep the pins — a remediation sandbox whose own
+# dependencies float is not reproducible evidence.
+
+# --- HTTP, to the four hosts the policy allows -------------------------------
+aiohttp
+requests
+
+# --- the SUSE Security and git forge APIs ------------------------------------
+# Both are plain REST over HTTPS; nothing vendor-specific is needed. The SUSE
+# Security client is four calls (POST /v1/auth, POST /v1/scan/repository,
+# GET /v1/scan/repository/…, GET /v1/scan/scanner) and is not worth a library.
+
+# --- parsing what the agent reads and writes ---------------------------------
+pyyaml                 # Helm values, Kubernetes manifests, the policy itself
+packaging              # version comparison — "is 1.2.4 actually after 1.2.3-rc1"
+defusedxml             # advisories and SBOMs arrive as XML from several sources
+
+# --- SBOM and vulnerability data ---------------------------------------------
+# The SBOM is the reachability signal: which images actually contain the
+# vulnerable package. Without it the triage agent is ranking a spreadsheet.
+packageurl-python      # purl parsing — the join key between SBOM and advisory
+cyclonedx-python-lib   # CycloneDX SBOM read/write
+cvss                   # CVSS v3/v4 vector parsing and scoring
+
+# --- structure ----------------------------------------------------------------
+pydantic               # typed contracts between the agent and its tools
+jsonschema             # validate the artefacts the agent emits before they leave
+
+# --- async ---------------------------------------------------------------------
+anyio
+attrs

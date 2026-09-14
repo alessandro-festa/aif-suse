@@ -1,0 +1,95 @@
+# Helm values for the EXECUTOR tier — Nemotron 3.5 Lightning (30B-A3B), served
+# as a NIM.
+#
+# NOT A BLUEPRINT. This is a values file for the `nim-llm` app, which SUSE AI
+# Factory publishes in its own catalog as "NVIDIA NIM for LLMs" (Supported).
+# Install it from AI Factory → Apps:
+#
+#   chart        nim-llm 2.0.4-pb6.6, from the `nvidia` ClusterRepo
+#   namespace    ns-secops-models
+#   release      nemotron-lightning    <- load-bearing, see below
+#
+# THE RELEASE NAME IS PART OF THE CONTRACT. The RAG component, the guardrails
+# component and configs/config_secops.yml all address this model as
+# `nemotron-lightning.ns-secops-models.svc.cluster.local:8000`.
+#
+# WHAT THIS TIER DOES. It works. Intent classification, triage, the N parallel
+# researcher workers, RAG query rewriting, and the validation agent inside the
+# OpenShell sandbox. High call volume, low cost per call. NVIDIA positions this
+# model explicitly for long-running agents: hybrid Mamba-2 + Transformer MoE with
+# 3B active parameters, so per-call latency and cost stay low across the
+# thousands of tool-calling turns an autonomous remediation loop generates.
+#
+# This is also the tier the data flywheel improves — see nemo-flywheel.values.yaml.
+# Accepted remediation trajectories are LoRA-tuned into Lightning so the cheap
+# model absorbs progressively more of the routine caseload and escalation to the
+# orchestrator tier becomes rarer. That is the economic engine of the whole
+# architecture.
+#
+# SCALES HORIZONTALLY: raise `replicas` rather than tensorParallelism. The
+# researcher workers run concurrently, so this tier is throughput-bound, not
+# latency-bound.
+#
+# STATUS: UNTESTED. Value keys taken from the nim-llm chart as rendered inside
+# nvidia-blueprint-rag v2.6.0; the standalone chart is NGC-gated. The NIM image
+# tag is a placeholder. See ../README.md.
+
+# Two replicas by default: the deep-research agent fans out to several researcher
+# workers at once, and a single replica serialises them, which erases most of the
+# wall-clock benefit of the fan-out.
+replicas: 2
+
+image:
+  # Model ID confirmed from NVIDIA's AI-Q v2.2.0 configs/config_openshell.yml:
+  # `nvidia/nemotron-3.5-lightning-30b-a3b`.
+  repository: nvcr.io/nim/nvidia/nemotron-3.5-lightning-30b-a3b
+  # UNVERIFIED — placeholder, see the tag note in nim-llm-nemotron-ultra.values.yaml.
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+# UNVERIFIED key name — see nim-llm-nemotron-ultra.values.yaml.
+service:
+  name: nemotron-lightning
+
+model:
+  engine: vllm
+  precision: "fp8"
+  # One GPU per replica. A 30B-A3B MoE with 3B active parameters does not need
+  # tensor parallelism; spending GPUs on replicas instead buys concurrency, which
+  # is what the worker fan-out actually wants.
+  tensorParallelism: "1"
+
+resources:
+  limits:
+    nvidia.com/gpu: 1
+  requests:
+    nvidia.com/gpu: 1
+
+storage:
+  pvc:
+    create: true
+    size: 120Gi
+    volumeAccessMode: ReadWriteOnce
+  sharedMemorySizeLimit: "16Gi"
+
+# Supplying `env` REPLACES the chart default list — see
+# nim-llm-nemotron-ultra.values.yaml.
+env:
+  - name: NIM_HTTP_API_PORT
+    value: "8000"
+  - name: NIM_SERVED_MODEL_NAME
+    value: "nvidia/nemotron-3.5-lightning-30b-a3b"
+  # Nemotron 3.5 supports a 1M-token context. Serving the full window reserves an
+  # enormous KV cache and will not fit alongside the retrieval NIMs. Bound it to
+  # what an agent turn actually needs: a large system prompt, the tool catalogue,
+  # and retrieved context.
+  - name: NIM_MAX_MODEL_LEN
+    value: "131072"
+
+  # Once the flywheel produces a LoRA adapter, serve it alongside the base
+  # weights rather than replacing the model — the base stays available for
+  # comparison and rollback. Add to the list above; do NOT add a second `env:`
+  # key. UNVERIFIED variable name — confirm against the NIM documentation for
+  # this model before enabling.
+  # - name: NIM_PEFT_SOURCE
+  #   value: "/model-store/loras"
