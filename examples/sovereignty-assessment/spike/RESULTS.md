@@ -138,6 +138,11 @@ leaves no room for the assessor, k3s and the rest on an 8 GB node. The plan's ch
 (requests `cpu 2 / mem 4Gi`, limits `cpu 4 / mem 8Gi`) needs revisiting: requests must be
 at least `mem 6Gi`, and the documented minimum becomes a **16 GB** node.
 
+It does **not** block the actual test target. The end-to-end cluster is kind
+`sims-datacenter` (Rancher + `aif-operator` already installed): 10 CPU and 21.8 GiB
+allocatable on a single node, ~11% CPU requested — comfortable headroom. The 8 GB limit is
+a documentation-and-claims problem, not a "can we run the demo" problem.
+
 ## Open decisions for the next session
 
 1. **Model provenance.** Qwen3-4B is the only model that works, and it is Chinese-developed.
