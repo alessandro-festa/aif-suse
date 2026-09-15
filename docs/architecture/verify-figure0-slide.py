@@ -121,6 +121,15 @@ def verify(builder, deck, cross_check, min_icon, min_big, max_runs, slugs):
     check(prs.slide_height == Inches(8.333), "slide height is 8.333 in")
 
     slide = prs.slides[0]
+
+    # Every coordinate must be a whole EMU. Column widths are Emu divisions and
+    # come out as floats; add_shape and add_textbox coerce them, add_connector
+    # does not, and one `x="11804904.0"` is enough for PowerPoint to declare the
+    # whole file corrupt. python-pptx reads it back happily, so only this catches it.
+    xml = slide._element.xml
+    floats = sorted(set(re.findall(r'\b(?:x|y|cx|cy)="(-?\d+\.\d+)"', xml)))
+    check(not floats, f"every coordinate is a whole EMU (fractional: {floats})")
+
     pics = [s for s in slide.shapes if s.shape_type == 13]
     oversize = [p for p in pics if p.width > Inches(1.6)]
     check(not oversize,

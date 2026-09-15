@@ -50,8 +50,15 @@ W, H = base.W, base.H
 def seg(slide, x1, y1, x2, y2, colour, lw=Pt(1.1), dash=False, head=True):
     """arrow() with the head made optional, because the feedback return is an
     elbow and MSO_CONNECTOR.STRAIGHT cannot bend — it is drawn as three
-    segments and only the last one carries a head."""
-    c = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, x1, y1, x2, y2)
+    segments and only the last one carries a head.
+
+    The int() calls are not cosmetic. Column widths here are Emu divisions and
+    come out as floats; add_shape and add_textbox coerce, but add_connector
+    writes its arguments straight through, and a single `x="11804904.0"` is an
+    invalid ST_Coordinate that makes PowerPoint refuse to open the file.
+    """
+    c = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT,
+                                   int(x1), int(y1), int(x2), int(y2))
     c.line.color.rgb = colour
     c.line.width = lw
     if dash:
