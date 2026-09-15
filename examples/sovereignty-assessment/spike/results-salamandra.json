@@ -1,0 +1,372 @@
+{
+  "model_path": "/Users/alessandrofesta/.cache/huggingface/hub/models--mradermacher--salamandra-2b-instruct-GGUF/snapshots/1df6eeb84468a4291a25aa6515873166bee38ac3/salamandra-2b-instruct.Q4_K_M.gguf",
+  "build_info": "b10964-b29c606e2",
+  "eos_token": "</s>",
+  "chat_template": "{%- if not date_string is defined %}{%- set date_string = \"2024-09-30\" %}{%- endif %}{%- set system_message = messages[0].content if messages[0].role == \"system\" else \"I am Salamandra, an AI language model developed at the Barcelona Supercomputing Centre (BSC) by the Language Technologies Unit. My knowledge base was last updated on August 2023. Today Date: \"+ date_string +\"\nSoy Salamandra, un modelo ling\u00fc\u00edstico de IA desarrollado en el Barcelona Supercomputing Centre (BSC) por la Language Technologies Unit. Mi base de conocimientos se actualiz\u00f3 por \u00faltima vez en agosto de 2023.\nSoc Salamandra, un model de llenguatge d'IA desenvolupat al Barcelona Supercomputing Centre (BSC) per la Language Technologies Unit. La meva base de coneixement es va actualitzar per \u00faltima vegada l'agost de 2023.\" -%}{%- if messages[0].role == \"system\" -%}{%- set messages = messages[1:] -%}{%- endif -%}{{ \"<|im_start|>system\n\" + system_message + \"<|im_end|>\n\" }}{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}",
+  "transport": "completion",
+  "stop_tests": [
+    {
+      "prompt": "In one sentence, what is the capital of Portugal?",
+      "finish_reason": "stop",
+      "completion_tokens": 9,
+      "leaked_markers": [],
+      "content": "The capital of Portugal is Lisbon.",
+      "ok": true
+    },
+    {
+      "prompt": "List three EU member states. Answer with the names only.",
+      "finish_reason": "stop",
+      "completion_tokens": 12,
+      "leaked_markers": [],
+      "content": "1. Germany\n2. France\n3. Italy",
+      "ok": true
+    },
+    {
+      "prompt": "Explain in two sentences why data residency matters for a public-sector cloud tender.",
+      "finish_reason": "stop",
+      "completion_tokens": 63,
+      "leaked_markers": [],
+      "content": "Data residency is important for a public-sector cloud tender because it ensures that sensitive data is stored and processed within the jurisdiction of the country where the data is being used. This helps to comply with local laws and regulations, and can also provide benefits such as reduced costs and increased security for the organization.",
+      "ok": true
+    }
+  ],
+  "classification": [
+    {
+      "id": "A1",
+      "band": "A",
+      "declaration": "All platform administration and 24/7 incident response is delivered by SUSE Software Solutions Germany GmbH from Nuremberg and Prague. This is fixed in clause 8.3 of the framework contract, which prohibits support access from outside the EEA, and was verified in our ISO/IEC 27001 surveillance audit of March 2026.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"All platform administration and 24/7 incident response is delivered by SUSE Software Solutions Germany GmbH from Nuremberg and Prague. This is fixed in clause 8.3 of the framework contract, which prohibits support access from outside the E.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "All platform administration and 24/7 incident response is delivered by SUSE Software Solutions Germany GmbH from Nuremberg and Prague. This is fixed in clause 8.3 of the framework contract, which prohibits support access from outside the E.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 4.84,
+      "completion_tokens": 79
+    },
+    {
+      "id": "A2",
+      "band": "A",
+      "declaration": "Operational control sits entirely with our in-house SRE team, all of whom are employed in Ireland and France. Third-party vendor access is brokered through a jump host with EU-only IP allowlisting; the 2025 external penetration test report confirms no out-of-region administrative paths exist.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"fully satisfied, and the declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "fully satisfied, and the declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 2.01,
+      "completion_tokens": 52
+    },
+    {
+      "id": "A3",
+      "band": "A",
+      "declaration": "Administration is performed by personnel in the EEA only. Our processor agreement (Annex II, section 4) names every sub-processor and their location, all within Germany, Spain and the Netherlands, and is audited annually under SOC 2 Type II.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration states that operational control of the platform is performed exclusively by personnel located within the EU/EEA and subject to EU jurisdiction. This is supported by the fact that the processor agreement (Annex II, section 4)\",\"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration states that operational control of the platform is performed exclusively by personnel located within the EU/EEA and subject to EU jurisdiction. This is supported by the fact that the processor agreement (Annex II, section 4)",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 2.33,
+      "completion_tokens": 71
+    },
+    {
+      "id": "A4",
+      "band": "A",
+      "declaration": "Platform operations are run from our datacentre in Milan by staff on Italian employment contracts. Support tooling enforces geofencing at the identity provider, and quarterly access reviews evidencing this are retained for seven years.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.63,
+      "completion_tokens": 48
+    },
+    {
+      "id": "A5",
+      "band": "A",
+      "declaration": "Yes. Our managed service provider is EU-incorporated, all named administrators are EEA residents subject to EU jurisdiction, and the contract's clause 12 grants us audit rights that we exercised in November 2025 with no findings.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"Our managed service provider is EU-incorporated, all named administrators are EEA residents subject to EU jurisdiction, and the contract's clause 12 grants us audit rights that we exercised in November 2025 with no findings.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "Our managed service provider is EU-incorporated, all named administrators are EEA residents subject to EU jurisdiction, and the contract's clause 12 grants us audit rights that we exercised in November 2025 with no findings.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 2.49,
+      "completion_tokens": 78
+    },
+    {
+      "id": "B1",
+      "band": "B",
+      "declaration": "Our internal policy requires that all platform administration be carried out by EU-based staff. The policy is approved by the CISO and communicated to all engineering teams.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"Our internal policy requires that all platform administration be carried out by EU-based staff. The policy is approved by the CISO and communicated to all engineering teams.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "Our internal policy requires that all platform administration be carried out by EU-based staff. The policy is approved by the CISO and communicated to all engineering teams.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.71,
+      "completion_tokens": 60
+    },
+    {
+      "id": "B2",
+      "band": "B",
+      "declaration": "We have contractually committed to EEA-only operational control in our master services agreement. No independent audit of this commitment has been carried out yet.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"We have contractually committed to EEA-only operational control in our master services agreement. No independent audit of this commitment has been carried out yet.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "We have contractually committed to EEA-only operational control in our master services agreement. No independent audit of this commitment has been carried out yet.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.79,
+      "completion_tokens": 57
+    },
+    {
+      "id": "B3",
+      "band": "B",
+      "declaration": "All support personnel are located in the European Union. This is documented in our operations handbook.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"All support personnel are located in the European Union. This is documented in our operations handbook.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "All support personnel are located in the European Union. This is documented in our operations handbook.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.48,
+      "completion_tokens": 46
+    },
+    {
+      "id": "B4",
+      "band": "B",
+      "declaration": "The service is operated by our subsidiary in Poland. Staff are Polish nationals working under Polish employment law.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The service is operated by our subsidiary in Poland. Staff are Polish nationals working under Polish employment law.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The service is operated by our subsidiary in Poland. Staff are Polish nationals working under Polish employment law.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.65,
+      "completion_tokens": 49
+    },
+    {
+      "id": "B5",
+      "band": "B",
+      "declaration": "Incident response is handled exclusively by the EU operations team according to our documented runbook. We have not commissioned external verification.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The EU operations team is responsible for incident response according to our documented runbook. We have not commissioned external verification.\",\"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The EU operations team is responsible for incident response according to our documented runbook. We have not commissioned external verification.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.66,
+      "completion_tokens": 49
+    },
+    {
+      "id": "C1",
+      "band": "C",
+      "declaration": "Operational control is primarily EU-based, though our follow-the-sun support model routes tickets raised outside European business hours to a partner team in Bangalore.",
+      "raw": "{\n  \"seal\": 3,\n  \"rationale\": \"The declaration states that operational control of the platform is performed by personnel located within the EU/EEA and subject to EU jurisdiction. This is supported by the fact that the platform follows the sun support model, which routes \",\"confidence\" : 0\n  }",
+      "parsed": {
+        "seal": 3,
+        "rationale": "The declaration states that operational control of the platform is performed by personnel located within the EU/EEA and subject to EU jurisdiction. This is supported by the fact that the platform follows the sun support model, which routes ",
+        "confidence": 0
+      },
+      "errors": [],
+      "latency_s": 2.74,
+      "completion_tokens": 80
+    },
+    {
+      "id": "C2",
+      "band": "C",
+      "declaration": "Most administration is performed from Amsterdam. A small number of escalation engineers in the United States retain break-glass access for severity-1 incidents.",
+      "raw": "{\n  \"seal\": 3,\n  \"rationale\": \"Most administration is performed from Amsterdam. A small number of escalation engineers in the United States retain break-glass access for severity-1 incidents.\",\n  \"confidence\": 0.5\n}",
+      "parsed": {
+        "seal": 3,
+        "rationale": "Most administration is performed from Amsterdam. A small number of escalation engineers in the United States retain break-glass access for severity-1 incidents.",
+        "confidence": 0.5
+      },
+      "errors": [],
+      "latency_s": 2.07,
+      "completion_tokens": 60
+    },
+    {
+      "id": "C3",
+      "band": "C",
+      "declaration": "We intend to migrate all operational control to EU personnel during 2026. Today the platform is administered from our global operations centre.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"We intend to migrate all operational control to EU personnel during 2026. Today the platform is administered from our global operations centre.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "We intend to migrate all operational control to EU personnel during 2026. Today the platform is administered from our global operations centre.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 2.06,
+      "completion_tokens": 57
+    },
+    {
+      "id": "C4",
+      "band": "C",
+      "declaration": "Our staff are in the EU, but the underlying infrastructure is managed by a hyperscaler whose support organisation we do not control and whose engineers may be located anywhere.",
+      "raw": "{\n  \"seal\": 3,\n  \"rationale\": \"Our staff are in the EU, but the underlying infrastructure is managed by a hyperscaler whose support organisation we do not control and whose engineers may be located anywhere.\",\n  \"confidence\": 0.5\n}",
+      "parsed": {
+        "seal": 3,
+        "rationale": "Our staff are in the EU, but the underlying infrastructure is managed by a hyperscaler whose support organisation we do not control and whose engineers may be located anywhere.",
+        "confidence": 0.5
+      },
+      "errors": [],
+      "latency_s": 2.06,
+      "completion_tokens": 64
+    },
+    {
+      "id": "C5",
+      "band": "C",
+      "declaration": "We are working towards EEA-only operations. A project has been funded and a target architecture agreed, but no controls are in place yet.",
+      "raw": "{\n  \"seal\": 3,\n  \"rationale\": \"We are working towards EEA-only operations. A project has been funded and a target architecture agreed, but no controls are in place yet.\",\n  \"confidence\": 0.5\n}",
+      "parsed": {
+        "seal": 3,
+        "rationale": "We are working towards EEA-only operations. A project has been funded and a target architecture agreed, but no controls are in place yet.",
+        "confidence": 0.5
+      },
+      "errors": [],
+      "latency_s": 1.77,
+      "completion_tokens": 59
+    },
+    {
+      "id": "D1",
+      "band": "D",
+      "declaration": "Platform administration is performed by our operations team in Seattle, Washington. Support follows US business hours.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"Our operations team in Seattle, Washington, is responsible for the administration, support, and incident response of the platform. US business hours are followed, and our team is located within the EU/EEA.\",\"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "Our operations team in Seattle, Washington, is responsible for the administration, support, and incident response of the platform. US business hours are followed, and our team is located within the EU/EEA.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 2.2,
+      "completion_tokens": 66
+    },
+    {
+      "id": "D2",
+      "band": "D",
+      "declaration": "No. Operational control is outsourced to a provider headquartered in the United States and subject to the CLOUD Act.",
+      "raw": "{\n  \"seal\": 0,\n  \"rationale\": \"No. Operational control is outsourced to a provider headquartered in the United States and subject to the CLOUD Act.\",\n  \"confidence\": 0\n}",
+      "parsed": {
+        "seal": 0,
+        "rationale": "No. Operational control is outsourced to a provider headquartered in the United States and subject to the CLOUD Act.",
+        "confidence": 0
+      },
+      "errors": [],
+      "latency_s": 1.68,
+      "completion_tokens": 56
+    },
+    {
+      "id": "D3",
+      "band": "D",
+      "declaration": "Our datacentre uses free cooling and we have reduced PUE to 1.15 across the estate, exceeding our 2026 sustainability target.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"Our datacentre uses free cooling and we have reduced PUE to 1.15 across the estate, exceeding our 2026 sustainability target.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "Our datacentre uses free cooling and we have reduced PUE to 1.15 across the estate, exceeding our 2026 sustainability target.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 2.07,
+      "completion_tokens": 62
+    },
+    {
+      "id": "D4",
+      "band": "D",
+      "declaration": "The platform is written in Go and deployed with Helm onto a Kubernetes cluster running SUSE Linux Enterprise.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The platform is written in Go and deployed with Helm onto a Kubernetes cluster running SUSE Linux Enterprise. This is a documented commitment, with no independent verification cited. The platform is operated by personnel located within the \",\"confidence\": 0.5\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The platform is written in Go and deployed with Helm onto a Kubernetes cluster running SUSE Linux Enterprise. This is a documented commitment, with no independent verification cited. The platform is operated by personnel located within the ",
+        "confidence": 0.5
+      },
+      "errors": [],
+      "latency_s": 2.34,
+      "completion_tokens": 72
+    },
+    {
+      "id": "D5",
+      "band": "D",
+      "declaration": "",
+      "raw": "{\n  \"seal\": 0,\n  \"rationale\": \"The organisation did not provide any declaration for this control\",\n  \"confidence\": 0\n}",
+      "parsed": {
+        "seal": 0,
+        "rationale": "The organisation did not provide any declaration for this control",
+        "confidence": 0
+      },
+      "errors": [],
+      "latency_s": 1.18,
+      "completion_tokens": 38
+    }
+  ],
+  "monotonicity": {
+    "seals": {
+      "A": [
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "B": [
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "C": [
+        3,
+        3,
+        4,
+        3,
+        3
+      ],
+      "D": [
+        4,
+        0,
+        4,
+        4,
+        0
+      ]
+    },
+    "means": {
+      "A": 4,
+      "B": 4,
+      "C": 3.2,
+      "D": 2.4
+    },
+    "problems": [
+      "mean(A)=4.00 not > mean(B)=4.00",
+      "min(A)=4 <= max(D)=4"
+    ],
+    "in_expected_window": 7,
+    "total": 20
+  },
+  "latency_s": {
+    "p50": 2.035,
+    "max": 4.84,
+    "mean": 2.088,
+    "n": 20
+  },
+  "peak_rss_mb": 2432.2,
+  "gates": {
+    "A_stops_cleanly": true,
+    "B_schema_valid_20_of_20": true,
+    "C_seals_monotone": false
+  },
+  "passed": false
+}

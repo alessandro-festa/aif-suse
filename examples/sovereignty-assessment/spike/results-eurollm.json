@@ -1,0 +1,371 @@
+{
+  "model_path": "/Users/alessandrofesta/.cache/huggingface/hub/models--mradermacher--EuroLLM-1.7B-Instruct-GGUF/snapshots/2951f08f66429c934c8b01a94347161362430808/EuroLLM-1.7B-Instruct.Q4_K_M.gguf",
+  "build_info": "b10964-b29c606e2",
+  "eos_token": "<|im_end|>",
+  "chat_template": "{%- set system_message = namespace(content='') -%}{%- if messages[0]['role'] == 'system' -%}{%- set system_message.content = messages[0]['content'] -%}{%- endif -%}<|im_start|>system\n{{ system_message.content }}<|im_end|>\n{% for message in messages -%}{%- if message['role'] != 'system' %}<|im_start|>{{ message['role'] }}\n{{ message['content'] }}<|im_end|>\n{%- endif -%}{%- endfor -%}",
+  "stop_tests": [
+    {
+      "prompt": "In one sentence, what is the capital of Portugal?",
+      "finish_reason": "stop",
+      "completion_tokens": 11,
+      "leaked_markers": [],
+      "content": " \nThe capital of Portugal is Lisbon.",
+      "ok": true
+    },
+    {
+      "prompt": "List three EU member states. Answer with the names only.",
+      "finish_reason": "stop",
+      "completion_tokens": 24,
+      "leaked_markers": [],
+      "content": " \n\nThe three EU member states are:\n\n1. France\n2. Germany\n3. Spain",
+      "ok": true
+    },
+    {
+      "prompt": "Explain in two sentences why data residency matters for a public-sector cloud tender.",
+      "finish_reason": "stop",
+      "completion_tokens": 134,
+      "leaked_markers": [],
+      "content": " \n\nData residency refers to the practice of storing and processing data in a specific location, rather than moving it between different locations. In a public-sector cloud tender, data residency is important because it ensures that the data is stored and processed in a secure and controlled environment, which is crucial for the protection of sensitive information. By requiring data residency, the tender ensures that the data is not shared or accessed by unauthorized individuals, which can lead to security breaches and data loss. Additionally, data residency also helps to reduce the costs associated with data storage and processing, which can be beneficial for the public sector organization.",
+      "ok": true
+    }
+  ],
+  "classification": [
+    {
+      "id": "A1",
+      "band": "A",
+      "declaration": "All platform administration and 24/7 incident response is delivered by SUSE Software Solutions Germany GmbH from Nuremberg and Prague. This is fixed in clause 8.3 of the framework contract, which prohibits support access from outside the EEA, and was verified in our ISO/IEC 27001 surveillance audit of March 2026.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).\",\"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 3.64,
+      "completion_tokens": 51
+    },
+    {
+      "id": "A2",
+      "band": "A",
+      "declaration": "Operational control sits entirely with our in-house SRE team, all of whom are employed in Ireland and France. Third-party vendor access is brokered through a jump host with EU-only IP allowlisting; the 2025 external penetration test report confirms no out-of-region administrative paths exist.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration clearly states that operational control sits entirely with our in-house SRE team, all of whom are employed in Ireland and France. This is a strong indicator of the EU jurisdiction of the platform, as the in-house SRE team is\",\"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration clearly states that operational control sits entirely with our in-house SRE team, all of whom are employed in Ireland and France. This is a strong indicator of the EU jurisdiction of the platform, as the in-house SRE team is",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 2.19,
+      "completion_tokens": 81
+    },
+    {
+      "id": "A3",
+      "band": "A",
+      "declaration": "Administration is performed by personnel in the EEA only. Our processor agreement (Annex II, section 4) names every sub-processor and their location, all within Germany, Spain and the Netherlands, and is audited annually under SOC 2 Type II.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).\",\"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.83,
+      "completion_tokens": 51
+    },
+    {
+      "id": "A4",
+      "band": "A",
+      "declaration": "Platform operations are run from our datacentre in Milan by staff on Italian employment contracts. Support tooling enforces geofencing at the identity provider, and quarterly access reviews evidencing this are retained for seven years.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.37,
+      "completion_tokens": 53
+    },
+    {
+      "id": "A5",
+      "band": "A",
+      "declaration": "Yes. Our managed service provider is EU-incorporated, all named administrators are EEA residents subject to EU jurisdiction, and the contract's clause 12 grants us audit rights that we exercised in November 2025 with no findings.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.89,
+      "completion_tokens": 53
+    },
+    {
+      "id": "B1",
+      "band": "B",
+      "declaration": "Our internal policy requires that all platform administration be carried out by EU-based staff. The policy is approved by the CISO and communicated to all engineering teams.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The policy is approved by the CISO and communicated to all engineering teams, which ensures that all platform administration is carried out exclusively by EU-based staff, thus ensuring compliance with the EU's jurisdiction.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The policy is approved by the CISO and communicated to all engineering teams, which ensures that all platform administration is carried out exclusively by EU-based staff, thus ensuring compliance with the EU's jurisdiction.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.78,
+      "completion_tokens": 75
+    },
+    {
+      "id": "B2",
+      "band": "B",
+      "declaration": "We have contractually committed to EEA-only operational control in our master services agreement. No independent audit of this commitment has been carried out yet.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"We have contractually committed to EEA-only operational control in our master services agreement. No independent audit of this commitment has been carried out yet.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "We have contractually committed to EEA-only operational control in our master services agreement. No independent audit of this commitment has been carried out yet.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.52,
+      "completion_tokens": 63
+    },
+    {
+      "id": "B3",
+      "band": "B",
+      "declaration": "All support personnel are located in the European Union. This is documented in our operations handbook.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration clearly states that all support personnel are located in the European Union, which is a documented commitment. This is a strong indicator of the level of operational control being exercised by personnel located within the EU\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration clearly states that all support personnel are located in the European Union, which is a documented commitment. This is a strong indicator of the level of operational control being exercised by personnel located within the EU",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.53,
+      "completion_tokens": 73
+    },
+    {
+      "id": "B4",
+      "band": "B",
+      "declaration": "The service is operated by our subsidiary in Poland. Staff are Polish nationals working under Polish employment law.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.24,
+      "completion_tokens": 54
+    },
+    {
+      "id": "B5",
+      "band": "B",
+      "declaration": "Incident response is handled exclusively by the EU operations team according to our documented runbook. We have not commissioned external verification.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).\",\"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.23,
+      "completion_tokens": 51
+    },
+    {
+      "id": "C1",
+      "band": "C",
+      "declaration": "Operational control is primarily EU-based, though our follow-the-sun support model routes tickets raised outside European business hours to a partner team in Bangalore.",
+      "raw": "{\n  \"seal\": 3,\n  \"rationale\": \"The declaration cites a named entity, a contract clause, and an audit or certification, which are all independent of the control under assessment. The declaration also provides a concrete example of how the control is being implemented, and\",\n  \"confidence\": 0.5\n}",
+      "parsed": {
+        "seal": 3,
+        "rationale": "The declaration cites a named entity, a contract clause, and an audit or certification, which are all independent of the control under assessment. The declaration also provides a concrete example of how the control is being implemented, and",
+        "confidence": 0.5
+      },
+      "errors": [],
+      "latency_s": 2.0,
+      "completion_tokens": 79
+    },
+    {
+      "id": "C2",
+      "band": "C",
+      "declaration": "Most administration is performed from Amsterdam. A small number of escalation engineers in the United States retain break-glass access for severity-1 incidents.",
+      "raw": "{\n  \"seal\": 3,\n  \"rationale\": \"The declaration cites a named entity, a contract clause, and an audit or certification, which are all independent of the control under assessment. The declaration also cites a concrete evidence (a named entity), which is a documented and un\",\"confidence\": 0.0\n}",
+      "parsed": {
+        "seal": 3,
+        "rationale": "The declaration cites a named entity, a contract clause, and an audit or certification, which are all independent of the control under assessment. The declaration also cites a concrete evidence (a named entity), which is a documented and un",
+        "confidence": 0.0
+      },
+      "errors": [],
+      "latency_s": 1.86,
+      "completion_tokens": 80
+    },
+    {
+      "id": "C3",
+      "band": "C",
+      "declaration": "We intend to migrate all operational control to EU personnel during 2026. Today the platform is administered from our global operations centre.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration clearly states that the migration of operational control is intended to be exclusively performed by EU personnel, and that the platform is currently administered from our global operations centre. This clearly demonstrates a\",\"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration clearly states that the migration of operational control is intended to be exclusively performed by EU personnel, and that the platform is currently administered from our global operations centre. This clearly demonstrates a",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.6,
+      "completion_tokens": 68
+    },
+    {
+      "id": "C4",
+      "band": "C",
+      "declaration": "Our staff are in the EU, but the underlying infrastructure is managed by a hyperscaler whose support organisation we do not control and whose engineers may be located anywhere.",
+      "raw": "{\n  \"seal\": 3,\n  \"rationale\": \"The declaration cites a named entity, a contract clause, and an audit or certification, but the control is not fully satisfied. The declaration does not address the control at all.\",\n  \"confidence\": 0.5\n}",
+      "parsed": {
+        "seal": 3,
+        "rationale": "The declaration cites a named entity, a contract clause, and an audit or certification, but the control is not fully satisfied. The declaration does not address the control at all.",
+        "confidence": 0.5
+      },
+      "errors": [],
+      "latency_s": 1.66,
+      "completion_tokens": 71
+    },
+    {
+      "id": "C5",
+      "band": "C",
+      "declaration": "We are working towards EEA-only operations. A project has been funded and a target architecture agreed, but no controls are in place yet.",
+      "raw": "{\n  \"seal\": 3,\n  \"rationale\": \"The declaration cites a project funded and a target architecture agreed, but no controls are in place yet. This indicates that the declaration is partially satisfied, with no independent verification cited.\",\n  \"confidence\": 0.5\n}",
+      "parsed": {
+        "seal": 3,
+        "rationale": "The declaration cites a project funded and a target architecture agreed, but no controls are in place yet. This indicates that the declaration is partially satisfied, with no independent verification cited.",
+        "confidence": 0.5
+      },
+      "errors": [],
+      "latency_s": 1.74,
+      "completion_tokens": 71
+    },
+    {
+      "id": "D1",
+      "band": "D",
+      "declaration": "Platform administration is performed by our operations team in Seattle, Washington. Support follows US business hours.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).\",\"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration cites concrete evidence (a named entity, a contract clause, an audit or certification).",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.22,
+      "completion_tokens": 51
+    },
+    {
+      "id": "D2",
+      "band": "D",
+      "declaration": "No. Operational control is outsourced to a provider headquartered in the United States and subject to the CLOUD Act.",
+      "raw": "{\n  \"seal\": 3,\n  \"rationale\": \"The declaration cites a contract clause, which is a named entity, and an audit or certification, which is an independent verification. The declaration does not address the control at all.\",\n  \"confidence\": 0.5\n}",
+      "parsed": {
+        "seal": 3,
+        "rationale": "The declaration cites a contract clause, which is a named entity, and an audit or certification, which is an independent verification. The declaration does not address the control at all.",
+        "confidence": 0.5
+      },
+      "errors": [],
+      "latency_s": 1.77,
+      "completion_tokens": 71
+    },
+    {
+      "id": "D3",
+      "band": "D",
+      "declaration": "Our datacentre uses free cooling and we have reduced PUE to 1.15 across the estate, exceeding our 2026 sustainability target.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"Our datacentre uses free cooling and we have reduced PUE to 1.15 across the estate, exceeding our 2026 sustainability target. This demonstrates our commitment to sustainability and our ability to operate efficiently and effectively within a\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "Our datacentre uses free cooling and we have reduced PUE to 1.15 across the estate, exceeding our 2026 sustainability target. This demonstrates our commitment to sustainability and our ability to operate efficiently and effectively within a",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.97,
+      "completion_tokens": 84
+    },
+    {
+      "id": "D4",
+      "band": "D",
+      "declaration": "The platform is written in Go and deployed with Helm onto a Kubernetes cluster running SUSE Linux Enterprise.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The platform is operationally controlled by personnel located within the EU/EEA and subject to EU jurisdiction. The deployment of the platform is performed exclusively by personnel located within the EU/EEA and subject to EU jurisdiction, i\",\"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The platform is operationally controlled by personnel located within the EU/EEA and subject to EU jurisdiction. The deployment of the platform is performed exclusively by personnel located within the EU/EEA and subject to EU jurisdiction, i",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 1.8,
+      "completion_tokens": 77
+    },
+    {
+      "id": "D5",
+      "band": "D",
+      "declaration": "",
+      "raw": "{\n  \"seal\": 0,\n  \"rationale\": \"The declaration does not address the control at all.\",\n  \"confidence\": 0\n}",
+      "parsed": {
+        "seal": 0,
+        "rationale": "The declaration does not address the control at all.",
+        "confidence": 0
+      },
+      "errors": [],
+      "latency_s": 0.95,
+      "completion_tokens": 43
+    }
+  ],
+  "monotonicity": {
+    "seals": {
+      "A": [
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "B": [
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "C": [
+        3,
+        3,
+        4,
+        3,
+        3
+      ],
+      "D": [
+        4,
+        3,
+        4,
+        4,
+        0
+      ]
+    },
+    "means": {
+      "A": 4,
+      "B": 4,
+      "C": 3.2,
+      "D": 3
+    },
+    "problems": [
+      "mean(A)=4.00 not > mean(B)=4.00",
+      "min(A)=4 <= max(D)=4"
+    ],
+    "in_expected_window": 6,
+    "total": 20
+  },
+  "latency_s": {
+    "p50": 1.755,
+    "max": 3.64,
+    "mean": 1.7395,
+    "n": 20
+  },
+  "peak_rss_mb": 1877.7,
+  "gates": {
+    "A_stops_cleanly": true,
+    "B_schema_valid_20_of_20": true,
+    "C_seals_monotone": false
+  },
+  "passed": false
+}

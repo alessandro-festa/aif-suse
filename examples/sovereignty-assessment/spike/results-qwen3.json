@@ -1,0 +1,369 @@
+{
+  "model_path": "/Users/alessandrofesta/.cache/huggingface/hub/models--unsloth--Qwen3-4B-Instruct-2507-GGUF/snapshots/a06e946bb6b655725eafa393f4a9745d460374c9/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+  "build_info": "b10964-b29c606e2",
+  "eos_token": "<|im_end|>",
+  "chat_template": "{%- if tools %}\n    {{- '<|im_start|>system\\n' }}\n    {%- if messages[0].role == 'system' %}\n        {{- messages[0].content + '\\n\\n' }}\n    {%- endif %}\n    {{- \"# Tools\\n\\nYou may call one or more functions to assist with the user query.\\n\\nYou are provided with function signatures within <tools></tools> XML tags:\\n<tools>\" }}\n    {%- for tool in tools %}\n        {{- \"\\n\" }}\n        {{- tool | tojson }}\n    {%- endfor %}\n    {{- \"\\n</tools>\\n\\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\\n<tool_call>\\n{\\\"name\\\": <function-name>, \\\"arguments\\\": <args-json-object>}\\n</tool_call><|im_end|>\\n\" }}\n{%- else %}\n    {%- if messages[0].role == 'system' %}\n        {{- '<|im_start|>system\\n' + messages[0].content + '<|im_end|>\\n' }}\n    {%- endif %}\n{%- endif %}\n{%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}\n{%- for message in messages[::-1] %}\n    {%- set index = (messages|length - 1) - loop.index0 %}\n    {%- if ns.multi_step_tool and message.role == \"user\" and message.content is string and not(message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}\n        {%- set ns.multi_step_tool = false %}\n        {%- set ns.last_query_index = index %}\n    {%- endif %}\n{%- endfor %}\n{%- for message in messages %}\n    {%- if message.content is string %}\n        {%- set content = message.content %}\n    {%- else %}\n        {%- set content = '' %}\n    {%- endif %}\n    {%- if (message.role == \"user\") or (message.role == \"system\" and not loop.first) %}\n        {{- '<|im_start|>' + message.role + '\\n' + content + '<|im_end|>' + '\\n' }}\n    {%- elif message.role == \"assistant\" %}\n        {%- set reasoning_content = '' %}\n        {%- if message.reasoning_content is string %}\n            {%- set reasoning_content = message.reasoning_content %}\n        {%- else %}\n            {%- if '</think>' in content %}\n                {%- set reasoning_content = ((content.split('</think>')|first).rstrip('\\n').split('<think>')|last).lstrip('\\n') %}\n                {%- set content = (content.split('</think>')|last).lstrip('\\n') %}\n            {%- endif %}\n        {%- endif %}\n        {%- if loop.index0 > ns.last_query_index %}\n            {%- if loop.last or (not loop.last and reasoning_content) %}\n                {{- '<|im_start|>' + message.role + '\\n<think>\\n' + reasoning_content.strip('\\n') + '\\n</think>\\n\\n' + content.lstrip('\\n') }}\n            {%- else %}\n                {{- '<|im_start|>' + message.role + '\\n' + content }}\n            {%- endif %}\n        {%- else %}\n            {{- '<|im_start|>' + message.role + '\\n' + content }}\n        {%- endif %}\n        {%- if message.tool_calls %}\n            {%- for tool_call in message.tool_calls %}\n                {%- if (loop.first and content) or (not loop.first) %}\n                    {{- '\\n' }}\n                {%- endif %}\n                {%- if tool_call.function %}\n                    {%- set tool_call = tool_call.function %}\n                {%- endif %}\n                {{- '<tool_call>\\n{\"name\": \"' }}\n                {{- tool_call.name }}\n                {{- '\", \"arguments\": ' }}\n                {%- if tool_call.arguments is string %}\n                    {{- tool_call.arguments }}\n                {%- else %}\n                    {{- tool_call.arguments | tojson }}\n                {%- endif %}\n                {{- '}\\n</tool_call>' }}\n            {%- endfor %}\n        {%- endif %}\n        {{- '<|im_end|>\\n' }}\n    {%- elif message.role == \"tool\" %}\n        {%- if loop.first or (messages[loop.index0 - 1].role != \"tool\") %}\n            {{- '<|im_start|>user' }}\n        {%- endif %}\n        {{- '\\n<tool_response>\\n' }}\n        {{- content }}\n        {{- '\\n</tool_response>' }}\n        {%- if loop.last or (messages[loop.index0 + 1].role != \"tool\") %}\n            {{- '<|im_end|>\\n' }}\n        {%- endif %}\n    {%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt %}\n    {{- '<|im_start|>assistant\\n' }}\n{%- endif %}",
+  "transport": "completion",
+  "stop_tests": [
+    {
+      "prompt": "In one sentence, what is the capital of Portugal?",
+      "finish_reason": "stop",
+      "completion_tokens": 8,
+      "leaked_markers": [],
+      "content": "The capital of Portugal is Lisbon.",
+      "ok": true
+    },
+    {
+      "prompt": "List three EU member states. Answer with the names only.",
+      "finish_reason": "stop",
+      "completion_tokens": 6,
+      "leaked_markers": [],
+      "content": "Germany, France, Italy",
+      "ok": true
+    },
+    {
+      "prompt": "Explain in two sentences why data residency matters for a public-sector cloud tender.",
+      "finish_reason": "stop",
+      "completion_tokens": 67,
+      "leaked_markers": [],
+      "content": "Data residency matters in a public-sector cloud tender because public sector organizations often have strict legal and regulatory requirements\u2014such as data sovereignty laws\u2014that mandate where sensitive citizen data must be stored. Ensuring data resides in a specific jurisdiction supports compliance with privacy laws (like GDPR or national data protection acts) and maintains public trust in data handling.",
+      "ok": true
+    }
+  ],
+  "classification": [
+    {
+      "id": "A1",
+      "band": "A",
+      "declaration": "All platform administration and 24/7 incident response is delivered by SUSE Software Solutions Germany GmbH from Nuremberg and Prague. This is fixed in clause 8.3 of the framework contract, which prohibits support access from outside the EEA, and was verified in our ISO/IEC 27001 surveillance audit of March 2026.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration specifies that administration and incident response are performed by SUSE Software Solutions Germany GmbH from Nuremberg and Prague, with contractual prohibition on external EEA access and verification via ISO/IEC 27001 audt\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration specifies that administration and incident response are performed by SUSE Software Solutions Germany GmbH from Nuremberg and Prague, with contractual prohibition on external EEA access and verification via ISO/IEC 27001 audt",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 6.17,
+      "completion_tokens": 73
+    },
+    {
+      "id": "A2",
+      "band": "A",
+      "declaration": "Operational control sits entirely with our in-house SRE team, all of whom are employed in Ireland and France. Third-party vendor access is brokered through a jump host with EU-only IP allowlisting; the 2025 external penetration test report confirms no out-of-region administrative paths exist.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration specifies that operational control is held by in-house SRE teams in Ireland and France, with third-party access restricted via a jump host and EU-only IP allowlisting, supported by a 2025 penetration test confirming no outof\",\n  \"confidence\": 0.95\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration specifies that operational control is held by in-house SRE teams in Ireland and France, with third-party access restricted via a jump host and EU-only IP allowlisting, supported by a 2025 penetration test confirming no outof",
+        "confidence": 0.95
+      },
+      "errors": [],
+      "latency_s": 6.03,
+      "completion_tokens": 78
+    },
+    {
+      "id": "A3",
+      "band": "A",
+      "declaration": "Administration is performed by personnel in the EEA only. Our processor agreement (Annex II, section 4) names every sub-processor and their location, all within Germany, Spain and the Netherlands, and is audited annually under SOC 2 Type II.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration states that administration is performed by EEA personnel and specifies that all sub-processors are located in Germany, Spain, and the Netherlands, with annual SOC 2 Type II audits providing independent verification.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration states that administration is performed by EEA personnel and specifies that all sub-processors are located in Germany, Spain, and the Netherlands, with annual SOC 2 Type II audits providing independent verification.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 4.79,
+      "completion_tokens": 65
+    },
+    {
+      "id": "A4",
+      "band": "A",
+      "declaration": "Platform operations are run from our datacentre in Milan by staff on Italian employment contracts. Support tooling enforces geofencing at the identity provider, and quarterly access reviews evidencing this are retained for seven years.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration specifies that operations are run in Milan by Italian staff on employment contracts, with geofencing enforced and quarterly access reviews retained for seven years, providing concrete evidence of EU-based operational control\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration specifies that operations are run in Milan by Italian staff on employment contracts, with geofencing enforced and quarterly access reviews retained for seven years, providing concrete evidence of EU-based operational control",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 4.68,
+      "completion_tokens": 63
+    },
+    {
+      "id": "A5",
+      "band": "A",
+      "declaration": "Yes. Our managed service provider is EU-incorporated, all named administrators are EEA residents subject to EU jurisdiction, and the contract's clause 12 grants us audit rights that we exercised in November 2025 with no findings.",
+      "raw": "{\n  \"seal\": 4,\n  \"rationale\": \"The declaration specifies that administrators are EEA residents under EU jurisdiction and cites a contract clause with an audit exercise in November 2025 with no findings, providing concrete evidence.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 4,
+        "rationale": "The declaration specifies that administrators are EEA residents under EU jurisdiction and cites a contract clause with an audit exercise in November 2025 with no findings, providing concrete evidence.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 4.85,
+      "completion_tokens": 60
+    },
+    {
+      "id": "B1",
+      "band": "B",
+      "declaration": "Our internal policy requires that all platform administration be carried out by EU-based staff. The policy is approved by the CISO and communicated to all engineering teams.",
+      "raw": "{\n  \"seal\": 2,\n  \"rationale\": \"The declaration states a policy requiring EU-based staff for platform administration, approved by CISO and communicated, but lacks evidence of exclusive operational control or enforcement mechanisms.\",\n  \"confidence\": 0.7\n}",
+      "parsed": {
+        "seal": 2,
+        "rationale": "The declaration states a policy requiring EU-based staff for platform administration, approved by CISO and communicated, but lacks evidence of exclusive operational control or enforcement mechanisms.",
+        "confidence": 0.7
+      },
+      "errors": [],
+      "latency_s": 4.3,
+      "completion_tokens": 57
+    },
+    {
+      "id": "B2",
+      "band": "B",
+      "declaration": "We have contractually committed to EEA-only operational control in our master services agreement. No independent audit of this commitment has been carried out yet.",
+      "raw": "{\n  \"seal\": 3,\n  \"rationale\": \"The declaration states a contractual commitment to EEA-only operational control, documented in the master services agreement, which satisfies the control as a documented commitment.\",\n  \"confidence\": 0.9\n}",
+      "parsed": {
+        "seal": 3,
+        "rationale": "The declaration states a contractual commitment to EEA-only operational control, documented in the master services agreement, which satisfies the control as a documented commitment.",
+        "confidence": 0.9
+      },
+      "errors": [],
+      "latency_s": 3.3,
+      "completion_tokens": 55
+    },
+    {
+      "id": "B3",
+      "band": "B",
+      "declaration": "All support personnel are located in the European Union. This is documented in our operations handbook.",
+      "raw": "{\n  \"seal\": 3,\n  \"rationale\": \"The declaration states that all support personnel are located in the European Union and references documentation in the operations handbook, indicating a documented commitment.\",\n  \"confidence\": 0.9\n}",
+      "parsed": {
+        "seal": 3,
+        "rationale": "The declaration states that all support personnel are located in the European Union and references documentation in the operations handbook, indicating a documented commitment.",
+        "confidence": 0.9
+      },
+      "errors": [],
+      "latency_s": 3.15,
+      "completion_tokens": 52
+    },
+    {
+      "id": "B4",
+      "band": "B",
+      "declaration": "The service is operated by our subsidiary in Poland. Staff are Polish nationals working under Polish employment law.",
+      "raw": "{\n  \"seal\": 1,\n  \"rationale\": \"The declaration states staff are Polish nationals under Polish employment law, but does not confirm that operational control is exercised exclusively by EU/EEA personnel or that such personnel are subject to EU jurisdiction.\",\n  \"confidence\": 0.7\n}",
+      "parsed": {
+        "seal": 1,
+        "rationale": "The declaration states staff are Polish nationals under Polish employment law, but does not confirm that operational control is exercised exclusively by EU/EEA personnel or that such personnel are subject to EU jurisdiction.",
+        "confidence": 0.7
+      },
+      "errors": [],
+      "latency_s": 3.61,
+      "completion_tokens": 64
+    },
+    {
+      "id": "B5",
+      "band": "B",
+      "declaration": "Incident response is handled exclusively by the EU operations team according to our documented runbook. We have not commissioned external verification.",
+      "raw": "{\n  \"seal\": 2,\n  \"rationale\": \"The declaration states incident response is handled exclusively by the EU operations team, but notes no external verification, indicating a partial satisfaction with caveats on independent validation.\",\n  \"confidence\": 0.8\n}",
+      "parsed": {
+        "seal": 2,
+        "rationale": "The declaration states incident response is handled exclusively by the EU operations team, but notes no external verification, indicating a partial satisfaction with caveats on independent validation.",
+        "confidence": 0.8
+      },
+      "errors": [],
+      "latency_s": 3.34,
+      "completion_tokens": 57
+    },
+    {
+      "id": "C1",
+      "band": "C",
+      "declaration": "Operational control is primarily EU-based, though our follow-the-sun support model routes tickets raised outside European business hours to a partner team in Bangalore.",
+      "raw": "{\n  \"seal\": 2,\n  \"rationale\": \"The declaration states that operational control is primarily EU-based but acknowledges that follow-the-sun support routes tickets to a partner team in Bangalore, indicating a caveats to exclusive EU-based control.\",\n  \"confidence\": 0.9\n}",
+      "parsed": {
+        "seal": 2,
+        "rationale": "The declaration states that operational control is primarily EU-based but acknowledges that follow-the-sun support routes tickets to a partner team in Bangalore, indicating a caveats to exclusive EU-based control.",
+        "confidence": 0.9
+      },
+      "errors": [],
+      "latency_s": 3.82,
+      "completion_tokens": 63
+    },
+    {
+      "id": "C2",
+      "band": "C",
+      "declaration": "Most administration is performed from Amsterdam. A small number of escalation engineers in the United States retain break-glass access for severity-1 incidents.",
+      "raw": "{\n  \"seal\": 2,\n  \"rationale\": \"The declaration states that most administration is performed in Amsterdam but acknowledges U.S.-based engineers have break-glass access for severity-1 incidents, indicating a caveat that undermines exclusive EU operational control.\",\n  \"confidence\": 0.95\n}",
+      "parsed": {
+        "seal": 2,
+        "rationale": "The declaration states that most administration is performed in Amsterdam but acknowledges U.S.-based engineers have break-glass access for severity-1 incidents, indicating a caveat that undermines exclusive EU operational control.",
+        "confidence": 0.95
+      },
+      "errors": [],
+      "latency_s": 3.95,
+      "completion_tokens": 65
+    },
+    {
+      "id": "C3",
+      "band": "C",
+      "declaration": "We intend to migrate all operational control to EU personnel during 2026. Today the platform is administered from our global operations centre.",
+      "raw": "{\n  \"seal\": 1,\n  \"rationale\": \"The declaration states an intent to migrate operational control to EU personnel by 2026, but provides no current implementation or evidence of existing compliance.\",\n  \"confidence\": 0.8\n}",
+      "parsed": {
+        "seal": 1,
+        "rationale": "The declaration states an intent to migrate operational control to EU personnel by 2026, but provides no current implementation or evidence of existing compliance.",
+        "confidence": 0.8
+      },
+      "errors": [],
+      "latency_s": 3.54,
+      "completion_tokens": 56
+    },
+    {
+      "id": "C4",
+      "band": "C",
+      "declaration": "Our staff are in the EU, but the underlying infrastructure is managed by a hyperscaler whose support organisation we do not control and whose engineers may be located anywhere.",
+      "raw": "{\n  \"seal\": 1,\n  \"rationale\": \"The declaration states that staff are in the EU but acknowledges lack of control over the hyperscaler's support organisation, indicating intent to maintain EU-based operational control with caveats.\",\n  \"confidence\": 0.9\n}",
+      "parsed": {
+        "seal": 1,
+        "rationale": "The declaration states that staff are in the EU but acknowledges lack of control over the hyperscaler's support organisation, indicating intent to maintain EU-based operational control with caveats.",
+        "confidence": 0.9
+      },
+      "errors": [],
+      "latency_s": 4.28,
+      "completion_tokens": 60
+    },
+    {
+      "id": "C5",
+      "band": "C",
+      "declaration": "We are working towards EEA-only operations. A project has been funded and a target architecture agreed, but no controls are in place yet.",
+      "raw": "{\n  \"seal\": 1,\n  \"rationale\": \"The declaration states an intent to achieve EEA-only operations but notes no controls are in place yet, indicating only a plan without implementation.\",\n  \"confidence\": 0.9\n}",
+      "parsed": {
+        "seal": 1,
+        "rationale": "The declaration states an intent to achieve EEA-only operations but notes no controls are in place yet, indicating only a plan without implementation.",
+        "confidence": 0.9
+      },
+      "errors": [],
+      "latency_s": 3.47,
+      "completion_tokens": 53
+    },
+    {
+      "id": "D1",
+      "band": "D",
+      "declaration": "Platform administration is performed by our operations team in Seattle, Washington. Support follows US business hours.",
+      "raw": "{\n  \"seal\": 0,\n  \"rationale\": \"The declaration states that platform administration is performed in Seattle, Washington, which is outside the EU/EEA and not subject to EU jurisdiction, thus failing to meet the control requirement.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 0,
+        "rationale": "The declaration states that platform administration is performed in Seattle, Washington, which is outside the EU/EEA and not subject to EU jurisdiction, thus failing to meet the control requirement.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 3.32,
+      "completion_tokens": 60
+    },
+    {
+      "id": "D2",
+      "band": "D",
+      "declaration": "No. Operational control is outsourced to a provider headquartered in the United States and subject to the CLOUD Act.",
+      "raw": "{\n  \"seal\": 0,\n  \"rationale\": \"The declaration explicitly states that operational control is outsourced to a U.S.-based provider subject to the CLOUD Act, which contradicts the requirement for control to be exercised by EU/EEA personnel under EU jurisdiction.\",\n  \"confidence\": 1\n}",
+      "parsed": {
+        "seal": 0,
+        "rationale": "The declaration explicitly states that operational control is outsourced to a U.S.-based provider subject to the CLOUD Act, which contradicts the requirement for control to be exercised by EU/EEA personnel under EU jurisdiction.",
+        "confidence": 1
+      },
+      "errors": [],
+      "latency_s": 4.15,
+      "completion_tokens": 68
+    },
+    {
+      "id": "D3",
+      "band": "D",
+      "declaration": "Our datacentre uses free cooling and we have reduced PUE to 1.15 across the estate, exceeding our 2026 sustainability target.",
+      "raw": "{\n  \"seal\": 0,\n  \"rationale\": \"The declaration addresses energy efficiency and sustainability, not operational control or personnel location within the EU/EEA or subject to EU jurisdiction.\",\n  \"confidence\": 1.0\n}",
+      "parsed": {
+        "seal": 0,
+        "rationale": "The declaration addresses energy efficiency and sustainability, not operational control or personnel location within the EU/EEA or subject to EU jurisdiction.",
+        "confidence": 1.0
+      },
+      "errors": [],
+      "latency_s": 3.27,
+      "completion_tokens": 52
+    },
+    {
+      "id": "D4",
+      "band": "D",
+      "declaration": "The platform is written in Go and deployed with Helm onto a Kubernetes cluster running SUSE Linux Enterprise.",
+      "raw": "{\n  \"seal\": 0,\n  \"rationale\": \"The declaration does not address operational control, personnel location, or jurisdictional compliance related to administration, support, or incident response.\",\n  \"confidence\": 0.0\n}",
+      "parsed": {
+        "seal": 0,
+        "rationale": "The declaration does not address operational control, personnel location, or jurisdictional compliance related to administration, support, or incident response.",
+        "confidence": 0.0
+      },
+      "errors": [],
+      "latency_s": 2.94,
+      "completion_tokens": 51
+    },
+    {
+      "id": "D5",
+      "band": "D",
+      "declaration": "",
+      "raw": "{\n  \"seal\": 0,\n  \"rationale\": \"The organisation provided no declaration for this control, thus it does not address the requirement at all.\",\n  \"confidence\": 1.0\n}",
+      "parsed": {
+        "seal": 0,
+        "rationale": "The organisation provided no declaration for this control, thus it does not address the requirement at all.",
+        "confidence": 1.0
+      },
+      "errors": [],
+      "latency_s": 2.43,
+      "completion_tokens": 45
+    }
+  ],
+  "monotonicity": {
+    "seals": {
+      "A": [
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "B": [
+        2,
+        3,
+        3,
+        1,
+        2
+      ],
+      "C": [
+        2,
+        2,
+        1,
+        1,
+        1
+      ],
+      "D": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "means": {
+      "A": 4,
+      "B": 2.2,
+      "C": 1.4,
+      "D": 0
+    },
+    "problems": [],
+    "in_expected_window": 19,
+    "total": 20
+  },
+  "latency_s": {
+    "p50": 3.715,
+    "max": 6.17,
+    "mean": 3.9695,
+    "n": 20
+  },
+  "peak_rss_mb": 5021.6,
+  "gates": {
+    "A_stops_cleanly": true,
+    "B_schema_valid_20_of_20": true,
+    "C_seals_monotone": true
+  },
+  "passed": true
+}
