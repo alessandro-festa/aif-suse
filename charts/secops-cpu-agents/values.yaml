@@ -927,9 +927,11 @@ sandbox:
         exec curl "$@" "{{ include "secops-cpu-agents.nvScheme" . }}://{{ include "secops-cpu-agents.nvHost" . }}:{{ include "secops-cpu-agents.nvPort" . }}${path}"
       nv-survey: |
         #!/usr/bin/env python3
-        # usage: nv-survey            — every image the scanner has findings for,
-        #                               ranked most urgent first, numbered
-        #        nv-survey <image>     — the findings for one image, in detail
+        # usage: nv-survey             — every image the scanner has findings
+        #                                for, ranked most urgent first, numbered
+        #        nv-survey <image>      — the findings for one image, in detail
+        #        nv-survey --scan <img> — ASK the scanner to scan the running
+        #                                containers of that image, now
         #
         # WHY THIS IS A TOOL AND NOT A PROMPT. SUSE Security answers with one
         # record per CVE, each carrying a paragraph of prose and the full list of
@@ -1011,11 +1013,83 @@ sandbox:
                 return bad("AUTH", "%s %s -> HTTP %s: %s" % (method, path, code, text[:200]))
             if not code.startswith("2"):
                 return bad("HTTP-" + code, "%s %s: %s" % (method, path, text[:200]))
+            # A 2xx WITH NO BODY IS A SUCCESS, not a malformed answer.
+            # `POST /v1/scan/workload/<id>` queues a scan and replies 200 with
+            # nothing in it; without this it would be reported as NOT-JSON, so
+            # the one call that fixes the unscanned-image problem would look
+            # like the scanner being broken. Callers that need a body still get
+            # a clear error, because `{}` fails their own field check — the
+            # vulasset query below answers `{}` with NO-QUERY-ID.
+            if not text.strip():
+                return {}
             try:
                 return json.loads(text)
             except ValueError:
                 return bad("NOT-JSON", "%s %s answered HTTP %s with a non-JSON body: %s"
                                        % (method, path, code, text[:200]))
+
+        if WANT == "--scan":
+            # ASK, DO NOT WAIT. This is the fix for the failure that ended the
+            # 2026-09-18 run: the canary came up Ready on
+            # `dp.apps.rancher.io/containers/nginx:1.31.6-6.1`, the pipeline
+            # polled `/v1/vulasset` for the full 600s, and SUSE Security never
+            # reported a single finding for it. Nothing was broken — the survey
+            # worked, the key worked, auto-scan was on. Auto-scan simply does
+            # not promise to look at a new container within any particular
+            # time, and on a 2-vCPU laptop cluster with one scanner pod it does
+            # not. The pipeline was asking "has anyone scanned this yet" over
+            # and over, when the API it already talks to takes "scan this now".
+            #
+            # `POST /v1/scan/workload/<container-id>` queues that scan. It is
+            # asynchronous — it returns as soon as the request is accepted, so
+            # the poll loop that follows it in the callers stays — but it means
+            # the scan is now something the run caused rather than something it
+            # hoped for.
+            #
+            # THE ID IS A CONTAINER ID, not a pod or Deployment name, so it has
+            # to be looked up on every call: a pod that restarts gets a new one.
+            # `/v1/workload` returns pods with their containers nested under
+            # `children`, and it is the children that carry the image.
+            want = sys.argv[2] if len(sys.argv) > 2 else ""
+            if not want:
+                sys.stderr.write("usage: nv-survey --scan <image>\n")
+                sys.exit(2)
+            live = call("GET", "/v1/workload?brief=true")
+            flat = []
+            for w in live.get("workloads") or []:
+                flat.append(w)
+                flat += w.get("children") or []
+            running = [w for w in flat if w.get("id") and w.get("running") is not False]
+            hits = [w for w in running if want in (w.get("image") or "")]
+            if not hits:
+                # The runtime sometimes reports an image without its registry,
+                # and a substring match on the full reference then misses a
+                # container that is plainly the right one. Fall back to the
+                # repository:tag tail before giving up.
+                tail = want.rsplit("/", 1)[-1]
+                hits = [w for w in running if tail and tail in (w.get("image") or "")]
+            if not hits:
+                print("  status: NO-WORKLOAD")
+                print("  no running container on this cluster is using %s, so there" % want)
+                print("  is nothing to scan. A workload scan needs a running container;")
+                print("  this is not a statement about the image.")
+                seen = sorted({w.get("image") or "?" for w in running})[:12]
+                if seen:
+                    print("  images the scanner can see running:")
+                    for s in seen:
+                        print("    " + s)
+                sys.exit(4)
+            for w in hits:
+                call("POST", "/v1/scan/workload/" + w["id"])
+                print("  queued: %s  %s  %s"
+                      % (w.get("display_name") or w.get("name") or "?",
+                         w.get("domain") or "?", w["id"][:12]))
+            # One status line, same contract as every other mode. TRIGGERED
+            # means the request was accepted, NOT that a result exists yet —
+            # the caller still has to poll, and the caller still has to refuse
+            # to call an empty result clean.
+            print("  status: TRIGGERED %d" % len(hits))
+            sys.exit(0)
 
         head = call("POST", "/v1/vulasset", {})
         if "query_id" not in head:
@@ -1176,8 +1250,41 @@ sandbox:
         old=${pair%% *}; new=${pair##* }
         echo "confirming: ${old} -> ${new}"
 
-        sold=$(survey "$old"); snew=$(survey "$new")
-        stold=$(field "$sold" status); stnew=$(field "$snew" status)
+        # ASK FOR THE SCAN OF WHAT IS SERVING NOW, then wait for it. The rollout
+        # replaced the pod, so the container running the replacement is one the
+        # scanner has never seen, and auto-scan does not promise to reach it
+        # within any particular time — that is what cost the 2026-09-18 run at
+        # the canary step. Requesting it outright makes this a measurement the
+        # run caused; the empty answer is still refused as UNSCANNED below.
+        #
+        # The deadline is the canary's, reused: it is the same question about
+        # the same scanner, and two knobs for one wait is a knob too many.
+        trig=$(/sandbox/bin/nv-survey --scan "$new" 2>&1)
+        printf '%s\n' "$trig"
+        sttrig=$(field "$trig" status)
+        scandeadline={{ .Values.deploy.canary.scanTimeoutSeconds }}
+        scanwaited=0
+        snew=""
+        stnew=""
+        while [ "$scanwaited" -lt "$scandeadline" ]; do
+          snew=$(survey "$new")
+          stnew=$(field "$snew" status)
+          [ "$stnew" = "SCANNED" ] && break
+          case "$stnew" in ERROR\ *) break;; esac
+          sleep 20
+          scanwaited=$((scanwaited + 20))
+          if [ $((scanwaited % 120)) -eq 0 ]; then
+            trig=$(/sandbox/bin/nv-survey --scan "$new" 2>&1)
+            sttrig=$(field "$trig" status)
+            echo "  asked again at ${scanwaited}s: ${sttrig:-no status}"
+          fi
+          echo "  waiting for the scanner to report on ${new}: ${scanwaited}s"
+        done
+        # The old image is NOT re-requested. Nothing should be running it any
+        # more, so `NO-WORKLOAD` would be the expected answer and the question
+        # here is what the scanner still remembers about it.
+        sold=$(survey "$old")
+        stold=$(field "$sold" status)
         nowold=$(field "$sold" counts); nownew=$(field "$snew" counts)
         echo "old ${old}: ${stold:-NO-STATUS} ${nowold}"
         echo "new ${new}: ${stnew:-NO-STATUS} ${nownew}"
@@ -1199,7 +1306,7 @@ sandbox:
 
         if [ "$stnew" != "SCANNED" ]; then
           # The one result that must never be rendered as a pass.
-          comment "**Unverified.** The merge has been applied, but SUSE Security reports no findings for \`${new}\`, so this rescan measured nothing. An image the scanner has not looked at is indistinguishable from a clean one from here.\\n\\nOld image \`${old}\`: ${nowold:-no longer reported, i.e. not running}."
+          comment "**Unverified.** The merge has been applied, but SUSE Security reports no findings for \`${new}\` after ${scanwaited}s, so this rescan measured nothing. An image the scanner has not looked at is indistinguishable from a clean one from here.\\n\\nThe scan was requested outright rather than left to auto-scan, and the last request returned \`${sttrig:-no status}\`: \`NO-WORKLOAD\` means the scanner sees no running container for this image, \`TRIGGERED\` means it accepted the request and did not finish in time.\\n\\nOld image \`${old}\`: ${nowold:-no longer reported, i.e. not running}."
           say "the scanner reports nothing for ${new}. That is UNSCANNED, not clean."
           say "It is on the pull request as unverified. Do not call it a pass."
           exit 1
@@ -1422,8 +1529,9 @@ sandbox:
         ' 2>&1) || {
           say "could not read the canary workload ${cns}/${cname}:"
           printf '%s\n' "$container" | head -c 600 >&2
-          say "It is seeded by hand, once, from 40-canary-storefront.yaml. If it is"
-          say "missing, say so and stop."
+          say "It is created by the orchestrator at the start of this step, from"
+          say "deploy.canary.template. If it is missing, the create failed — say"
+          say "so and stop."
           exit 1; }
         [ -n "$container" ] || {
           say "${cns}/${cname} does not have exactly one container, so there is no"
@@ -1484,9 +1592,21 @@ sandbox:
         fi
         echo "canary Ready after ${waited}s on ${new}"
 
-        # --- 5. wait for the scanner to catch up ------------------------------
-        # A new pod is not a scanned pod. NeuVector queues the image behind
-        # whatever else it is doing, and on this hardware that is minutes.
+        # --- 5. ask for the scan, then wait for it ----------------------------
+        # A new pod is not a scanned pod, and on 2026-09-18 it never became one:
+        # the canary ran Ready for the full 600s and SUSE Security reported
+        # nothing for it, with the key working, the shim up and auto-scan on.
+        # Auto-scan makes no promise about when it will reach a new container.
+        # So the scan is now requested outright — see `nv-survey --scan`.
+        #
+        # The request is not a result. It is asynchronous, the poll below is
+        # unchanged, and an empty answer is still refused as UNSCANNED. What it
+        # buys is that a timeout now means the scanner was asked and did not
+        # deliver, which is a fault, rather than that nobody ever asked, which
+        # was a design bug.
+        trig=$(/sandbox/bin/nv-survey --scan "$new" 2>&1)
+        printf '%s\n' "$trig"
+        sttrig=$(field "$trig" status)
         scandeadline={{ .Values.deploy.canary.scanTimeoutSeconds }}
         scanwaited=0
         after=""
@@ -1504,6 +1624,14 @@ sandbox:
           case "$stafter" in ERROR\ *) break;; esac
           sleep 20
           scanwaited=$((scanwaited + 20))
+          # Asked again every two minutes. A pod that restarts comes back with a
+          # new container id, and a request naming the old one is discarded
+          # without a word.
+          if [ $((scanwaited % 120)) -eq 0 ]; then
+            trig=$(/sandbox/bin/nv-survey --scan "$new" 2>&1)
+            sttrig=$(field "$trig" status)
+            echo "  asked again at ${scanwaited}s: ${sttrig:-no status}"
+          fi
           echo "  waiting for the scanner to report on ${new}: ${scanwaited}s"
         done
         case "$stafter" in
@@ -1516,7 +1644,7 @@ sandbox:
             exit 1;;
         esac
         if [ "$stafter" != "SCANNED" ]; then
-          comment "**Unverified — do not read this as a pass.** \`${new}\` has been running as a canary in \`${cns}/${cname}\` for ${scanwaited}s and SUSE Security has still reported no findings for it, so the replacement is **UNSCANNED**, not clean.\\n\\nFor reference, \`${old}\` right now: \`${before}\`.\\n\\nAn image the scanner cannot pull and an image with nothing wrong with it are indistinguishable from here, and so is a scanner with auto-scan switched off. A human should find out which before merging."
+          comment "**Unverified — do not read this as a pass.** \`${new}\` has been running as a canary in \`${cns}/${cname}\` for ${scanwaited}s and SUSE Security has still reported no findings for it, so the replacement is **UNSCANNED**, not clean.\\n\\nFor reference, \`${old}\` right now: \`${before}\`.\\n\\nThe scan was not left to auto-scan: it was requested outright with \`POST /v1/scan/workload\`, and the last request returned \`${sttrig:-no status}\`. That narrows it. \`NO-WORKLOAD\` means the scanner cannot see a running container for this image at all, which is a cluster problem rather than an image one. \`TRIGGERED\` means the scan was accepted and did not finish in ${scanwaited}s — check \`GET /v1/scan/status\` for a queue, and the scanner pod's logs for an image it could not read.\\n\\nWhat has not been established is anything about the image. An image nothing has scanned and an image with nothing wrong with it are the same empty answer from here."
           say "the canary is Ready but SUSE Security has reported nothing for ${new}"
           say "after ${scanwaited}s. That is UNSCANNED, not clean, and it is on the"
           say "pull request as unverified. Do not describe it as a pass."
@@ -2649,24 +2777,100 @@ deploy:
   # which was the honest reading of a measurement that could not be made.
   #
   # Now the replacement really runs, alongside the one it replaces, before the
-  # merge. The workload named here is seeded once by hand at replicas 0 (see
-  # examples/secops-agent-factory-cpu/40-canary-storefront.yaml); the validation
-  # agent PATCHes it to the new image and one replica, waits for the scanner to
-  # catch up, and reports a real before/after. `cluster-apply` scales it back to
-  # 0 after the merge lands on the real workload.
+  # merge. The ORCHESTRATOR creates the workload named here from `template`
+  # below, at replicas 0, at the start of the canary step; the validation agent
+  # PATCHes it to the new image and one replica, waits for the scanner to catch
+  # up, and reports a real before/after; the orchestrator deletes it when the
+  # step ends, whatever the verdict was. Between runs it does not exist, and it
+  # should not: a Deployment that exists only to be measured has no business
+  # outliving the measurement, and one sitting idle in the namespace between
+  # runs is a thing a demo has to explain.
   #
-  # NOTHING NEW IS GRANTED TO MAKE THIS WORK, and that constraint shaped the
-  # design. Creating the canary would have needed POST on /k8s/clusters/**,
-  # which the deploy policy denies and which cannot be scoped by name — the
-  # create path carries no name. Seeding it means the whole canary lifecycle is
-  # PATCH, and canary.yaml pins the validation agent to this ONE object by
-  # literal name while deploy.yaml keeps its namespace-wide wildcard.
+  # WHY THE ORCHESTRATOR AND NOT THE AGENT, which is the same constraint that
+  # used to make this a hand-applied file. Creating a workload is a POST, and
+  # the create path is `/namespaces/<ns>/deployments` — it carries no name, so
+  # a method-and-path allow-list cannot scope it. Permitting "create the canary"
+  # is permitting "create anything here, with any image", which is an escape
+  # from the sandbox by a route no egress rule sees. So the agent's grant is
+  # untouched — still PATCH, still pinned to this one object by literal name in
+  # canary.yaml — and the fixture is built by the harness instead. The
+  # orchestrator's service account holds one Role, in this namespace, over
+  # Deployments, and nothing else anywhere; see templates/rbac.yaml.
   #
   # It must live in a namespace that is also in `targets`, or the deploy agent
   # cannot scale it down when it is finished with it.
   canary:
     namespace: ns-demo-web
     name: storefront-canary
+
+    # WHY IT IS A TWIN AND NOT A BARE POD. Everything except the image, the
+    # name and the replica count is copied from the storefront in
+    # examples/secops-agent-factory-cpu/workloads/nginx.yaml: the same probe on
+    # the same port, the same dropped capabilities, the same pull secret. That
+    # is most of the value. The open question about any Application Collection
+    # replacement is not "does the image exist" but "does it come up under the
+    # pod spec the workload already has" — SLE BCI images commonly run non-root
+    # on 8080 where the Debian one binds 80 as root. A twin answers that before
+    # a human merges rather than after.
+    #
+    # IT TAKES NO TRAFFIC. The `storefront` Service selects
+    # `app.kubernetes.io/name: storefront`; this carries `storefront-canary`.
+    # There is no Service for it and there should not be one.
+    #
+    # IT IS NOT IN THE MANIFESTS REPOSITORY, deliberately. `forge-remediate`
+    # finds the file to patch by grepping the clone for the image being
+    # replaced and requires exactly one hit; a second manifest naming the same
+    # image would break the remediation step.
+    #
+    # `metadata.name` and `metadata.namespace` are overwritten by the
+    # orchestrator from the two keys above, so those stay the single source of
+    # truth and this block cannot drift out of agreement with the policy.
+    template:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: storefront-canary
+        namespace: ns-demo-web
+        labels:
+          app.kubernetes.io/name: storefront-canary
+          ai-factory.suse.com/secops-role: canary
+      spec:
+        # Idle on creation. The scanner has nothing to say about a workload
+        # with no pods, and the agent's first PATCH sets both the image and the
+        # replica count — creating it running would start the wrong image.
+        replicas: 0
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: storefront-canary
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: storefront-canary
+          spec:
+            imagePullSecrets:
+              - name: appco-pull
+            containers:
+              # The container name is read off the live object by
+              # `cluster-canary`, not assumed — but keeping it `nginx`, as the
+              # storefront has it, keeps the twin a twin.
+              - name: nginx
+                # Never pulled: the object is created at replicas 0 and the
+                # first PATCH overwrites this. It is here so that a
+                # `kubectl get deploy -n ns-demo-web` during a run reads as two
+                # rows of the same thing rather than as a mystery.
+                image: docker.io/library/nginx:1.31.6
+                ports:
+                  - { containerPort: 80, name: http }
+                resources:
+                  limits: { cpu: 200m, memory: 128Mi }
+                  requests: { cpu: 50m, memory: 32Mi }
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: ["ALL"]
+                    add: ["CHOWN", "SETGID", "SETUID", "NET_BIND_SERVICE"]
+                readinessProbe:
+                  httpGet: { path: /, port: http }
 
     # How long to wait for SUSE Security to produce findings for an image it
     # has just seen start. Ten minutes: the scanner queues, and this is a

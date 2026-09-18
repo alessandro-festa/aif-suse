@@ -44,6 +44,7 @@ AFTER = "critical=0 high=0 medium=0 low=2"
 TMP = tempfile.mkdtemp(prefix="cluster-confirm-test-")
 BIN = os.path.join(TMP, "bin")
 NV_STATE = os.path.join(TMP, "nv.json")
+NV_SCANS = os.path.join(TMP, "nv.scans")
 
 STATE = {}
 
@@ -90,7 +91,10 @@ class Stub(BaseHTTPRequestHandler):
 def render_helper():
     v = yaml.safe_load(open(os.path.join(CHART, "values.yaml")))
     body = v["sandbox"]["helpers"]["suse-security"]["cluster-confirm"]
-    sub = {".Values.forge.owner": OWNER, ".Values.forge.repo": REPO}
+    # Short, unlike the chart's 600: every scenario here answers immediately or
+    # never, and the never cases would otherwise sit out the real deadline.
+    sub = {".Values.forge.owner": OWNER, ".Values.forge.repo": REPO,
+           ".Values.deploy.canary.scanTimeoutSeconds": "2"}
 
     def r(m):
         b = m.group(1).strip()
@@ -120,18 +124,53 @@ def write_shims(port):
     # (with `  counts: `), NOT-SCANNED, or ERROR <kind>. `_error` fails every
     # call; `_error_for` narrows it to one image, which is how the old-image
     # regression is reproduced without also breaking the new-image query.
+    #
+    # `--scan <image>` is the fourth behaviour: the request that asks SUSE
+    # Security to look at the running container rather than waiting for
+    # auto-scan to reach it. `_reveal_on_scan` keeps an image invisible until
+    # that request names it — the only way a test can tell "the step asked"
+    # from "the step waited and got lucky" — and `_no_workload` is the other
+    # answer, where the scanner can see no running container for the image at
+    # all. The old image is deliberately never re-triggered by the step, so
+    # nothing here should ever log a scan for it.
     p = os.path.join(BIN, "nv-survey")
     with open(p, "w") as fh:
         fh.write(f'''#!/usr/bin/env python3
-import json, sys
+import json, os, sys
 state = json.load(open({NV_STATE!r}))
 want = sys.argv[1] if len(sys.argv) > 1 else None
 err, only = state.get("_error"), state.get("_error_for")
-if err and (only is None or (want and only in want)):
-    print("  status: ERROR %s - %s" % (err, "stub failure for " + str(want)))
+
+
+def refuse(arg):
+    print("  status: ERROR %s - %s" % (err, "stub failure for " + str(arg)))
     sys.stderr.write("nv-survey:  status: ERROR %s\\n" % err)
     sys.exit(3)
-hits = [k for k in state if not k.startswith("_") and want and want in k]
+
+
+if want == "--scan":
+    img = sys.argv[2] if len(sys.argv) > 2 else ""
+    if not img:
+        sys.stderr.write("usage: nv-survey --scan <image>\\n")
+        sys.exit(2)
+    if err and (only is None or only in img):
+        refuse(img)
+    with open({NV_SCANS!r}, "a") as fh:
+        fh.write(img + "\\n")
+    if state.get("_no_workload"):
+        print("  status: NO-WORKLOAD")
+        sys.exit(4)
+    print("  queued: %s  deadbeefcafe" % img)
+    print("  status: TRIGGERED 1")
+    sys.exit(0)
+scanned = ""
+if os.path.exists({NV_SCANS!r}):
+    scanned = open({NV_SCANS!r}).read()
+on_scan = state.get("_reveal_on_scan", [])
+if err and (only is None or (want and only in want)):
+    refuse(want)
+hits = [k for k in state if not k.startswith("_") and want and want in k
+        and (k not in on_scan or k in scanned)]
 if not hits:
     print("No scanner findings for an image matching %r." % want)
     print("  status: NOT-SCANNED")
@@ -166,6 +205,14 @@ SCENARIOS = [
     ("a scanner that will not answer about the OLD image is not 'the old image is gone'",
      dict(nv={NEW: AFTER, "_error": "POLICY-DENIED", "_error_for": OLD}),
      "broken rescan", 1),
+    # The post-apply half of the 2026-09-18 failure. Auto-scan reached the new
+    # container at neither step, so this step no longer waits to be noticed: it
+    # asks. Here the image is invisible until it has been asked for, which makes
+    # the scenario unpassable without the trigger.
+    ("a scanner that only looks when it is asked is asked",
+     dict(nv={NEW: AFTER, "_reveal_on_scan": [NEW]}), "CONFIRMED", 0),
+    ("a workload the scanner cannot see is reported as NO-WORKLOAD, not as clean",
+     dict(nv={"_no_workload": True}), "UNSCANNED, not clean", 1),
 ]
 
 SEEN = {}
@@ -189,6 +236,8 @@ def run():
         STATE.update(over)
         with open(NV_STATE, "w") as fh:
             json.dump(STATE["nv"], fh)
+        with open(NV_SCANS, "w") as fh:
+            fh.write("")
 
         p = subprocess.run([path, "1"], capture_output=True, text=True, timeout=120)
         out = p.stdout + p.stderr
@@ -219,10 +268,34 @@ def run():
 
         if expect == "UNSCANNED, not clean":
             c = STATE["comments"][0]
-            SEEN["unscanned"] = c
+            # setdefault: the NO-WORKLOAD scenario is also an unverified
+            # verdict, and the error arms compare against the FIRST one.
+            SEEN.setdefault("unscanned", c)
             assert "**Unverified.**" in c, c
             assert "indistinguishable from a clean one" in c, c
+            # The rescan was requested outright. A timeout now means the
+            # scanner was asked and did not deliver, which is a fault, rather
+            # than that nobody ever asked, which is what shipped until 0.3.5.
+            assert NEW in open(NV_SCANS).read(), "the rescan was never requested"
+            # And the OLD image is not re-triggered: this step reads its
+            # absence as "it is gone from the cluster", and asking the scanner
+            # to go and look at it again is the one thing that could put it
+            # back in the answer.
+            assert OLD not in open(NV_SCANS).read(), "the old image was re-triggered"
             print("        reported as unverified, not as zero findings")
+
+        if "NO-WORKLOAD" in title:
+            c = STATE["comments"][0]
+            # The trigger's own answer, on the pull request. NO-WORKLOAD means
+            # the scanner sees no running container for the merged image at
+            # all — after an apply, that is a deployment problem, and it reads
+            # nothing like "the scan has not finished yet".
+            assert "returned `NO-WORKLOAD`" in c, c
+            print("        the trigger's refusal is quoted, not swallowed")
+
+        if "only looks when it is asked" in title:
+            assert NEW in open(NV_SCANS).read(), "the rescan was never requested"
+            print("        measured only because the rescan was asked for")
 
         if expect == "broken rescan":
             c = STATE["comments"][0]

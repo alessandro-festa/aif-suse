@@ -61,6 +61,7 @@ import os
 import re
 import secrets
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -131,11 +132,18 @@ GITEA_BOT_USER = _env("GITEA_BOT_USER", "secops-bot")
 # human applies the merged manifest to, and the Deployment they restart to
 # re-measure. The orchestrator has no kubectl and no RBAC to run either.
 WORKLOAD_NAMESPACE = _env("WORKLOAD_NAMESPACE", "ns-demo-web")
-# Likewise printed, never acted on. The handover comment has to say that the
-# replacement image is ALREADY running here as a canary when the reviewer reads
-# it — "nothing has touched the cluster" stopped being true in 0.3.1 and a gate
-# that misdescribes the state of the cluster is worse than no gate.
+# The handover comment has to say that the replacement image is ALREADY running
+# here as a canary when the reviewer reads it — "nothing has touched the
+# cluster" stopped being true in 0.3.1 and a gate that misdescribes the state of
+# the cluster is worse than no gate. Since 0.3.5 this is also acted on: the
+# orchestrator creates this Deployment for the canary step and deletes it
+# afterwards, which is the only Kubernetes call it makes. See _canary_create.
 CANARY_WORKLOAD = _env("CANARY_WORKLOAD", "ns-demo-web/storefront-canary")
+# The object to create, rendered from .Values.deploy.canary.template into the
+# workflow ConfigMap. A value rather than Python so the pod spec it twins — the
+# probe, the capabilities, the pull secret — stays next to the rest of the
+# configuration and shows up in `helm template`.
+CANARY_SPEC_FILE = _env("CANARY_SPEC_FILE", "/workflow/canary.json")
 NAMESPACE = _env("NAMESPACE", "ns-secops-cpu")
 ORCHESTRATOR_NAME = _env("ORCHESTRATOR_NAME", "secops-cpu-orchestrator")
 # 30 minutes, same reasoning as the approval gate below: a person reading a
@@ -732,6 +740,97 @@ def phase(
     return output
 
 
+# -------------------------------------------------------------- the canary fixture
+
+
+def _kube(method: str, path: str, body: dict | None = None) -> dict:
+    """One namespaced call to the apiserver, with the pod's own service account.
+
+    THE ONLY PLACE THIS PROCESS TOUCHES KUBERNETES, and it took until 0.3.5 to
+    exist at all. Everything else the pipeline does to a cluster goes through a
+    sandbox, under a policy file, via the Rancher API — that is the claim the
+    profile is built to demonstrate, and an orchestrator with a kubeconfig
+    would quietly weaken it. What is here instead is one Role, over Deployments,
+    in one namespace, used for exactly two calls: create the canary, delete the
+    canary. See templates/rbac.yaml for why that could not be the agent's job.
+
+    No client library: `python:3-slim` plus urllib is the whole runtime, and a
+    dependency for two requests would be a poor trade.
+    """
+    host = os.environ.get("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
+    port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
+    root = "/var/run/secrets/kubernetes.io/serviceaccount"
+    with open(f"{root}/token", encoding="utf-8") as handle:
+        token = handle.read().strip()
+    request = urllib.request.Request(f"https://{host}:{port}{path}", method=method)
+    request.add_header("Authorization", f"Bearer {token}")
+    request.add_header("Accept", "application/json")
+    payload = None
+    if body is not None:
+        payload = json.dumps(body).encode()
+        request.add_header("Content-Type", "application/json")
+    context = ssl.create_default_context(cafile=f"{root}/ca.crt")
+    with urllib.request.urlopen(request, payload, timeout=30, context=context) as rsp:
+        return json.load(rsp)
+
+
+def _canary_path() -> str:
+    namespace, _, name = CANARY_WORKLOAD.partition("/")
+    return f"/apis/apps/v1/namespaces/{namespace}/deployments/{name}"
+
+
+def _canary_create() -> None:
+    """Bring the canary Deployment into existence, idle, for this run only.
+
+    It used to be applied by hand and left in the namespace at replicas 0
+    between runs. That worked and it read badly: a workload that exists only to
+    be measured, sitting in the demo namespace with nothing measuring it, is a
+    thing every walkthrough had to stop and explain. Now the step that needs it
+    creates it and the same step takes it away.
+
+    Created at replicas 0 deliberately. The agent's first PATCH sets the image
+    AND the replica count, so creating it running would start the image it is
+    supposed to replace, pull it, and prove nothing.
+    """
+    namespace, _, name = CANARY_WORKLOAD.partition("/")
+    with open(CANARY_SPEC_FILE, encoding="utf-8") as handle:
+        spec = json.load(handle)
+    # The two keys in values are the single source of truth — canary.yaml pins
+    # the agent's PATCH to this exact name, so a spec that disagreed with them
+    # would produce an object the agent is not permitted to touch.
+    spec.setdefault("metadata", {})["name"] = name
+    spec["metadata"]["namespace"] = namespace
+    try:
+        _kube("POST", f"/apis/apps/v1/namespaces/{namespace}/deployments", spec)
+        _log(f"canary: created {CANARY_WORKLOAD} at replicas 0")
+    except urllib.error.HTTPError as exc:
+        if exc.code != 409:
+            raise
+        # Left behind by a run that died between create and delete. Reusing it
+        # is right: the agent's first act is a PATCH that sets both the image
+        # and the replica count, so whatever state it is in is overwritten.
+        _log(f"canary: {CANARY_WORKLOAD} already exists, reusing it")
+
+
+def _canary_delete() -> None:
+    """Take it away again, whatever the step decided.
+
+    Never fatal. The canary's whole purpose is over by the time this runs, and
+    a run that produced a real verdict must not be turned into a failure by the
+    tidying afterwards. A leftover object is visible, harmless and reused by
+    the next run's create.
+    """
+    try:
+        _kube("DELETE", _canary_path())
+        _log(f"canary: deleted {CANARY_WORKLOAD}")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return
+        _log(f"canary: could not delete {CANARY_WORKLOAD}: HTTP {exc.code}")
+    except Exception as exc:  # noqa: BLE001 - tidying must not end the run
+        _log(f"canary: could not delete {CANARY_WORKLOAD}: {exc}")
+
+
 # ------------------------------------------------------------- the forge (API)
 
 
@@ -1164,10 +1263,9 @@ def handover(issue: int, pull: int, target: str) -> None:
         f"start under this pod spec is caught before you merge rather than "
         f"after.\n\n"
         f"If you do not want the change, close PR #{pull} instead. Nothing that "
-        f"serves traffic has been touched, and closing it ends the run cleanly — "
-        f"though the canary keeps running until someone scales it down:\n\n"
-        f"```\nkubectl -n {CANARY_WORKLOAD.split('/')[0]} scale "
-        f"deploy/{CANARY_WORKLOAD.split('/')[-1]} --replicas=0\n```\n\n"
+        f"serves traffic has been touched, and closing it ends the run cleanly. "
+        f"The canary is removed when the run ends, either way — it exists for "
+        f"the measurement above and for nothing else.\n\n"
         f"The bot cannot merge for you: `main` is protected and the sandbox policy "
         f"denies the merge endpoint. That is the point, not an obstacle.\n\n"
         f"<details><summary>Manual fallback — only if the deploy step reports that "
@@ -1241,6 +1339,15 @@ def _park(reason: str) -> NoReturn:
     with RUN.lock:
         RUN.verdict = reason
     _log(f"parked: {reason}")
+    # THE ONE PIECE OF TIDYING, and this is the right place for it precisely
+    # because every terminal outcome funnels through here — success, rejection,
+    # a gate that timed out, an unhandled exception. The canary is a fixture
+    # created for one step of one run; leaving it behind means the next run
+    # starts with a stale Deployment in the demo namespace, which is the state
+    # this replaced. A run that never reached the canary step deletes nothing,
+    # because there is nothing there, and a delete that fails is logged and
+    # ignored: tidying must not rewrite a verdict that has already been decided.
+    _canary_delete()
     _log("the run is over; the status page stays up. Restart the Deployment to run again.")
     while True:
         time.sleep(3600)
@@ -1604,10 +1711,16 @@ def main() -> None:
     #    This is also the first step in the pipeline that writes to the
     #    cluster, before any human has approved anything. What makes that
     #    defensible is the shape of the grant, not this comment — canary.yaml
-    #    pins it to one seeded workload by literal name, a workload with no
-    #    Service that serves nothing.
+    #    pins it to one workload by literal name, a workload with no Service
+    #    that serves nothing.
+    #
+    #    The fixture is created here and destroyed in the `finally` below, so
+    #    it exists only for the length of this step. The agent still cannot
+    #    create it: see _canary_create and templates/rbac.yaml for why those
+    #    are two different authorities on purpose.
     pull = RUN.pull
     comments_before = _comment_count(pull)
+    _canary_create()
     try:
         phase(
             steps["validate"],
@@ -1633,6 +1746,11 @@ def main() -> None:
         # happen is the run claiming a measurement it does not have.
         _log(f"canary validation failed: {exc}")
         steps["validate"].detail = "no measurement — read this step's output"
+    # NOT deleted here, and the temptation to put a `finally` on that `try` is
+    # worth naming. The canary has to outlive this step: the merge gate below
+    # tells the reviewer that both images are running right now and invites
+    # them to go and look, and `cluster-apply` scales the canary to 0 once the
+    # real rollout succeeds. It is deleted when the run ends, in _park.
     # Bound once, for the same reason the validation phase above does it: every
     # step from here on is about this one pull request.
     merged_pr: int = RUN.pull

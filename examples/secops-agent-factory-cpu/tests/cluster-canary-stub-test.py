@@ -55,6 +55,7 @@ TMP = tempfile.mkdtemp(prefix="cluster-canary-test-")
 BIN = os.path.join(TMP, "bin")
 NV_STATE = os.path.join(TMP, "nv.json")
 NV_CALLS = os.path.join(TMP, "nv.calls")
+NV_SCANS = os.path.join(TMP, "nv.scans")
 
 # --------------------------------------------------------------- the stubs
 
@@ -184,26 +185,68 @@ def write_shims(port):
     # `_error_for` narrows it to images whose name contains that substring —
     # needed because the two sides of the comparison fail for different
     # reasons and the helper has to say which side it was.
+    #
+    # It also models `--scan <image>`, the request that asks SUSE Security to
+    # look at the running container instead of waiting for auto-scan to reach
+    # it. Every request is appended to a log the scenarios read back, and
+    # `_reveal_on_scan` keeps an image invisible until its name appears in that
+    # log — which is the only way a test can tell "the helper asked" from "the
+    # helper waited and got lucky". `_no_workload` is the other outcome: the
+    # scanner has no running container for the image and the request is a
+    # no-op, which the helper has to report as a cluster fault rather than a
+    # clean bill of health.
+    #
+    # NOTE the ordering: `--scan` returns before the call counter is touched.
+    # A trigger is not a query, and counting it would shift every
+    # `_reveal_after` scenario by one and make the "broke out of the poll"
+    # assertion at the bottom of run() mean something else.
     p = os.path.join(BIN, "nv-survey")
     with open(p, "w") as fh:
         fh.write(f'''#!/usr/bin/env python3
 import json, os, sys
 state = json.load(open({NV_STATE!r}))
 want = sys.argv[1] if len(sys.argv) > 1 else None
+err = state.get("_error")
+only = state.get("_error_for")
+
+
+def refuse(arg):
+    print("  status: ERROR %s - %s" % (err, "stub failure for " + str(arg)))
+    sys.stderr.write("nv-survey:  status: ERROR %s\\n" % err)
+    sys.exit(3)
+
+
+if want == "--scan":
+    img = sys.argv[2] if len(sys.argv) > 2 else ""
+    if not img:
+        sys.stderr.write("usage: nv-survey --scan <image>\\n")
+        sys.exit(2)
+    if err and (only is None or only in img):
+        refuse(img)
+    with open({NV_SCANS!r}, "a") as fh:
+        fh.write(img + "\\n")
+    if state.get("_no_workload"):
+        print("  status: NO-WORKLOAD")
+        sys.exit(4)
+    print("  queued: %s  deadbeefcafe" % img)
+    print("  status: TRIGGERED 1")
+    sys.exit(0)
+scanned = ""
+if os.path.exists({NV_SCANS!r}):
+    scanned = open({NV_SCANS!r}).read()
 n = 0
 if os.path.exists({NV_CALLS!r}):
     n = int(open({NV_CALLS!r}).read() or 0)
 open({NV_CALLS!r}, "w").write(str(n + 1))
 # "the scanner has not got to it yet": an image is invisible until the Nth call.
 after = state.get("_reveal_after", {{}})
+# "the scanner never looks unasked": invisible until something requested it.
+on_scan = state.get("_reveal_on_scan", [])
 images = {{k: v for k, v in state.items()
-           if not k.startswith("_") and n + 1 >= after.get(k, 0)}}
-err = state.get("_error")
-only = state.get("_error_for")
+           if not k.startswith("_") and n + 1 >= after.get(k, 0)
+           and (k not in on_scan or k in scanned)}}
 if err and (only is None or (want and only in want)):
-    print("  status: ERROR %s - %s" % (err, "stub failure for " + str(want)))
-    sys.stderr.write("nv-survey:  status: ERROR %s\\n" % err)
-    sys.exit(3)
+    refuse(want)
 hits = [k for k in images if want and want in k]
 if not hits:
     print("No scanner findings for an image matching %r." % want)
@@ -281,6 +324,18 @@ SCENARIOS = [
     ("the scanner catching up mid-poll is waited for",
      dict(nv={OLD: BEFORE, NEW: AFTER, "_reveal_after": {NEW: 3}},
           scandeadline=60, scansleep=1), "VALIDATED", 0),
+    # THE 2026-09-18 FAILURE, pinned. The live canary ran Ready for the full
+    # 600s and the scanner reported nothing, with the key working and auto-scan
+    # on: auto-scan simply never reached the new container. Here the image is
+    # invisible until something asks for it, so this scenario passes only if
+    # the helper sends `--scan` — take the trigger out and it times out
+    # UNSCANNED instead.
+    ("a scanner that only looks when it is asked is asked",
+     dict(nv={OLD: BEFORE, NEW: AFTER, "_reveal_on_scan": [NEW]},
+          scandeadline=60, scansleep=1), "VALIDATED", 0),
+    ("a canary the scanner cannot see is reported as NO-WORKLOAD, not as clean",
+     dict(nv={OLD: BEFORE, "_no_workload": True}, scandeadline=3, scansleep=1),
+     "UNSCANNED", 1),
     ("the happy path starts the canary, measures both sides and reports",
      dict(), "VALIDATED", 0),
 ]
@@ -315,6 +370,8 @@ def run():
             json.dump(STATE["nv"], fh)
         with open(NV_CALLS, "w") as fh:
             fh.write("0")
+        with open(NV_SCANS, "w") as fh:
+            fh.write("")
 
         body = script
         if deadline:
@@ -360,6 +417,14 @@ def run():
             print(f"        patch: {STATE['patches'][0]}")
             print(f"        final line: {out.strip().splitlines()[-1]}")
 
+        if "only looks when it is asked" in title:
+            # Belt and braces. The scenario is already unpassable without the
+            # trigger — the image is hidden until the log names it — but say so
+            # out loud, because a future edit to the stub could make the
+            # scenario pass for the wrong reason and nothing would complain.
+            assert NEW in open(NV_SCANS).read(), "the scan was never requested"
+            print("        measured only because the scan was asked for")
+
         if expect == "DID NOT BECOME AVAILABLE":
             # A failed canary must not be left running: the next run seeds from
             # replicas 0 and a human is not going to notice a pod with no
@@ -381,8 +446,26 @@ def run():
             # whether the image is clean, and killing the evidence is the wrong
             # move. Only the start patch was sent.
             assert len(STATE["patches"]) == 1, STATE["patches"]
-            SEEN["unscanned"] = c
+            # setdefault, not assignment: the NO-WORKLOAD scenario further down
+            # is also an UNSCANNED verdict, and the three ERROR arms compare
+            # themselves against the FIRST one — the plain timeout.
+            SEEN.setdefault("unscanned", c)
+            # Whatever the outcome, the scan was requested. The verdict is
+            # "we asked and got nothing back", which is a fault; before the
+            # trigger existed it was "nobody ever asked", which was a bug.
+            assert NEW in open(NV_SCANS).read(), "the scan was never requested"
             print("        reported as unverified, not as zero findings")
+
+        if "NO-WORKLOAD" in title:
+            c = STATE["comments"][0]
+            # The trigger's own answer is on the pull request, because it is
+            # the thing that narrows the timeout. NO-WORKLOAD means the scanner
+            # can see no running container for this image at all — a cluster
+            # fault, nothing to do with the image — and a reviewer who reads
+            # only "unscanned" goes and looks in the wrong place.
+            assert "returned `NO-WORKLOAD`" in c, c
+            assert "do not read this as a pass" in c, c
+            print("        the trigger's refusal is quoted, not swallowed")
 
         if expect == "broken scanner":
             # Not the no-baseline wording. An image the scanner has no record

@@ -23,12 +23,12 @@
 #
 # WHAT IT DELIBERATELY DOES NOT DO
 #
-#   It does not delete `storefront-canary`. The canary is seeded by hand at
-#   replicas: 0 precisely because the validation agent may only PATCH it — the
-#   deploy policy denies POST on /k8s/clusters/**, so an agent cannot create a
-#   workload. Deleting the canary would leave the next run unable to recreate
-#   it. The reset re-applies 40-canary-storefront.yaml instead, which restores
-#   both the image and the replica count to the seeded values.
+#   It does not seed `storefront-canary`, and since 0.3.5 it deletes any left
+#   over. The canary is no longer furniture between runs: the orchestrator
+#   creates it when the canary step starts and deletes it when the run ends, so
+#   the correct starting state is that it does not exist. One is only ever left
+#   behind when a run was killed mid-flight, and that one is stale — wrong
+#   image, possibly running — so the reset removes it rather than adopting it.
 #
 #   It does not touch SUSE Security. NeuVector here has no PVC: restarting the
 #   controller loses its key, its EULA acceptance and its whole scan history,
@@ -249,8 +249,9 @@ say "cluster"
 
 kubectl --context "$CTX" apply -f "$HERE/workloads/nginx.yaml" |
   sed 's/^/   /'
-kubectl --context "$CTX" apply -f "$HERE/40-canary-storefront.yaml" |
-  sed 's/^/   /'
+# Only ever present if a run was killed before it could clean up after itself.
+kubectl --context "$CTX" -n ns-demo-web delete deploy storefront-canary \
+  --ignore-not-found --wait=false | sed 's/^/   /'
 kubectl --context "$CTX" -n ns-demo-web rollout status deploy/storefront --timeout=90s |
   sed 's/^/   /'
 
@@ -262,11 +263,10 @@ say "starting state"
 printf '   storefront        %s\n' \
   "$(kubectl --context "$CTX" -n ns-demo-web get deploy storefront \
        -o jsonpath='{.spec.template.spec.containers[0].image}')"
-printf '   storefront-canary %s  replicas=%s\n' \
+printf '   storefront-canary %s\n' \
   "$(kubectl --context "$CTX" -n ns-demo-web get deploy storefront-canary \
-       -o jsonpath='{.spec.template.spec.containers[0].image}')" \
-  "$(kubectl --context "$CTX" -n ns-demo-web get deploy storefront-canary \
-       -o jsonpath='{.spec.replicas}')"
+       -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null \
+     || echo 'absent, as it should be before a run')"
 printf '   forge nginx.yaml  %s\n' \
   "$(curl -sf "${API}/repos/${OWNER}/${REPO}/contents/workloads/nginx.yaml?ref=main" |
      python3 -c "import json,sys,base64;print([l.strip() for l in base64.b64decode(json.load(sys.stdin)['content']).decode().splitlines() if 'image:' in l][0])")"

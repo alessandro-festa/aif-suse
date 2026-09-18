@@ -14,6 +14,12 @@ data:
     {{- .Files.Get "files/orchestrator.py" | nindent 4 }}
   status.html: |
     {{- .Files.Get "files/status.html" | nindent 4 }}
+  # The canary Deployment, as JSON, for the orchestrator to POST at the start
+  # of the canary step and DELETE at the end of it. It is a value rather than a
+  # file so that the pod spec it copies — probe, capabilities, pull secret —
+  # can be adjusted without touching Python, and so `helm template` shows a
+  # reviewer exactly what the orchestrator will create.
+  canary.json: {{ toJson .Values.deploy.canary.template | quote }}
   # Mounted by the TLS shim Deployment, for the same reason: it is a second
   # stdlib-only script on the same image, and a change to it should roll the
   # pod through the checksum annotation rather than need a rebuild.

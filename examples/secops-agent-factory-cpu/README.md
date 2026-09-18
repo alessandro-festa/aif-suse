@@ -110,6 +110,25 @@ Three implementation notes that deviate from the obvious design, all deliberate:
   component with the gateway mTLS material and the forge token, which is what preserves §3's "the
   agents have no access to the plane that governs them".
 
+**The one Kubernetes permission the orchestrator has, and why it is not the agent's.** Since 0.3.5
+the canary Deployment is not furniture: the orchestrator creates it in `ns-demo-web` when the
+canary step starts, and deletes it when the run ends. It holds exactly one Role for this
+(`charts/secops-cpu-agents/templates/rbac.yaml`) — `create`, `delete`, `get`, `list`, `watch` on
+Deployments, in that one namespace, with **no `patch` and no `update`**.
+
+The split is the point. A `POST` to `/namespaces/<ns>/deployments` carries no name: the name is in
+the body, and the L7 proxy allow-lists methods and paths, so it cannot see it. "The agent may
+create the canary" is therefore unavoidably "the agent may create any pod here, with any image" —
+an escape by a route no egress rule watches. So the harness brings the object into existence and
+takes it away again; setting the image and the replica count stays with the agent, under the
+agent's policy, pinned to one object by name. Neither side can do the other's half, which is what
+makes the canary verdict worth reading.
+
+It used to be seeded by hand at `replicas: 0` and left between runs, which avoided the same
+problem by never creating anything. It also meant the demo's starting state included a stale
+Deployment nobody looked at, and a killed run left it running. The correct starting state is now
+that it does not exist; `reset-demo.sh` deletes any leftover.
+
 **Which CLI runs inside the sandbox:** `opencode`, from the five the `openclaw-suse` image ships.
 It is OpenAI-shaped — matching both llama.cpp and the OpenShell router, which speaks
 `openai_chat_completions` only — and has a headless `run` mode. `claude` is ruled out by protocol:
@@ -526,6 +545,30 @@ The agents may now **read** this setting — `GET /v1/scan/config` is allowed in
 No agent may change it: `PATCH /v1/scan/config` is in the deny list of all four, because an
 agent that can switch the scanner off can make any finding disappear.
 
+**Auto-scan being on is not a promise that it will get there in time — so since 0.3.5 the scan is
+asked for.** On 2026-09-18 the canary came up Ready on the AppCo image, polled the full 600s, and
+SUSE Security reported nothing for it. Key working, shim up, auto-scan on, and the status contract
+above said so: `NOT-SCANNED`, not `AUTH`, not `UNREACHABLE`. Auto-scan simply never reached the new
+container, and nothing in the pipeline had ever asked it to.
+
+`nv-survey --scan <image>` now does the asking. It resolves the image to the **running containers**
+serving it (`GET /v1/workload?brief=true`, whose pods carry their containers under `children`) and
+queues a scan for each (`POST /v1/scan/workload/<container-id>`). Both the canary step and the
+post-apply rescan call it before their poll, and again every two minutes while polling — a pod that
+restarts comes back with a new container id, and a request naming the old one is discarded without
+a word.
+
+The request is not a result. It is asynchronous, the poll is unchanged, and an empty answer is
+still refused as `UNSCANNED`. What it buys is on the pull request: the comment now quotes the
+trigger's own reply, so a timeout reads either `TRIGGERED` — asked, accepted, did not finish, check
+`GET /v1/scan/status` for a queue — or `NO-WORKLOAD`, meaning the scanner can see no running
+container for that image at all, which is a cluster problem and not an image one.
+
+Two verbs were added to `canary.yaml` and `validation.yaml` for it, `GET /v1/workload` and
+`POST /v1/scan/workload/**`. Both are additive and neither is a write to the scanner's
+configuration: an agent may ask for a scan and may not change what scanning means.
+`PATCH /v1/scan/config` stays denied.
+
 ### On sims-datacenter
 
 Nothing new: the Rancher local cluster already runs the aif-operator and SUSE Security. The
@@ -777,8 +820,8 @@ GITEA_AUTH='<user>:<password>' sh reset-demo.sh -y     # no prompt, for a record
 ```
 
 It restores `workloads/*.yaml` in the forge from the seed files in this directory, deletes every
-issue, pull request and non-`main` branch, re-applies `workloads/nginx.yaml` and
-`40-canary-storefront.yaml`, and reopens the Gitea (3000) and orchestrator (8088) port-forwards after
+issue, pull request and non-`main` branch, re-applies `workloads/nginx.yaml`, deletes any leftover
+canary, and reopens the Gitea (3000) and orchestrator (8088) port-forwards after
 killing any stale ones. It ends by printing the starting state, which is the thing to read before
 you hit record.
 
@@ -788,10 +831,7 @@ A reset script that could authenticate as the bot would be a reset script that h
 the gate. Note that protection applies to admins too unless the account is on main's push whitelist
 (see step 4 above); the script says so if the write is refused.
 
-**What it deliberately leaves alone.** It does not delete `storefront-canary` — the canary is seeded
-by hand at `replicas: 0` because the validation agent may only `PATCH` it, so deleting it would leave
-the next run unable to recreate it; re-applying the manifest resets the image and the replica count
-instead. It does not touch SUSE Security, which has no PVC here and loses its key, its EULA
+**What it deliberately leaves alone.** It does not touch SUSE Security, which has no PVC here and loses its key, its EULA
 acceptance and its entire scan history on a restart. And it refuses to run at all while a sandbox is
 up, because a live sandbox means a run is still in progress.
 

@@ -29,17 +29,19 @@
 #     this sandbox too — helpers arrive per provider — and is refused by this
 #     rule the moment it reaches for the workload under review.
 #
-#   * THAT OBJECT IS SEEDED FURNITURE, NOT A WORKLOAD. It is created once, by
-#     hand, at replicas 0, from examples/.../40-canary-storefront.yaml. It has
-#     no Service, matches no Service selector, and serves nothing.
+#   * THAT OBJECT IS FURNITURE, NOT A WORKLOAD. It exists only for the length of
+#     this step — the orchestrator creates it at replicas 0 from
+#     `deploy.canary.template` and deletes it when the run ends. It has no
+#     Service, matches no Service selector, and serves nothing.
 #
-#   * NO NEW VERB. POST is denied here exactly as it is in deploy.yaml, which is
-#     what forced the seeded design: creating the canary would have needed POST
-#     on /k8s/clusters/**, and POST cannot be scoped by name because the create
-#     path — /namespaces/<ns>/deployments — carries no name. "May create the
-#     canary" is unavoidably "may create anything in that namespace", and an
-#     agent that can create a Pod can mount a Secret. So the canary is driven by
-#     PATCH, the verb the pipeline already had.
+#   * NO NEW VERB. POST is denied here exactly as it is in deploy.yaml, and that
+#     denial is why the orchestrator does the creating: POST cannot be scoped by
+#     name, because the create path — /namespaces/<ns>/deployments — carries no
+#     name and the object's name is in the body, which an allow-list of methods
+#     and paths cannot see. "May create the canary" is unavoidably "may create
+#     anything in that namespace", and an agent that can create a Pod can mount
+#     a Secret. So the agent drives the canary with PATCH, the verb the pipeline
+#     already had, and never brings it into existence.
 #
 # WHAT THE HUMAN STILL DECIDES is unchanged and is the reason the above is a
 # trade worth making: this agent can start a pod that takes no traffic. It
@@ -150,6 +152,14 @@ network_policies:
           # `nv-survey`'s two-call read; see validation.yaml and survey.yaml.
           - allow: { method: POST, path: "/v1/vulasset" }
           - allow: { method: GET,  path: "/v1/vulasset" }
+          # ASK FOR A SCAN, do not only read one. `nv-survey --scan` looks the
+          # running containers up and queues a scan of each. Both verbs are
+          # additive: a scan that would not otherwise have happened is the only
+          # thing they can cause, and an agent that can make the scanner look
+          # harder cannot make a finding disappear. The verb that could —
+          # `PATCH /v1/scan/config` — stays in the deny list below.
+          - allow: { method: GET,  path: "/v1/workload" }
+          - allow: { method: POST, path: "/v1/scan/workload/**" }
         deny_rules:
           # Explicit, now that the GET above is allowed; see survey.yaml. It
           # matters most here — this is the agent whose verdict decides

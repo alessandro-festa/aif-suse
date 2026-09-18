@@ -1,0 +1,60 @@
+{{- /*
+The orchestrator's only Kubernetes permission, anywhere.
+
+Until 0.3.5 the service account had no RoleBindings at all: every change this
+profile makes to a cluster goes through a sandbox, under a policy, via the
+Rancher API — that is the claim the demo exists to make, and the orchestrator
+holding a kubeconfig would quietly weaken it.
+
+What changed is the canary. It used to be a Deployment applied once by hand and
+left in the namespace at replicas 0 between runs, because creating it was the
+one thing neither side could safely do: a POST to `/namespaces/<ns>/deployments`
+carries no name, so an allow-list of methods and paths cannot scope it, and
+granting the agent "create the canary" would have granted it "create any pod
+here, with any image" — an escape from the sandbox by a route no egress rule
+sees.
+
+So the fixture is built by the harness instead. The orchestrator creates the
+canary at the start of the canary step and deletes it at the end, and the grant
+that lets it is this Role: one verb set, over Deployments, in one namespace.
+Not cluster-wide, no other resource, and — deliberately — no `patch` or
+`update`. The orchestrator can bring the object into existence and take it away
+again; changing the image and the replica count remains the agent's job, under
+the agent's policy, pinned by name. The two authorities stay separate, which is
+what makes the canary step's verdict worth anything.
+*/ -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: secops-cpu-orchestrator-canary
+  # The canary's namespace, not the release's. A Role is namespaced and this is
+  # the namespace it has to act in.
+  namespace: {{ .Values.deploy.canary.namespace }}
+  labels:
+    {{- include "secops-cpu-agents.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    # `get` so the step can tell "already there from a previous run" from "just
+    # created", and `list`/`watch` for nothing yet — they are here because a
+    # create/delete loop with no read verb is a debugging dead end.
+    verbs: ["create", "delete", "get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: secops-cpu-orchestrator-canary
+  namespace: {{ .Values.deploy.canary.namespace }}
+  labels:
+    {{- include "secops-cpu-agents.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: secops-cpu-orchestrator-canary
+subjects:
+  # The service account lives in the release namespace and the Role does not;
+  # that is the whole reason this is a RoleBinding in the canary's namespace
+  # naming a subject from another one.
+  - kind: ServiceAccount
+    name: secops-cpu-orchestrator
+    namespace: {{ .Release.Namespace }}
