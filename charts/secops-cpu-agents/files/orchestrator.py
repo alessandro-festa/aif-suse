@@ -877,6 +877,15 @@ def _issue_from(
     that says the clarifier produced nothing usable. A reviewer then sees the
     triage and research the run actually did, and can reject on an informed
     basis rather than on a number.
+
+    A fourth shape then walked straight through all three: the `plan-issue`
+    command line, quoted, with every argument correct. Nine hundred characters
+    of it, so the length guard let it past, and it reads to a person like a
+    plan. The lesson is that enumerating shapes does not converge — there is
+    always another way to be wrong. So this function is no longer the only
+    thing standing between a missed tool call and an approved plan:
+    `_plan_is_executable` checks the posted issue against the contract the
+    remediation step will hold it to, whatever shape produced it.
     """
     trailer = (
         f"\n\n---\n_Posted by the orchestrator. The {agent} agent produced this "
@@ -905,6 +914,46 @@ def _issue_from(
     if isinstance(parsed, dict) and parsed.get("title") and parsed.get("body"):
         return {"title": str(parsed["title"]), "body": str(parsed["body"]) + trailer}
     return {"title": fallback_title[:255], "body": output + trailer}
+
+
+# The line `forge-remediate` parses the approved plan with, transcribed from
+# its perl in values.yaml. Keep them in step: this check exists precisely to
+# fail in the same place, and a copy that is laxer than the original is worse
+# than no copy, because it promises the reviewer an execution that will not
+# happen. There are four perl copies of this pattern, not one —
+# forge-remediate, cluster-apply, cluster-canary and cluster-confirm — and
+# tests/change-line-contract-test.py runs all five against the same bodies and
+# fails if any of them disagrees.
+_PLAN_CHANGE = re.compile(r"^[ \t]*Change:[ \t]*(\S+)[ \t]+->[ \t]+(\S+)[ \t]*$", re.M)
+
+
+def _plan_is_executable(number: int) -> bool:
+    """Can the remediation step actually read a change out of this issue?
+
+    THE GATE USED TO BE ABLE TO APPROVE SOMETHING THAT COULD NOT BE DONE, and
+    on 2026-09-18 it did. The clarifier answered with the `plan-issue` command
+    line instead of running it; the orchestrator's soft-failure path posted
+    that text as issue #45; a human read a paragraph that described a sensible
+    change, applied the label, and the remediation agent then refused in ten
+    seconds because there was no `Change: <old> -> <new>` line to parse. Every
+    component behaved correctly and the run still died, because the contract
+    between the plan and its consumer was only tested AFTER the one step that
+    cannot be retried cheaply — the one that needs a person.
+
+    So the contract is tested here, against the issue as the forge stores it
+    rather than against the agent's output, which covers the path where the
+    clarifier posted the issue itself and the orchestrator never saw the body.
+    A false answer does not stop the run: the reviewer is told on the issue,
+    and can reject it or repair the body by hand, since `forge-remediate` reads
+    the body at remediation time and an edit made at the gate is an edit it
+    will see.
+    """
+    try:
+        issue = _gitea(f"/issues/{number}")
+        return _PLAN_CHANGE.search(str(issue["body"] or "")) is not None  # type: ignore[index]
+    except Exception as exc:  # noqa: BLE001 - a failed check must not gate the gate
+        _log(f"could not check issue #{number} for a Change: line: {exc}")
+        return True
 
 
 def _newest_open(kind: str, since: float) -> int | None:
@@ -1601,6 +1650,25 @@ def main() -> None:
     else:
         steps["clarify"].detail = f"issue #{RUN.issue}"
 
+    # Whether this plan can be carried out at all, asked before the person is
+    # asked to approve it and answered on the same comment. See
+    # `_plan_is_executable`: the reviewer is the one who can fix this, and the
+    # only moment they are looking is now.
+    unexecutable = ""
+    if not _plan_is_executable(RUN.issue):
+        unexecutable = (
+            "\n\n> **This plan cannot be executed as written.** The remediation "
+            "step reads the change out of the issue body and needs a line of "
+            "exactly this form, on its own:\n>\n"
+            "> ```\n> Change: <old-image> -> <new-image>\n> ```\n>\n"
+            "> There is no such line above, so approving this will start a "
+            "remediation agent that refuses immediately. Both image references "
+            "must be complete — registry host, repository and tag. Either "
+            "reject, or edit the body to add the line and then approve; the "
+            "body is read when the agent runs, so an edit made now counts."
+        )
+        _log(f"issue #{RUN.issue} carries no parsable 'Change:' line; said so at the gate")
+
     # The gate's mechanism, said on the issue itself. The clarifier writes the
     # plan and has no idea it is about to be gated, so without this the issue
     # arrives with no instructions and the reviewer has to already know that
@@ -1619,6 +1687,7 @@ def main() -> None:
             + ("" if GATE_REQUIRE_LABEL else f", or comment `{REJECT_LABEL}`")
             + "\n\nThe label is the stronger of the two — applying one needs write "
             "permission on this repository, commenting does not."
+            + unexecutable
         )},
     )
 

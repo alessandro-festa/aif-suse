@@ -164,6 +164,24 @@ where that is executable rather than described, because the forge runs **in the 
    citations, then stops. The orchestrator polls for the label `approved` or `rejected` and creates
    **no remediation sandbox** until a person applies one. Timeout 30 minutes — a "something is
    wrong" bound, not a service level.
+
+   **A gate can only approve what the next step can execute, and until 0.3.6 nothing checked
+   that.** `forge-remediate` reads the change out of the approved issue by matching a line of
+   exactly the form `Change: <old-image> -> <new-image>`; `plan-issue` writes one. But the
+   orchestrator will post the issue itself when the clarifier produces the plan without filing it,
+   and on 2026-09-18 what it posted was the clarifier's answer — the `plan-issue` command line,
+   quoted, with every argument correct and no `Change:` line anywhere in it. It read like a plan.
+   A person approved it. The remediation agent then refused in ten seconds, correctly, and the run
+   was over. Every component did its job and the run still died, because the contract between the
+   plan and its consumer was first tested *after* the one step that cannot be retried cheaply.
+
+   So the orchestrator now runs that same match against the issue as the forge stores it, before it
+   posts the gate instructions, and folds a warning into the same comment when it fails: this plan
+   cannot be executed, here is the line it needs, reject it or add the line and then approve. The
+   body is read when the remediation agent runs, so a repair made at the gate is one it will see.
+   The check is deliberately not a veto — it does not stop the run or discard twenty minutes of CPU
+   inference. It just refuses to let a person approve something on the quiet understanding that it
+   will work.
 2. **Change gate.** The remediation step opens a **pull request**; the canary comments the pre/post
    scan diff. A person merges or closes. **The agent cannot merge its own PR** — enforced by a
    branch-protection rule created during the seed, not by anything of ours.
@@ -507,6 +525,16 @@ registered scanners: 1  CVEDB 2026.09.14
 If `auto-scan (containers)` reads `false`, the helper says so in a banner and every count below
 it is meaningless. If the first line names a controller you did not expect, that is the answer
 to a different question you were about to waste an afternoon on.
+
+**And in 0.3.5 that banner lied, because it read the wrong field.** NeuVector 5.4.3 split the
+single `auto_scan` boolean into `enable_auto_scan_workload` and `enable_auto_scan_host`, and
+kept the old key for backward compatibility as a plain bool that the new settings do not write
+(`neuvector/controller/api/apis.go`, `RESTScanConfig`). On the 5.6.1 controller here it
+marshals as `false` while workload auto-scan is on in the UI — so the survey issue carried a
+bold instruction to stop, about a scanner that was working. Since 0.3.6 `nv-survey` prefers
+`enable_auto_scan_workload` and falls back to `auto_scan` only for a pre-5.4.3 controller. If
+you are reading the API by hand, read the same field: a deprecated key that still returns 200
+is the most expensive kind of wrong.
 
 **Since 0.3.5 you read those three lines on the survey issue itself, above the menu** — and this
 is the part that was broken for two releases. The survey agent is stopped the instant the issue

@@ -474,9 +474,18 @@ sandbox:
           # the cheapest thing that keeps one fact per line through markdown.
           # No line here begins with a number, so `_survey_options` still parses
           # exactly the menu and nothing else.
+          # NOT awk, for the third time in this file: the sandbox image has no
+          # awk, and 0.3.5 shipped an `awk '{ printf }'` here that failed with
+          # `command not found` on the first live run. The three greps matched,
+          # the pipe fed a binary that was not there, `pre` came back empty and
+          # the header silently did not appear on the issue — the exact surface
+          # this change existed to create. sed appends the literal `\n` each
+          # line needs for the JSON body, in the same pass as the escaping and
+          # after it, and `tr` removes the real newlines. Both are in the
+          # measured toolchain at :673.
           pre=$(grep -E '^(SUSE Security|auto-scan \(containers\)|registered scanners):' "$raw" \
-                | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/- /' \
-                | awk '{ printf "%s\\n", $0 }')
+                | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/- /' -e 's/$/\\n/' \
+                | tr -d '\n')
           if [ -n "$pre" ]; then
             pre="Scanned by:\\n\\n${pre}\\n"
           fi
@@ -554,6 +563,33 @@ sandbox:
         # human was asked to approve. A success criterion that is satisfiable
         # without doing the work is not a success criterion. Here the only way
         # to produce the confirmation line is to have made the request.
+        #
+        # AND ON 2026-09-18 IT MISSED AGAIN, with the success criterion already
+        # fixed and this helper never invoked. The clarifier's answer was the
+        # command line itself, quoted, arguments and backslashes and all —
+        # `"/sandbox/bin/plan-issue \"docker.io/library/nginx:1.31.6\" …"`. Every
+        # argument in it was RIGHT: the full old reference, the AppCo reference
+        # off triage's `pull as:` line, three real CVE ids, the corpus id. The
+        # model did the thinking and then did not press the button.
+        #
+        # What had changed was that 0.3.3 gave this agent a SECOND errand — run
+        # `cve` to re-check the advisory before filing. `survey-issue` above had
+        # already paid for that lesson eleven days earlier and written the rule
+        # down in its own header: the first command in a briefing executes on
+        # every run we have logged, the second comes back as prose, so do not
+        # give this model a second errand. The rule was true and the next change
+        # to a briefing broke it anyway. The re-check was redundant on top of
+        # that — the researcher runs `cve` on every id it cites and its output
+        # block, which is pasted into this agent's prompt, already carried the
+        # three `https://www.cve.org/CVERecord` URLs.
+        #
+        # So the errand is gone and the briefing is one command again. The
+        # second half of the fix is not here: the orchestrator now checks that
+        # whatever ends up on the plan issue carries the `Change:` line that
+        # `forge-remediate` parses, BEFORE the human is asked to approve it.
+        # This run passed a gate on an issue that could not be executed, which
+        # is the failure that actually cost the run — the skipped command only
+        # cost a step.
         [ "$#" -eq 5 ] || {
           echo "usage: plan-issue <old-image> <new-image> <advisory> <corpus-ids> <rationale>" >&2
           echo "  give five arguments, each quoted; no JSON and no newlines" >&2
@@ -1161,8 +1197,19 @@ sandbox:
         # federated — "the scanner found nothing" is not a measurement until it
         # says which scanner. And auto-scan defaults to OFF, which yields a
         # flawless-looking cluster with a 200 on every call.
-        cfg = call("GET", "/v1/scan/config", soft=True) or {}
-        auto = (cfg.get("config") or {}).get("auto_scan")
+        cfg = (call("GET", "/v1/scan/config", soft=True) or {}).get("config") or {}
+        # READ THE FIELD THIS CONTROLLER ACTUALLY USES. 5.4.3 split the single
+        # `auto_scan` flag into `enable_auto_scan_workload` and
+        # `enable_auto_scan_host`, and kept the old key "for backward
+        # compatibility" as a plain bool that the new settings do not write
+        # (neuvector/controller/api/apis.go, RESTScanConfig). On the 5.6.1
+        # controller here that key marshals as false while workload auto-scan
+        # is on in the UI — so 0.3.5 put a banner on the survey issue telling a
+        # human to stop, about a scanner that was working. Prefer the new key;
+        # fall back to the deprecated one for a pre-5.4.3 controller.
+        auto = cfg.get("enable_auto_scan_workload")
+        if auto is None:
+            auto = cfg.get("auto_scan")
         scanners = (call("GET", "/v1/scan/scanner", soft=True) or {}).get("scanners") or []
         print("SUSE Security: " + BASE)
         print("auto-scan (containers): " +
@@ -2285,18 +2332,13 @@ agents:
       invented: the corpus has no web address, and one run put
       `https://corpus.suse.com/...` on an issue this way. Drop it. The only
       URL that belongs in the rationale is a `https://www.cve.org/CVERecord`
-      one that `/sandbox/bin/cve` printed.
+      one that appears in the research above.
 
-      IF <advisory> IS A CVE ID, CHECK IT BEFORE YOU FILE THE ISSUE:
-
-        /sandbox/bin/cve CVE-2024-6387
-
-      `status: PUBLISHED` means the id is real and you may use it.
-      `status: NO-RECORD` means no such CVE has been published — the id is
-      wrong, so do not put it on the issue; use one the researchers cited, or
-      write "none" and say in the rationale that the advisory is unverified.
-      `status: ERROR` means the lookup failed rather than the id being bad:
-      file the issue anyway and say the advisory could not be checked.
+      THE ADVISORY IS ALREADY CHECKED. The researchers ran the CVE lookup on
+      every id they name and only kept the ones that came back published, so
+      take <advisory> from their list and do not verify it again. If they
+      named none, write "none" and say in the rationale that the advisory is
+      unverified. Do not go and look one up.
 
       BOTH IMAGES IN FULL — registry host, repository and tag, exactly as they
       are written above. <old-image> is the image under analysis. <new-image>

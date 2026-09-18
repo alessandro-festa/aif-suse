@@ -207,7 +207,7 @@ spec:
     # -------------------------------------------------------------------
     - chartRepo: secops-cpu
       chartName: secops-cpu-agents
-      chartVersion: 0.3.5
+      chartVersion: 0.3.6
       vendor: suse
       targetNamespace: ns-secops-cpu
       values:
