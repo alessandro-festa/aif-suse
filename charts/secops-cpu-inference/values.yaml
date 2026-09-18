@@ -1,0 +1,166 @@
+# CPU inference for the zero-GPU SecOps profile.
+#
+# ONE CHART, TWO DEPLOYMENTS — and that is forced, not a style choice.
+# Blueprint.spec.components is a CEL list-map keyed on `chartName`, so the API
+# server rejects a Blueprint that lists the same chart twice. A generative
+# server and an embedding server therefore cannot be two installs of one
+# parameterised chart; they have to be two Deployments inside one chart. This
+# is the same constraint that kept Nemotron Ultra and Lightning out of the GPU
+# blueprint's component list.
+#
+# THERE IS NO `nvidia.com/gpu` ANYWHERE IN THIS CHART, deliberately.
+# downstream-1 runs the run.ai fake-gpu-operator, so its nodes advertise
+# `nvidia.com/gpu` and carry `nvidia.com/gpu.product=H200` labels with no CUDA
+# device behind them. A pod that requests a GPU here will schedule happily and
+# then fail at runtime — the worst of both worlds. Requesting nothing is the
+# only honest option.
+
+# The SUSE vendor injector (`vendor: suse` on the Blueprint component)
+# unconditionally overwrites BOTH of these keys with the combined SUSE pull
+# secret. They are templated so the overwrite lands somewhere valid rather than
+# creating a key the pod spec never reads. Do not add a values.schema.json with
+# additionalProperties:false — the injector's extra `global.*` key would then
+# fail validation and the install would break for a reason nothing reports.
+imagePullSecrets: []
+global:
+  imagePullSecrets: []
+
+image:
+  repository: ghcr.io/ggml-org/llama.cpp
+  # DEVIATION from the upstream reference deployment, which uses the floating
+  # `server` tag. Pinned by digest: `server` is rebuilt continuously, so a
+  # floating tag means the model gate in spike/RESULTS.md was run against a
+  # binary that is no longer what deploys. Re-measure whenever this changes.
+  #
+  # Set to the digest for the arm64+amd64 manifest index (verified multi-arch:
+  # linux/amd64, linux/arm64, linux/s390x). Use the tag only for local iteration.
+  tag: server
+  digest: ""
+  pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------------------------
+# Generative server — the one the agents' opencode sessions talk to.
+# ---------------------------------------------------------------------------
+generative:
+  enabled: true
+  name: secops-cpu-llm
+
+  # The GGUF is pulled by llama-server at container start via -hf. Pin the
+  # quantisation explicitly; `:Q4_K_M` is part of the repo spec, not a default.
+  #
+  # Model chosen by measurement, not preference — see
+  # examples/secops-agent-factory-cpu/spike/RESULTS.md. The gate is >=8/9
+  # successful tool calls, because an agent that cannot reliably emit a tool
+  # call is a chatbot. Numbers from the Ollama table in
+  # examples/openshell/41-blueprint-openshell-inference-ollama-shared.yaml do
+  # NOT transfer: different runtime, different chat template, different result.
+  ggufRepo: unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M
+
+  # Served model name. This is the string the OpenShell provider's
+  # `inference set --model` must match exactly, and the string opencode sends
+  # as `model`. A mismatch surfaces as a 404 from /v1/chat/completions that
+  # reads like the server is down.
+  servedModelName: qwen3-4b
+
+  # --jinja is REQUIRED, not optional tuning.
+  #
+  # llama-server only emits OpenAI-shaped `tool_calls` on the Jinja chat-template
+  # path. Without it the model's tool call comes back as prose inside `content`,
+  # opencode sees no tool call, and every agent silently degrades into a
+  # narrator that describes what it would have done. This flag is the difference
+  # between the six-agent topology working and appearing to work.
+  jinja: true
+
+  # Total context, SPLIT ACROSS SLOTS. -c is the whole KV budget and --parallel
+  # divides it: parallel=2 with c=16384 gives each slot 8192 tokens, not 16384.
+  # Six agents share one server, but they do not all run at once — the
+  # orchestrator creates a sandbox, runs its agent, collects and deletes; only
+  # the two researchers overlap.
+  #
+  # THESE WERE 16384/2, AND THAT CONFIGURATION IS OOM-KILLED MID-RUN. Measured
+  # on downstream-1 during the researcher fan-out, on the pod cgroup:
+  #   memory.peak 8540913664 (7.95 GiB) against an 8Gi limit, anon 6.49 GB
+  # and the kill lands on the one pod every agent depends on, two phases into a
+  # twenty-minute run. Two slots of 8192 is 16384 tokens of KV cache at ~144
+  # KiB/token for Qwen3-4B — about 2.25 GiB — and that is what does not fit.
+  #
+  # 8192/1 halves the KV budget and leaves each agent exactly the same usable
+  # context, because a slot was already 8192: what is lost is the overlap
+  # between the two researchers, who now queue instead. That is minutes of wall
+  # clock. The alternative, raising the limit to 10Gi, spends memory the host
+  # does not have — MemAvailable on the podman VM is ~6.5 GB with NO SWAP, so
+  # the pod-level kill simply becomes a VM-level one.
+  #
+  # On a host with real memory, put these back to 16384/2 and the researchers
+  # overlap again; the spike measured that as nearly free (spike/RESULTS.md).
+  contextSize: 8192
+  parallel: 1
+
+  resources:
+    limits:
+      cpu: "4"
+      # Measured peak RSS for Qwen3-4B Q4_K_M at threads=4 was 5.02 GB on the
+      # sovereignty-assessment spike; the whole pod peaked at 7.95 GiB here
+      # with the old 16384/2 context budget, which is the kill above. The
+      # podman VM has NO SWAP, so an overcommit here is an OOM kill of the one
+      # pod everything else depends on.
+      memory: 8Gi
+    requests:
+      cpu: "2"
+      memory: 6Gi
+
+# ---------------------------------------------------------------------------
+# Embedding server — feeds the corpus ingest Job and the researchers' lookups.
+# ---------------------------------------------------------------------------
+embedding:
+  enabled: true
+  name: secops-cpu-embed
+
+  # ~85 MB, 768 dimensions. The collection in secops-cpu-knowledge is created
+  # with a matching vector size; changing the model here without changing it
+  # there produces an ingest Job that fails on every upsert.
+  ggufRepo: nomic-ai/nomic-embed-text-v1.5-GGUF:Q4_K_M
+  servedModelName: nomic-embed-text
+
+  # Embedding models have a small fixed context and no tool calling, so neither
+  # --jinja nor --parallel applies. --embeddings is set by the template.
+  contextSize: 2048
+
+  resources:
+    limits:
+      cpu: "2"
+      memory: 2Gi
+    requests:
+      cpu: "500m"
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Model cache
+# ---------------------------------------------------------------------------
+modelCache:
+  # DEVIATION from the upstream reference deployment, which hardcodes an
+  # emptyDir. With emptyDir every pod restart re-downloads ~2.4 GB from Hugging
+  # Face, inside a 20-minute startup-probe budget (10s x 120). On a laptop
+  # cluster that is the demo's single most likely failure, and it fails slowly
+  # and confusingly rather than fast and clearly.
+  #
+  # Set persistence:false only if the cluster has no usable StorageClass.
+  persistence: true
+  # downstream-1 has exactly one StorageClass, `standard`
+  # (rancher.io/local-path, RWO, WaitForFirstConsumer). Empty means "use the
+  # cluster default", which is correct here and portable elsewhere.
+  storageClass: ""
+  # Both models plus GGUF download temp space. RWO, so each Deployment gets its
+  # own PVC — local-path cannot share one across pods on different nodes.
+  size: 12Gi
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# Neither Deployment tolerates or targets anything: downstream-1's three nodes
+# are homogeneous and there is no reason to pin. Left here because the absence
+# is a decision, not an omission.
+nodeSelector: {}
+tolerations: []
+affinity: {}

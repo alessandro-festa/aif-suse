@@ -1,0 +1,203 @@
+# OpenShell Gateway 0.2.3 — 0.2.1 with a REGISTRY sandbox image, plus a pinned
+# supervisor image.
+#
+# This is a new VERSION of the blueprint in examples/openshell/, not a fork of
+# it. Same chart, same release name, same topology; two deltas, and both are
+# forced.
+#
+# 0.2.3 adds the second one, `supervisor.image.tag`. 0.2.2 installed cleanly and
+# reported Running, and every `sandbox create` against it still failed — see the
+# comment on that value. Do not use 0.2.2.
+#
+# WHY A NEW VERSION IS NEEDED AT ALL, since the orchestrator names the image
+# itself. `openshell sandbox create --from <ref>` sets SandboxTemplate.image and
+# overrides the gateway's default (crates/openshell-cli/src/run.rs:1707 and
+# resolve_from at :2159 — a value containing `/`, `:` or `.` is taken as a full
+# image reference). So `server.sandboxImage` genuinely does not matter here.
+#
+# `server.sandboxImagePullPolicy` DOES. It is a driver-level setting stamped
+# onto every sandbox pod regardless of which image was requested
+# (crates/openshell-driver-kubernetes/src/main.rs:45,100). Blueprint 0.2.1 sets
+# it to "Never", because its image is side-loaded with `kind load`. Leave that
+# in place and a sandbox created from a registry reference fails with
+# ErrImageNeverPull — an error that reads like a missing image rather than a
+# gateway setting.
+#
+# Everything else below is 0.2.1 verbatim. Its commented-out blocks — OIDC,
+# Gateway API, cert-manager, Vault, SPIFFE, corporate proxy — are NOT repeated:
+# they are the same in both, they are extensively annotated there, and two
+# copies of two hundred lines of commentary is two copies to keep in step.
+# Read examples/openshell/10-blueprint-openshell-gateway.yaml for those.
+#
+# INSTALL EXACTLY ONE GATEWAY PER CLUSTER. Both versions pin
+# `releaseName: openshell` in namespace `openshell`, so installing this
+# alongside 0.2.1 puts two HelmOps on one Helm release. If downstream-1 already
+# runs 0.2.1, either upgrade the existing AIWorkload to 0.2.3 or leave it and
+# side-load the arm64 sandbox image instead — do not install both.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: Blueprint
+metadata:
+  labels:
+    ai-factory.suse.com/blueprint-name: openshell-gateway
+    ai-factory.suse.com/blueprint-version: 0.2.3
+  name: openshell-gateway-0-2-3
+spec:
+  source: Nvidia
+  displayName: OpenShell Gateway
+  version: 0.2.3
+  description: |
+    NVIDIA OpenShell gateway — a runtime environment for autonomous agents.
+    Install once per cluster, then install "OpenShell Workspace" once into each
+    tenant namespace that should be able to run sandboxes.
+
+    Identical to 0.2.1 except that the default sandbox image is pulled from a
+    registry rather than side-loaded into the nodes, and the supervisor image
+    is pinned to the gateway's own commit. Use this version when the sandbox
+    image is published; use 0.2.1 when it is built locally and loaded with
+    `kind load`.
+
+    Requires the Kubernetes Agent Sandbox CRDs and controller on the cluster:
+      kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.0/sandbox-with-extensions.yaml
+
+    THE SANDBOX IMAGE MUST BE PULLABLE BY THE NODES. A GitHub Container
+    Registry package is PRIVATE by default, and a private package gives an
+    ImagePullBackOff on a cluster with no credentials. This one has been made
+    PUBLIC, and an anonymous pull was verified against ghcr's token endpoint —
+    so sandboxImagePullSecrets below stays commented out. Flip the package back
+    to private and it must be uncommented.
+
+    IT MUST ALSO BE linux/arm64. downstream-1 is three arm64 kind nodes, and an
+    amd64-only manifest schedules and then dies with an exec-format error. The
+    published image IS arm64: built natively on an Apple Silicon host rather
+    than by the fork's GitHub workflow, which sets no `platforms:` and no QEMU.
+    Verified inside the image — `uname -m` is aarch64 and all five CLIs report
+    a version (opencode 1.2.18, openclaw 2026.5.18, codex 0.117.0,
+    copilot 1.0.16, claude 2.1.145).
+
+    PROTOTYPE — this blueprint enables server.auth.allowUnauthenticatedUsers so
+    it can be demonstrated without an OIDC provider. Every caller is accepted as
+    a local developer principal, which also makes every caller a Platform Admin.
+    Do NOT use on a shared or production cluster; set server.oidc.* and turn
+    this off first.
+  components:
+    # The upstream chart's Chart.yaml name is literally "helm-chart", which is
+    # also the OCI repository name.
+    - chartRepo: openshell
+      chartName: helm-chart
+      chartVersion: 0.0.0-dev.17171cd9337a2181d4bb5a9e711e1f2ad5f69388
+      vendor: suse
+      targetNamespace: openshell
+      # CRITICAL, and the single value that makes the gateway and workspace
+      # charts agree: it fixes both the ServiceAccount name the workspace
+      # RoleBinding grants and the `app.kubernetes.io/instance` label the
+      # workspace NetworkPolicy selects. The orchestrator depends on it for a
+      # third reason — `openshell.openshell.svc.cluster.local` is only a SAN on
+      # the server certificate because the release is named `openshell` in
+      # namespace `openshell` (crates/openshell-bootstrap/src/pki.rs,
+      # DEFAULT_SERVER_SANS). Change it and in-cluster mTLS stops verifying.
+      releaseName: openshell
+      values:
+        # Shared-gateway topology: the sandbox ServiceAccount, Role, RoleBinding
+        # and NetworkPolicy come from the Workspace blueprint in each tenant
+        # namespace, not from this release.
+        workspaceResources:
+          enabled: false
+
+        supervisor:
+          # Pinned rather than auto-detected from .Capabilities.KubeVersion.
+          # ImageVolume is only on by default from Kubernetes 1.35; downstream-1
+          # is 1.31.0. Drop this on K8s >= 1.35.
+          sideloadMethod: init-container
+
+          image:
+            # THE DELTA FROM 0.2.2, and it is not optional: without it no
+            # sandbox can start at all.
+            #
+            # An empty tag does NOT fall back to the chart's own
+            # `openshell.supervisorImage` helper, which would have resolved to
+            # .Chart.AppVersion and been correct. _helpers.tpl's
+            # `openshell.supervisorImageOverrideEnabled` only emits the
+            # override when the repository differs from the default OR the tag
+            # is non-empty, so leaving both alone hands the decision to the
+            # GATEWAY BINARY's built-in default — the floating `:dev` tag.
+            #
+            # `:dev` is stale. Its arm64 manifest is a Debian image whose only
+            # binary is /openshell-supervisor, while this gateway's generated
+            # init container runs `/openshell-sandbox copy-self`. The pod dies
+            # before initialising, with
+            #
+            #   exec: "/openshell-sandbox": stat /openshell-sandbox:
+            #   no such file or directory
+            #
+            # which reaches the CLI as nothing more informative than
+            # `PodFailed: Pod failed`. Observed on the first sandbox created
+            # against this gateway.
+            #
+            # The value is the chart's appVersion, i.e. the gateway commit, and
+            # must be changed together with chartVersion above. That image
+            # (verified on ghcr) is Alpine-based with ENTRYPOINT
+            # ["/openshell-sandbox"] and publishes linux/arm64.
+            tag: "17171cd9337a2181d4bb5a9e711e1f2ad5f69388"
+
+        server:
+          auth:
+            # PROTOTYPE ONLY — see the description above.
+            allowUnauthenticatedUsers: true
+
+          drivers:
+            kubernetes:
+              workspaceMode: operator
+              # The gateway watches namespaces carrying this label. A missing
+              # label is the single most common cause of `sandbox create`
+              # failing with an error that never mentions labels.
+              operatorNamespaceLabel: ai-factory.suse.com/openshell-workspace=true
+
+          # ---------------------------------------------------------------
+          # THE DELTA FROM 0.2.1
+          # ---------------------------------------------------------------
+          # Our fork's registry, not NVIDIA's. OpenShell-Community's
+          # .github/workflows/openclaw-suse.yml publishes to
+          # ghcr.io/${github.repository_owner}/openshell-community/..., and the
+          # origin of that fork is alessandro-festa.
+          #
+          # Only a DEFAULT. The orchestrator passes --from on every
+          # `sandbox create`, so in this profile nothing is ever created from
+          # this value; it is what an interactive `openshell sandbox create`
+          # with no flags would use, which is exactly the command someone runs
+          # to check the gateway by hand.
+          #
+          # `latest` and `v0.1.0` are the same manifest,
+          # sha256:2d817c37977977c94fc5d02d1066ced1451996e537dfda0c375e3b4ecb5e552b.
+          # Both were pushed by hand from an arm64 host; the fork's publish
+          # workflow is NOT the source of this image and was deliberately not
+          # used, because it builds amd64 only and runs only on a tag push
+          # matching `openclaw-suse/v*`.
+          sandboxImage: "ghcr.io/alessandro-festa/openshell-community/sandboxes/openclaw-suse:latest"
+          # IfNotPresent, NOT 0.2.1's "Never". This is a driver-level setting
+          # applied to every sandbox pod whatever image it was created from, so
+          # "Never" would break the orchestrator's registry-pulled sandboxes
+          # too — see the header.
+          sandboxImagePullPolicy: "IfNotPresent"
+          # Needed only if the ghcr package is private. The Secret must exist in
+          # each WORKSPACE namespace (ns-secops-sandboxes), not in `openshell` —
+          # that is where the sandbox pods run.
+          #
+          #   kubectl -n ns-secops-sandboxes create secret docker-registry ghcr-pull \
+          #     --docker-server=ghcr.io \
+          #     --docker-username=<github-user> \
+          #     --docker-password=<PAT with read:packages>
+          #
+          # sandboxImagePullSecrets:
+          #   - name: ghcr-pull
+
+          # Reject a policy that fails validation, and deny the traffic it
+          # governed. The only policy-related Helm value; policy CONTENT is set
+          # per sandbox with `--policy`, which is what the orchestrator does.
+          policyValidationFailureMode: fail_closed
+
+          # Empty = the cluster default StorageClass. downstream-1 has exactly
+          # one, `standard` (rancher.io/local-path, WaitForFirstConsumer), and
+          # it is the default — so this resolves. Set it explicitly on a cluster
+          # with no default, or sandbox workspace PVCs stay Pending and the
+          # sandbox never starts.
+          workspaceStorageClass: ""

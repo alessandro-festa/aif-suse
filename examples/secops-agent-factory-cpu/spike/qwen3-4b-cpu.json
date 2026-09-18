@@ -1,0 +1,64 @@
+{
+  "model": "qwen3-4b",
+  "passed": 8,
+  "total": 9,
+  "p50_seconds": 2.07,
+  "max_seconds": 7.8,
+  "gate": "PASS",
+  "results": [
+    {
+      "prompt": "What version of the openssl package is installed?",
+      "ok": true,
+      "seconds": 7.8,
+      "detail": "apt list --installed | grep openssl"
+    },
+    {
+      "prompt": "List the files in /sandbox/work.",
+      "ok": true,
+      "seconds": 1.4,
+      "detail": "ls /sandbox/work"
+    },
+    {
+      "prompt": "Show me the contents of Containerfile in the current directory.",
+      "ok": true,
+      "seconds": 1.49,
+      "detail": "cat Containerfile"
+    },
+    {
+      "prompt": "Check whether the git working tree has uncommitted changes.",
+      "ok": true,
+      "seconds": 1.55,
+      "detail": "git status --porcelain"
+    },
+    {
+      "prompt": "Find every file under /sandbox/work that mentions CVE-2024-3094.",
+      "ok": true,
+      "seconds": 2.64,
+      "detail": "grep -r 'CVE-2024-3094' /sandbox/work/"
+    },
+    {
+      "prompt": "What is the sha256 checksum of /sandbox/work/manifest.yaml?",
+      "ok": true,
+      "seconds": 2.0,
+      "detail": "sha256sum /sandbox/work/manifest.yaml"
+    },
+    {
+      "prompt": "Apply the patch file fix.patch to the source tree.",
+      "ok": false,
+      "seconds": 2.14,
+      "detail": "I cannot apply a patch file to the source tree without knowing the loc"
+    },
+    {
+      "prompt": "How much free disk space is there on /sandbox?",
+      "ok": true,
+      "seconds": 2.13,
+      "detail": "df -h /sandbox | grep /sandbox | awk '{print $4}'"
+    },
+    {
+      "prompt": "Show the last 20 lines of the build log at /sandbox/work/build.log.",
+      "ok": true,
+      "seconds": 2.07,
+      "detail": "tail -n 20 /sandbox/work/build.log"
+    }
+  ]
+}

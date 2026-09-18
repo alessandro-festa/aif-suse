@@ -1,0 +1,312 @@
+# The zero-GPU SecOps stack: inference, retrieval, the agent plane, and the
+# forge that holds both human gates.
+#
+# FOUR COMPONENTS AND NOT MORE, because Blueprint.spec.components is a CEL
+# list-map keyed on `chartName` — the API server rejects duplicates outright.
+# That is why secops-cpu-inference renders BOTH llama-server Deployments
+# (generative and embedding) from one chart rather than being installed twice,
+# and it is the same constraint that forced Nemotron Ultra and Lightning apart
+# in the GPU profile.
+#
+# THERE IS NO ORDERING WITHIN A BLUEPRINT. The operator emits one Fleet HelmOp
+# per component and Fleet applies them concurrently; there is no `dependsOn`.
+# Expect a noisy first fifteen minutes and do not intervene:
+#
+#   - both llama-server pods sit in startupProbe for as long as the GGUF pull
+#     takes (a 20-minute budget: periodSeconds 10 x failureThreshold 120)
+#   - the ingest Job retries until the embedding server answers — its own
+#     wait is 1500s, and backoffLimit 3 on top of that
+#   - the orchestrator restarts until the gateway, Qdrant and Gitea all resolve
+#
+# All three recover without help. What does NOT recover on its own is anything
+# in the prerequisites below.
+#
+# PREREQUISITES — none of these are created by this Blueprint, and each failure
+# mode is unhelpful in its own way. See README.md for the full sequence.
+#
+#   1. Namespaces:
+#        kubectl create namespace ns-secops-cpu
+#        kubectl create namespace ns-secops-forge
+#        kubectl create namespace ns-secops-sandboxes
+#        kubectl label namespace ns-secops-sandboxes \
+#          ai-factory.suse.com/openshell-workspace=true
+#
+#   2. The gateway's client certificate, copied into ns-secops-cpu. The chart's
+#      PKI hook creates it in `openshell`; the orchestrator mounts it by the
+#      name in secops-cpu-agents' values (openshell-client-tls) and will not
+#      start without it.
+#
+#   3. The Gitea bot token, as a Secret with key `token`. Created after Gitea is
+#      up and the seed script has made the `secops-bot` account — so the
+#      orchestrator WILL crash-loop until then, and that is expected.
+#        kubectl -n ns-secops-cpu create secret generic secops-gitea-token \
+#          --from-literal=token=<the bot's token>
+#
+#   4. The Gitea admin Secret, before Gitea installs — the chart's init
+#      container reads keys `username` and `password` from it:
+#        kubectl -n ns-secops-forge create secret generic gitea-admin-secret \
+#          --from-literal=username=gitea_admin \
+#          --from-literal=password="$(head -c 18 /dev/urandom | base64)"
+#
+# spec.componentValues on the AIWorkload is NOT read on the Blueprint path. To
+# change any value below, author a new Blueprint version and bump spec.version.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: Blueprint
+metadata:
+  labels:
+    ai-factory.suse.com/blueprint-name: secops-agent-factory-cpu
+    ai-factory.suse.com/blueprint-version: 0.1.0
+  name: secops-agent-factory-cpu-0-1-0
+spec:
+  source: Custom
+  displayName: SecOps Agent Factory CPU
+  version: 0.1.0
+  description: |
+    The Sovereign Agentic SecOps reference architecture, sized for a cluster
+    with no GPUs: one CPU model shared by six sandboxed agents, CPU retrieval,
+    the live SUSE Security deployment as the oracle at both ends of the loop,
+    and three human gates in an in-cluster forge.
+
+    WHAT THIS IS NOT. It is not the GPU profile with smaller models. No image in
+    examples/secops-agent-factory/ has a linux/arm64 manifest, so nothing there
+    can execute on this cluster and every component is a substitution. There is
+    no NIM Operator, no Nemotron tier, no NVIDIA RAG Blueprint, no AI-Q, no NeMo
+    Guardrails, no flywheel and no SUSE Observability. Ten agents become six
+    policies. It demonstrates the execution boundary, per-agent least privilege,
+    three real human gates and the sovereignty property — no token leaves the
+    cluster. It does not demonstrate frontier-model reasoning.
+
+    INSTALL THE OPENSHELL GATEWAY AND A WORKSPACE FIRST. The agent plane creates
+    one sandbox per agent through the gateway, and a workspace that does not
+    exist produces a failure that never mentions workspaces.
+
+    SIZED AGAINST A MEASURED BUDGET, NOT ROUNDED UP. The host is a 22.8 GiB
+    podman VM with NO SWAP carrying two kind clusters, so an overcommit here is
+    an OOM kill rather than a slowdown. Roughly: llama.cpp 8Gi, embeddings 2Gi,
+    Qdrant 1Gi, Gitea 0.5Gi, orchestrator 0.25Gi, and at most three sandboxes
+    alive at once. Six agents does not mean six concurrent pods — the
+    orchestrator creates a sandbox, runs its agent, collects the result and
+    deletes it, and only the two researchers overlap.
+
+    AFTER INSTALL — wire the model into OpenShell. These are gateway runtime
+    state, not Helm values, and BOTH ARE WORKSPACE-SCOPED. Omit --workspace and
+    the sandboxes see no model at all:
+
+      openshell -g <gateway> --workspace ns-secops-sandboxes provider create \
+        --name llamacpp-shared --type openai \
+        --credential OPENAI_API_KEY=unused \
+        --config OPENAI_BASE_URL=http://secops-cpu-llm.ns-secops-cpu.svc.cluster.local:8000/v1
+
+      openshell -g <gateway> --workspace ns-secops-sandboxes inference set \
+        --provider llamacpp-shared --model qwen3-4b --no-verify
+
+    --no-verify because `inference set` probes the endpoint before saving, and
+    llama-server does not answer until the GGUF has finished downloading.
+
+    Inside a sandbox the model is at https://inference.local. No sandbox policy
+    grants it and none needs to: it is a built-in supervisor route,
+    short-circuited before network_policies is consulted.
+  components:
+    # -------------------------------------------------------------------
+    # 1. Inference — two llama-server Deployments from one chart
+    # -------------------------------------------------------------------
+    - chartRepo: secops-cpu
+      chartName: secops-cpu-inference
+      chartVersion: 0.1.1
+      vendor: suse
+      # Pinned rather than taken from the install wizard. Three hostnames
+      # depend on it: the provider URL quoted above, the ingest Job's
+      # embeddingUrl (which uses the SHORT name and therefore requires
+      # inference and knowledge to share a namespace), and two of the six
+      # sandbox policies.
+      targetNamespace: ns-secops-cpu
+      values:
+        # NO nvidia.com/gpu ANYWHERE, and this is not merely unnecessary —
+        # downstream-1 advertises fake H200s through run.ai's
+        # fake-gpu-operator (run.ai/fake.gpu=true), so a pod requesting one
+        # schedules successfully and then fails at runtime. An absent resource
+        # request is safer here than a present one.
+        generative:
+          # ~5.0 GB peak RSS measured on this hardware, 8/9 tool calls, p50
+          # 2.07s. See spike/RESULTS.md — and note the first run there
+          # accidentally measured Metal and was 3x optimistic.
+          ggufRepo: unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M
+          servedModelName: qwen3-4b
+          # Without --jinja, llama-server returns tool calls as prose and every
+          # agent degrades into a narrator.
+          jinja: true
+          # ONE slot, and the two researchers therefore queue rather than
+          # overlap. 2 slots of 8192 was the design and it is OOM-KILLED on
+          # this hardware: the pod peaked at 7.95 GiB against its 8Gi limit
+          # during the researcher fan-out, because two slots is 16384 tokens of
+          # KV cache at ~144 KiB/token. The kill lands on the one pod every
+          # agent depends on, two phases into a twenty-minute run.
+          #
+          # Each agent's usable context is unchanged — a slot was already 8192.
+          # What is lost is wall clock. See charts/secops-cpu-inference/
+          # values.yaml for the measurement and for why raising the limit to
+          # 10Gi is the worse trade on a VM with no swap.
+          parallel: 1
+          contextSize: 8192
+          resources:
+            limits:
+              cpu: "4"
+              memory: 8Gi
+            requests:
+              cpu: "2"
+              memory: 6Gi
+        embedding:
+          ggufRepo: nomic-ai/nomic-embed-text-v1.5-GGUF:Q4_K_M
+          servedModelName: nomic-embed-text
+        # A PVC, not the emptyDir the source controller used. Without it every
+        # pod restart re-downloads ~2.4 GB of GGUF, which is this demo's real
+        # failure mode: it looks like a hang, not like a download.
+        modelCache:
+          persistence: true
+          size: 12Gi
+          storageClass: ""
+
+    # -------------------------------------------------------------------
+    # 2. Retrieval — Qdrant plus a one-shot ingest Job
+    # -------------------------------------------------------------------
+    - chartRepo: secops-cpu
+      chartName: secops-cpu-knowledge
+      chartVersion: 0.1.4
+      vendor: suse
+      targetNamespace: ns-secops-cpu
+      values:
+        collection:
+          name: secops_vulnerability_corpus
+          # 768 — nomic-embed-text-v1.5. Changing the embedding model without
+          # changing this gives a collection that accepts nothing and an ingest
+          # Job that fails on its first upsert.
+          vectorSize: 768
+        qdrant:
+          # The human's answer to "which SUSE-SU did the agent actually cite?".
+          # Browse the collection at /dashboard through a port-forward and open
+          # the cited point. Nothing to build — it ships in the image.
+          dashboard:
+            enabled: true
+          persistence:
+            enabled: true
+            size: 4Gi
+        ingest:
+          enabled: true
+          # The SHORT service name: this Job and the embedding server are in
+          # the same namespace by construction (both components pin
+          # ns-secops-cpu above).
+          embeddingUrl: http://secops-cpu-embed:8000/v1/embeddings
+          embeddingModel: nomic-embed-text
+          # 25 minutes, matching the generative pod's startup budget. The
+          # embedding GGUF is small (~85 MB) but both pods compete for the same
+          # node while the big one downloads.
+          waitTimeoutSeconds: 1500
+
+    # -------------------------------------------------------------------
+    # 3. The agent plane
+    # -------------------------------------------------------------------
+    - chartRepo: secops-cpu
+      chartName: secops-cpu-agents
+      chartVersion: 0.3.3
+      vendor: suse
+      targetNamespace: ns-secops-cpu
+      values:
+        orchestrator:
+          gateway:
+            # Verifies with no extra pkiInitJob.serverDnsNames and without
+            # --gateway-insecure, because this exact name is in
+            # DEFAULT_SERVER_SANS. That holds only while the gateway release is
+            # named `openshell` in namespace `openshell`, which blueprint 10
+            # pins for two other reasons as well.
+            endpoint: https://openshell.openshell.svc.cluster.local:8080
+            # Must match the AIWorkload that installs the Workspace blueprint.
+            workspace: ns-secops-sandboxes
+            clientTlsSecret: openshell-client-tls
+        sandbox:
+          # Pinned by digest, not by `:latest`. `latest` currently points at the
+          # same manifest, but this is the value the orchestrator passes to
+          # `openshell sandbox create --from`, and a sandbox whose image can
+          # change underneath it is a policy decision that nothing records.
+          # arm64, public, anonymous pull verified.
+          image: ghcr.io/alessandro-festa/openshell-community/sandboxes/openclaw-suse@sha256:2d817c37977977c94fc5d02d1066ced1451996e537dfda0c375e3b4ecb5e552b
+          # `opencode`, not `claude`. The OpenShell router speaks
+          # openai_chat_completions only and has no Anthropic /v1/messages
+          # surface, so the Anthropic CLI cannot reach the model at all. Same
+          # image either way — this is the CLI in it that fits the endpoint.
+          command: ["opencode", "run"]
+        suseSecurity:
+          # NOTE THE `-api` SUFFIX. `neuvector-svc-controller` also exists and
+          # is the obvious guess, but it is the headless gossip Service on
+          # 18300/18301. The chart creates the REST API Service only when
+          # controller.apisvc.type is set, which the managed-cluster values
+          # file does deliberately.
+          #
+          # The controller on THIS cluster, reached by in-cluster DNS — which
+          # is the point of running SUSE Security as a federation rather than
+          # pointing a policy at a node IP on the other cluster.
+          host: neuvector-svc-controller-api.cattle-neuvector-system
+          port: 10443
+        corpus:
+          host: secops-cpu-qdrant.ns-secops-cpu.svc.cluster.local
+          port: 6333
+          collection: secops_vulnerability_corpus
+        embeddings:
+          host: secops-cpu-embed.ns-secops-cpu.svc.cluster.local
+          port: 8000
+        forge:
+          host: gitea-http.ns-secops-forge.svc.cluster.local
+          port: 3000
+          owner: secops
+          repo: cluster-manifests
+          tokenSecret: secops-gitea-token
+        run:
+          # In a fuller deployment triage discovers this from the live SUSE
+          # Security findings. Seeding it keeps the demo reproducible and keeps
+          # the first phase from depending on what happens to be installed —
+          # but it must correspond to a document in the seed corpus, or the
+          # researchers will correctly report that they found nothing.
+          seedFinding: "CVE-2021-44228 (Log4Shell) reported against a workload image in this cluster"
+          # 30 minutes. This is a person reading an advisory, so it is a
+          # "something has gone wrong" bound, not a service-level expectation.
+          gateTimeoutSeconds: 1800
+
+
+    # -------------------------------------------------------------------
+    # 4. The forge — DELIBERATELY NOT A COMPONENT. Install it by hand.
+    # -------------------------------------------------------------------
+    # It was a fourth component, it was installed, and it FAILED — fourteen
+    # Helm revisions of:
+    #
+    #   Deployment in version "v1" cannot be handled as a Deployment: json:
+    #   cannot unmarshal object into Go struct field
+    #   LocalObjectReference.spec.template.spec.imagePullSecrets.name of type
+    #   string
+    #
+    # The cause is a shape mismatch between the operator and the chart, and
+    # neither side is wrong on its own:
+    #
+    #   - suseInjector.Apply (operator/internal/controller/aiworkload/
+    #     blueprint.go:473-484) writes global.imagePullSecrets as a list of
+    #     OBJECTS, [{name: suse-ai-pull-combined}]. It does this unconditionally
+    #     and after the Blueprint's own values are merged, so nothing written
+    #     here can override it. injectorFor (:603) has no opt-out — an unknown
+    #     or empty vendor falls back to the SUSE profile.
+    #   - Gitea follows the Bitnami convention, where global.imagePullSecrets is
+    #     a list of STRINGS. templates/_helpers.tpl:71 does
+    #     `append $pullSecrets (dict "name" .)`, so each object becomes
+    #     {name: {name: ...}} and the API server rejects the Deployment.
+    #
+    # A wrapper chart does not help: Helm propagates the parent's `global` into
+    # every subchart and the parent wins, so gitea would still see objects.
+    # Vendoring a patched copy of a 12.7.0 upstream chart into this repository
+    # would work and is worse — it is exactly the copy-that-drifts this
+    # blueprint set avoids everywhere else.
+    #
+    # So Gitea is a PREREQUISITE, installed with plain `helm install` alongside
+    # the agent-sandbox CRDs and the namespaces, from the values in
+    # integrations/gitea/values.yaml. See README.md. Nothing else changes: the
+    # Service is still gitea-http.ns-secops-forge, which is the only fact the
+    # policies and the orchestrator depend on.
+    #
+    # This is a real limitation of the operator, not of Gitea — the string-list
+    # convention is common enough that other charts will hit it.

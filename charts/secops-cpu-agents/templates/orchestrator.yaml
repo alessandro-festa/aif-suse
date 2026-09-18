@@ -1,0 +1,233 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: secops-cpu-orchestrator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-agents.labels" . | nindent 4 }}
+# No Role and no RoleBinding anywhere in this chart, and no service-account
+# token mounted. The orchestrator talks to exactly three things — the OpenShell
+# gateway over mTLS, the forge over HTTP, and its own status port — and none of
+# them is the Kubernetes API. A ServiceAccount exists only because every pod
+# gets one; this makes it an explicitly empty one rather than `default` with an
+# automounted token nobody audited.
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: secops-cpu-orchestrator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-agents.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.orchestrator.service.type }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    ai-factory.suse.com/secops-role: orchestrator
+  ports:
+    - name: http
+      port: {{ .Values.orchestrator.service.port }}
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secops-cpu-orchestrator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-agents.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.orchestrator.replicas }}
+  strategy:
+    # Recreate, not RollingUpdate. Two orchestrators overlapping for even a few
+    # seconds means two runs of the same pipeline, two plan issues, and a human
+    # approving one while the other waits. See the replicas note in values.yaml.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      ai-factory.suse.com/secops-role: orchestrator
+  template:
+    metadata:
+      labels:
+        {{- include "secops-cpu-agents.labels" . | nindent 8 }}
+        ai-factory.suse.com/secops-role: orchestrator
+      annotations:
+        # Everything this pod actually executes — the orchestrator, the agent
+        # roster, and the five policies — is mounted from workflow.yaml rather
+        # than baked into the image. Without this, a `helm upgrade` that
+        # changed only a prompt or only a deny rule would leave the running pod
+        # untouched and the operator convinced the change had landed.
+        #
+        # Hashing the rendered template, not the source files: the roster and
+        # the policy hostnames come from values, so a values-only change must
+        # roll the pod too.
+        checksum/workflow: {{ include (print $.Template.BasePath "/workflow.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: secops-cpu-orchestrator
+      automountServiceAccountToken: false
+      {{- include "secops-cpu-agents.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # fsGroup is what makes the two projected Secrets readable at all.
+        # kubelet does NOT chown a Secret volume to runAsUser — it writes it
+        # root-owned, with the group set to fsGroup when one is given. So an
+        # owner-only mode is unreadable by uid 65532 no matter how the pod is
+        # configured, and the tightest mode that actually works is 0440 with
+        # this group. See the defaultMode notes on the volumes below.
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: orchestrator
+          image: {{ include "secops-cpu-agents.orchestratorImage" . }}
+          imagePullPolicy: {{ .Values.orchestrator.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: OPENSHELL_GATEWAY_NAME
+              value: {{ .Values.orchestrator.gateway.name | quote }}
+            - name: OPENSHELL_GATEWAY_ENDPOINT
+              value: {{ .Values.orchestrator.gateway.endpoint | quote }}
+            - name: OPENSHELL_WORKSPACE
+              value: {{ .Values.orchestrator.gateway.workspace | quote }}
+            - name: OPENSHELL_CLIENT_TLS_DIR
+              value: /var/run/openshell-client-tls
+            - name: EXPECTED_OPENSHELL_VERSION
+              value: {{ .Values.orchestrator.expectedCliVersion | quote }}
+
+            - name: SANDBOX_IMAGE
+              value: {{ .Values.sandbox.image | quote }}
+            - name: POLICY_DIR
+              value: /policies
+            - name: AGENTS_FILE
+              value: /workflow/agents.json
+            - name: STATUS_HTML
+              value: /workflow/status.html
+            - name: STATUS_PORT
+              value: {{ .Values.orchestrator.service.port | quote }}
+
+            - name: GITEA_URL
+              value: http://{{ .Values.forge.host }}:{{ .Values.forge.port }}
+            - name: GITEA_OWNER
+              value: {{ .Values.forge.owner | quote }}
+            - name: GITEA_REPO
+              value: {{ .Values.forge.repo | quote }}
+            # The path to the token, never the token. Anything in this block is
+            # visible in `kubectl describe pod` and in every child process's
+            # /proc/<pid>/environ — including the sandboxes' CLI invocations.
+            - name: GITEA_TOKEN_FILE
+              value: /var/run/gitea/token
+            # For the handover comment only — the namespace a human applies the
+            # merged manifest to, and this Deployment's own coordinates so the
+            # comment can name the command that starts a fresh measurement.
+            # The orchestrator holds no kubeconfig and cannot run either.
+            - name: WORKLOAD_NAMESPACE
+              value: {{ .Values.run.workloadNamespace | quote }}
+            # Named in the handover comment, so that the reviewer at the merge
+            # gate is told where the replacement is already running. Same
+            # values the canary policy and `cluster-canary` are rendered from.
+            - name: CANARY_WORKLOAD
+              value: {{ printf "%s/%s" .Values.deploy.canary.namespace .Values.deploy.canary.name | quote }}
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
+            - name: ORCHESTRATOR_NAME
+              value: secops-cpu-orchestrator
+            - name: APPROVE_LABEL
+              value: {{ .Values.forge.approveLabel | quote }}
+            - name: REJECT_LABEL
+              value: {{ .Values.forge.rejectLabel | quote }}
+
+            # The account the survey issue is posted as. The selection gate
+            # reads the first comment that is a bare integer and skips comments
+            # from this user, so that the orchestrator's own trailer — or a
+            # future bot reply — can never be mistaken for the human's choice.
+            - name: GITEA_BOT_USER
+              value: {{ .Values.forge.botUser | quote }}
+            - name: SELECT_PROMPT_SECONDS
+              value: {{ .Values.run.selectPromptSeconds | quote }}
+            - name: GATE_TIMEOUT_SECONDS
+              value: {{ .Values.run.gateTimeoutSeconds | quote }}
+            - name: GATE_POLL_SECONDS
+              value: {{ .Values.run.gatePollSeconds | quote }}
+            - name: MERGE_TIMEOUT_SECONDS
+              value: {{ .Values.run.mergeTimeoutSeconds | quote }}
+            - name: AGENT_TIMEOUT_SECONDS
+              value: {{ .Values.run.agentTimeoutSeconds | quote }}
+          ports:
+            - containerPort: {{ .Values.orchestrator.service.port }}
+              name: http
+          volumeMounts:
+            - name: workflow
+              mountPath: /workflow
+              readOnly: true
+            - name: policies
+              mountPath: /policies
+              readOnly: true
+            - name: client-tls
+              mountPath: /var/run/openshell-client-tls
+              readOnly: true
+            - name: gitea-token
+              mountPath: /var/run/gitea
+              readOnly: true
+            # The CLI's own state: the gateway registration it writes at
+            # start-up, plus the active-gateway and last-sandbox files it
+            # rewrites as it goes. It cannot live on the read-only root, and it
+            # cannot be the projected Secret either — hence a copy into here.
+            - name: openshell-state
+              mountPath: /var/lib/openshell
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.orchestrator.resources | nindent 12 }}
+      volumes:
+        - name: workflow
+          configMap:
+            name: secops-cpu-workflow
+        - name: policies
+          configMap:
+            name: secops-cpu-agent-policies
+        - name: client-tls
+          secret:
+            secretName: {{ .Values.orchestrator.gateway.clientTlsSecret }}
+            # 0440, for the fsGroup reason above. The private key is copied to
+            # 0600 in the emptyDir by `_bootstrap_gateway()`, which is the copy
+            # the CLI actually reads.
+            defaultMode: 0440
+        - name: gitea-token
+          secret:
+            secretName: {{ .Values.forge.tokenSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.forge.tokenSecretKey }}
+                path: token
+        - name: openshell-state
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,82 @@
+# Rancher — an OpenShell provider profile.
+#
+# WHY THIS FILE EXISTS. `charts/secops-cpu-agents/values.yaml` attaches the
+# provider `rancher` to the deploy agent. OpenShell has no builtin profile for
+# Rancher — the builtin list is aws, aws-s3, google-cloud, anthropic,
+# aws-bedrock, deepinfra, google-vertex-ai, nvidia, openai, claude-code, codex,
+# copilot, cursor, github, pypi — so `sandbox create --provider rancher` fails
+# with
+#
+#   provider 'rancher' not found and 'rancher' is not a recognized provider
+#   type
+#
+# until this profile is imported and a provider instance is created from it.
+#
+# THE PROFILE DECLARES NO `endpoints:`, AND THAT IS THE WHOLE DESIGN. Identical
+# reasoning to suse-security.yaml, and it matters more here than anywhere else
+# in the set, because this is the credential that can change a running cluster.
+# A profile that listed endpoints would contribute them to every sandbox it is
+# attached to, making this file a second place where "what may the agent reach"
+# is decided. deploy.yaml is meant to be the only such place.
+#
+# An endpointless profile instead requires the policy to say where the
+# credential may be used, with
+#
+#   credential_binding:
+#     provider: rancher
+#
+# on the Rancher endpoint. See files/policies/deploy.yaml. OpenShell rejects an
+# endpointless provider that no policy binds, so a policy that forgets the
+# binding fails loudly at `sandbox create` rather than quietly sending an
+# unauthenticated PATCH.
+#
+# Import it with:
+#   openshell -g <gw> --workspace ns-secops-sandboxes provider profile import \
+#     --file rancher.yaml
+#
+# Same workspace rules as the other three ([[openshell-gotchas]] #11).
+id: rancher
+display_name: Rancher
+description: Rancher server API, for applying an approved image change to a running workload
+category: other
+inference_capable: false
+
+credentials:
+  - name: api_token
+    # Rancher API tokens are `token-xxxxx:<secret>` and are sent as
+    # `Authorization: Bearer <that whole string>` — so `auth_style: bearer`,
+    # where NeuVector's needed `auth_style: header`. `header_name` is required
+    # either way: the import fails with "header_name is required for bearer
+    # auth" without it, and for bearer the only sensible value is
+    # `authorization`, exactly as git-forge.yaml sets it.
+    #
+    # THE TOKEN IS AN ADMIN TOKEN, AND THAT IS DELIBERATE. Same argument as the
+    # NeuVector key, one notch sharper because the blast radius is larger: this
+    # credential could, on its own, do anything to any cluster Rancher manages.
+    # Everything that stops it is in deploy.yaml — the GET/PATCH pair generated
+    # from `deploy.targets`, and the deny rules on POST, PUT and DELETE. A
+    # scoped Rancher RoleTemplate would make the isolation proof pass for a
+    # reason that has nothing to do with OpenShell, which would be a weaker
+    # demonstration of exactly the thing being demonstrated.
+    #
+    # For production the advice inverts: scope the RoleTemplate as well. The
+    # two controls are complementary, and the reason only one of them is here
+    # is that this is a proof, not a deployment.
+    description: Rancher API token, formatted "token-xxxxx:<secret>"
+    env_vars: [RANCHER_TOKEN]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+
+discovery:
+  # What `provider create --from-existing` scans for. Harmless here — nothing
+  # sets RANCHER_TOKEN in a normal shell — but it keeps the profile usable
+  # outside this blueprint.
+  credentials: [api_token]
+
+binaries:
+  # curl only. The sandbox image has no kubectl and no Rancher CLI, and neither
+  # belongs here: a tool that can construct arbitrary API calls from a short
+  # command is exactly what the one-command `cluster-apply` helper exists to
+  # avoid handing to a 4B model.
+  - /usr/bin/curl

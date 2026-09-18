@@ -81,3 +81,6 @@ Thumbs.db
 
 # Git worktrees
 .worktrees
+# Python bytecode — a stale .pyc must never ship inside a chart whose files/ become a ConfigMap
+__pycache__/
+*.pyc

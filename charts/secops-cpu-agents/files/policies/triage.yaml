@@ -1,0 +1,249 @@
+# OpenShell sandbox policy — TRIAGE (zero-GPU profile).
+#
+# Second agent in the run, after survey.yaml. Read _README.md first.
+#
+# Triage runs once a human has picked ONE image out of the survey's ranked
+# menu. It answers two questions about that image and nothing else: what is
+# actually wrong with it, and is there a supported newer build to move to. It
+# cannot scan, and it cannot reach the git forge — it hands its answer to the
+# researchers through the orchestrator.
+#
+# It is therefore the only agent holding both the scanner credential and the
+# Application Collection one, because the version question is only meaningful
+# next to the finding it is supposed to fix. The survey agent, which has the
+# scanner and not the catalogue, cannot propose a replacement image; the
+# remediation agent, which has the forge and neither of these, cannot invent a
+# target version — it is given one, quoted, by this agent.
+#
+# WHY TRIAGE CANNOT SCAN
+#
+# `POST /v1/scan/repository` is absent here and present in validation.yaml. The
+# separation matters because the two agents are doing opposite things with the
+# same oracle: triage consumes a finding that already exists, validation asks
+# for a *new* scan whose result it will then be judged on. Collapsing them
+# would let one agent choose which scan it is graded against, and an agent that
+# selects its own evidence has produced an opinion, not evidence.
+version: 1
+
+# ---------------------------------------------------------------------------
+# Filesystem — NVIDIA's proxy-mode baseline, unmodified. See researcher.yaml
+# for why it is not trimmed and why /sandbox/.buildah is the one omission.
+# ---------------------------------------------------------------------------
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /etc
+    - /var/log
+    - /proc
+    - /dev/urandom
+  read_write:
+    - /sandbox
+    - /workspace
+    - /tmp
+    - /dev/null
+
+landlock:
+  compatibility: hard_requirement
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+
+  # -------------------------------------------------------------------------
+  # SUSE Security — read the findings, change nothing.
+  # -------------------------------------------------------------------------
+  # NOTE THE HOSTNAME. It is `neuvector-svc-controller-api`, with the `-api`
+  # suffix, and the suffix is not cosmetic. `neuvector-svc-controller` also
+  # exists in that namespace, but it is the headless gossip Service on
+  # 18300/18301 and does not listen on 10443 at all. The REST API Service is
+  # created only when `controller.apisvc.type` is set — see
+  # ../../../../examples/secops-agent-factory-cpu/integrations/suse-security/.
+  #
+  # The GPU profile's policy names the host WITHOUT the suffix
+  # (secops-agent-factory/policies/remediation-sandbox.yaml:217). That file was
+  # written against a cluster with no NeuVector installed, so nothing caught
+  # it; as committed, its `suse_security` group points at a Service that is not
+  # listening on the port it names. It is a one-token fix and it should be
+  # applied there too.
+  #
+  # DECISION: no `access:` preset, for the reason the GPU policy gives and
+  # which is worth repeating: `read-write` here would let the agent rewrite the
+  # rules it is being judged against. The most direct way to make a CVE
+  # disappear is to disable the scanner.
+  suse_security:
+    name: suse-security-read
+    endpoints:
+      # NOT `.Values.suseSecurity.host` directly: on a cluster whose NeuVector
+      # has no verifiable certificate this resolves to the TLS shim, over plain
+      # HTTP, because the L7 proxy cannot verify the controller. The proxy
+      # still parses and enforces everything below, and still injects the key.
+      # See the tlsShim note in values.yaml.
+      - host: {{ include "secops-cpu-agents.nvHost" . }}
+        port: {{ include "secops-cpu-agents.nvPort" . }}
+        protocol: rest
+        enforcement: enforce
+        # Where the NeuVector API key may be spent. The `suse-security` profile
+        # (examples/.../integrations/openshell-profiles/suse-security.yaml)
+        # declares the credential and deliberately declares NO endpoints, so
+        # this line is the only thing that binds the two together — which keeps
+        # this file the single place that decides what the agent can reach.
+        credential_binding:
+          provider: suse-security
+        rules:
+          # exchange the injected API key for a session token (X-Auth-Token).
+          # The key itself is substituted by the proxy at the boundary and
+          # never enters this sandbox.
+          - allow: { method: POST, path: "/v1/auth" }
+          # the findings themselves
+          - allow: { method: GET, path: "/v1/scan/scanner" }
+          # Read auto_scan; see survey.yaml for why. The PATCH stays denied.
+          - allow: { method: GET, path: "/v1/scan/config" }
+          - allow: { method: GET, path: "/v1/scan/repository/**" }
+          - allow: { method: GET, path: "/v1/workload/**" }
+          # `/v1/vulasset` is a POST that reads, and it takes TWO CALLS. The
+          # POST registers a server-side query and returns ONLY a `query_id`
+          # and the totals — zero rows. The rows come from a second call,
+          # `GET /v1/vulasset?token=<query_id>&start=…&row=…`; a bare GET
+          # without the token is answered `400 no query token provided`.
+          #
+          # Both halves are therefore required, and grant nothing a plain read
+          # would not: the POST creates a query, not a finding, and the scan and
+          # policy writes stay denied below.
+          - allow: { method: POST, path: "/v1/vulasset" }
+          - allow: { method: GET, path: "/v1/vulasset" }
+        deny_rules:
+          # Triage reads. It does not scan — that is validation's job, see the
+          # header — and it does not touch policy, admission control, groups or
+          # the exported configuration.
+          - { method: POST,   path: "/v1/scan/repository" }
+          # Explicit, now that the GET above is allowed. An agent that can
+          # switch the scanner off can make any finding disappear, and the
+          # refusal has to be a refusal in the audit log rather than an
+          # absent allow. Same line in all four policies that reach the
+          # controller; see survey.yaml.
+          - { method: PATCH,  path: "/v1/scan/config" }
+          - { method: POST,   path: "/v1/policy/rule" }
+          - { method: PATCH,  path: "/v1/policy/rule" }
+          - { method: DELETE, path: "/v1/policy/rule/**" }
+          - { method: POST,   path: "/v1/admission/rules" }
+          - { method: PATCH,  path: "/v1/admission/rule/**" }
+          - { method: DELETE, path: "/v1/admission/rule/**" }
+          - { method: POST,   path: "/v1/group" }
+          - { method: PATCH,  path: "/v1/group/**" }
+          - { method: DELETE, path: "/v1/group/**" }
+          - { method: POST,   path: "/v1/file/config" }
+          - { method: GET,    path: "/v1/file/config" }
+    binaries:
+      - { path: /usr/bin/curl }
+      # nv-survey is a Python script; it shells out to curl, but the first
+      # process the supervisor sees exec'd is the interpreter.
+      - { path: /usr/bin/python3 }
+
+  # -------------------------------------------------------------------------
+  # SUSE Application Collection — does a supported newer image exist?
+  # -------------------------------------------------------------------------
+  # THE ONE PUBLIC HOST IN THIS ENTIRE PROFILE, and the exception is deliberate
+  # and narrow. Every other endpoint in these five files is inside the cluster,
+  # which is what makes the sovereignty claim literal. This one is not, because
+  # the question it answers cannot be answered from inside: "has SUSE published
+  # a fixed build of this image, and what is it called".
+  #
+  # What leaves the cluster is an image NAME and a Basic credential the sandbox
+  # never sees. No finding, no manifest, no source, no CVE list. What comes back
+  # is a tag list. The alternative — mirroring the catalogue's tag index into
+  # the cluster — is a real option for an air-gapped deployment and is noted in
+  # the README; it is not worth the machinery for a demo.
+  #
+  # Verified against the live service before it was written down: plain HTTP
+  # Basic, single host, HTTP 200, a real certificate (so no TLS shim, unlike
+  # SUSE Security above), and — unusually for a registry — NO token-realm
+  # handshake. One request, one answer.
+  app_collection:
+    name: suse-application-collection-read
+    endpoints:
+      - host: {{ .Values.appCollection.host }}
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        # base64("user:token"), from the `application-collection` Secret that
+        # AI Factory already holds. See the app-collection profile under
+        # examples/.../integrations/openshell-profiles/.
+        credential_binding:
+          provider: app-collection
+        rules:
+          # The whole grant: list the tags of one container repository. This is
+          # a read of a public catalogue index and nothing else.
+          - allow: { method: GET, path: "/v2/{{ .Values.appCollection.namespace }}/*/tags/list" }
+          - allow: { method: GET, path: "/v2/" }
+        deny_rules:
+          # No pulling. The agent decides WHICH image should be deployed; it
+          # never fetches one, and it certainly never pushes one. Blobs and
+          # manifests are the registry's write-and-transfer surface and this
+          # agent has business with neither.
+          - { method: GET,    path: "/v2/**/blobs/**" }
+          - { method: HEAD,   path: "/v2/**/blobs/**" }
+          - { method: GET,    path: "/v2/**/manifests/**" }
+          - { method: PUT,    path: "/v2/**" }
+          - { method: POST,   path: "/v2/**" }
+          - { method: PATCH,  path: "/v2/**" }
+          - { method: DELETE, path: "/v2/**" }
+    binaries:
+      - { path: /usr/bin/curl }
+      - { path: /usr/bin/python3 }
+
+  # -------------------------------------------------------------------------
+  # The corpus — read-only, so triage can say whether a finding is already
+  # known before spending two researcher turns on it.
+  # -------------------------------------------------------------------------
+  # Same enumerated surface as researcher.yaml, including the same reasoning
+  # about why the Qdrant writes are absent. Kept identical on purpose: two
+  # agents reading the same store should have the same read grant, and a
+  # divergence between these two blocks would be a bug rather than a design.
+  corpus:
+    name: vulnerability-corpus
+    endpoints:
+      - host: {{ .Values.corpus.host }}
+        port: {{ .Values.corpus.port }}
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET,  path: "/collections" }
+          - allow: { method: GET,  path: "/collections/{{ .Values.corpus.collection }}" }
+          - allow: { method: POST, path: "/collections/{{ .Values.corpus.collection }}/points/search" }
+          - allow: { method: POST, path: "/collections/{{ .Values.corpus.collection }}/points/query" }
+          - allow: { method: POST, path: "/collections/{{ .Values.corpus.collection }}/points/scroll" }
+          - allow: { method: GET,  path: "/collections/{{ .Values.corpus.collection }}/points/*" }
+        deny_rules:
+          - { method: PUT,    path: "/collections/**" }
+          - { method: POST,   path: "/collections/{{ .Values.corpus.collection }}/points" }
+          - { method: DELETE, path: "/collections/**" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  embeddings:
+    name: corpus-embeddings
+    endpoints:
+      - host: {{ .Values.embeddings.host }}
+        port: {{ .Values.embeddings.port }}
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: POST, path: "/v1/embeddings" }
+        deny_rules:
+          - { method: POST, path: "/v1/chat/completions" }
+          - { method: POST, path: "/v1/completions" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # DELIBERATELY ABSENT
+  # -------------------------------------------------------------------------
+  # The git forge — triage proposes nothing and records nothing. The first
+  #   thing written to the forge in this run is the clarifier's plan issue, and
+  #   it is written after two researchers have supplied citations for it.
+  #
+  # inference.local — built-in supervisor route; a rule would have no effect.

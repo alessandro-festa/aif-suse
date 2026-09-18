@@ -1,0 +1,82 @@
+# SUSE Application Collection — an OpenShell provider profile.
+#
+# WHY THIS FILE EXISTS. `charts/secops-cpu-agents/values.yaml` attaches the
+# provider `app-collection` to the triage agent, and OpenShell ships no builtin
+# profile for it, so `sandbox create --provider app-collection` fails with
+#
+#   provider 'app-collection' not found and 'app-collection' is not a
+#   recognized provider type
+#
+# until this profile is imported and a provider instance is created from it.
+# Same shape and same reasoning as suse-security.yaml next to it — read that
+# file first; the parts that are identical are not repeated here.
+#
+# WHAT THE AGENT ASKS IT. One question, once a human has picked a container:
+# "does SUSE publish a newer build of this component, and what is it called?"
+# That is `GET /v2/containers/<name>/tags/list` and nothing else. The answer
+# decides whether the remediation is an image swap to a supported build or a
+# package bump inside the image the cluster already runs — and the difference
+# matters enough that guessing it is not acceptable, which is why this is a
+# tool call and not something the model is asked to recall.
+#
+# THIS IS THE ONE PUBLIC HOST IN THE PROFILE, and it is worth being explicit
+# rather than letting a reviewer discover it. Everything else these agents can
+# reach is inside the cluster. What crosses the boundary here is an image name
+# and an HTTP Basic credential the sandbox never holds; what comes back is a
+# list of tags. No finding, no manifest, no source code. For an air-gapped
+# deployment the honest answer is to mirror the catalogue's tag index inside
+# the cluster and repoint `appCollection.host` at the mirror — the policy
+# grant, the helper and this profile all keep working unchanged.
+#
+# Import it with:
+#   openshell -g <gw> --workspace ns-secops-sandboxes provider profile import \
+#     --file app-collection.yaml
+id: app-collection
+display_name: SUSE Application Collection
+description: SUSE Application Collection registry API, read-only, for supported-image lookups
+category: other
+inference_capable: false
+
+credentials:
+  - name: basic
+    # HTTP BASIC, EXPRESSED AS A HEADER, AND THE INDIRECTION IS DELIBERATE.
+    #
+    # The registry wants `Authorization: Basic base64(user:token)`. OpenShell
+    # v0.0.116 accepts `auth_style: basic`, and it validates — but the L7 proxy
+    # implements no special handling for it, so nothing assembles the header or
+    # base64-encodes anything. It would be a credential that parses and does
+    # not authenticate, which is the worst of the available failures because it
+    # looks configured.
+    #
+    # So: `header`, and the credential VALUE is the already-base64-encoded
+    # `user:token` pair. The `appco` helper writes the literal word "Basic"
+    # itself — see sandbox.helpers.app-collection in values.yaml. The pair
+    # comes from the `application-collection` Secret (keys `user` and `token`)
+    # that AI Factory already holds in the `aif-operator` namespace on
+    # sims-datacenter; the README shows how to transfer it without it ever
+    # appearing in a shell history or a terminal.
+    description: base64("<user>:<token>") from the application-collection Secret
+    env_vars: [APPCO_BASIC]
+    required: true
+    auth_style: header
+    header_name: authorization
+
+discovery:
+  credentials: [basic]
+
+binaries:
+  - /usr/bin/curl
+  # `appco` is a Python script — it shells out to curl, but the first process
+  # the supervisor sees exec'd is the interpreter.
+  - /usr/bin/python3
+
+# NO `endpoints:` HERE EITHER, for the reason suse-security.yaml sets out at
+# length: the policy files are meant to be the single place that decides what
+# an agent can reach, and a profile that contributes endpoints would quietly
+# become a second one. `triage.yaml`'s `app_collection` group carries
+#
+#   credential_binding:
+#     provider: app-collection
+#
+# and that binding is the only thing that lets this credential be spent, at
+# exactly one host, on exactly the paths that group allows.

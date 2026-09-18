@@ -1,0 +1,144 @@
+# syntax=docker/dockerfile:1
+#
+# SecOps orchestrator — the one component that holds credentials.
+#
+# Built as ghcr.io/alessandro-festa/secops-cpu-orchestrator:0.1.0 and
+# referenced by charts/secops-cpu-agents. Published under this repository's own
+# GitHub org, alongside the forked sandbox images in
+# ghcr.io/alessandro-festa/openshell-community/ — the BASE image is SUSE's, only
+# the built artefact is ours.
+#
+# IT DOES NOT EXIST YET. This file is the specification for building it, in the
+# same spirit as ../../secops-agent-factory/sandbox-image/Containerfile.
+#
+# WHERE THE ORCHESTRATOR SITS IN THE TRUST MODEL
+#
+# Outside every sandbox, deliberately. It holds the gateway mTLS material, the
+# SUSE Security API key and the git forge token; the agents hold none of them.
+# That is §3's "the agents have no access to the plane that governs them" made
+# literal — an agent cannot create a sandbox, cannot change a policy, and cannot
+# read the credentials used to inject its own egress.
+#
+# It follows that this image is a higher-value target than any sandbox image.
+# Its whole contents are therefore: a SUSE base, ONE statically linked upstream
+# binary pinned by SHA-256, and Python's standard library. No pip install runs
+# at any stage. There is nothing here to resolve, so there is nothing to
+# substitute.
+#
+# ---------------------------------------------------------------------------
+# WHY THE `openshell` CLI AND NOT THE PYTHON SDK
+# ---------------------------------------------------------------------------
+#
+# Both exist and both work. An earlier draft of this file used the SDK and was
+# wrong; the reason it is wrong is the interesting part, so it is recorded here
+# rather than deleted.
+#
+# `SandboxSpec.policy` (openshell.proto:316) is not a string. It is a
+# structured `openshell.sandbox.v1.SandboxPolicy` message. The YAML files in
+# ../policies/ are NOT that message serialised — they are a separate,
+# hand-written serde schema living in `crates/openshell-policy/src/lib.rs`,
+# which that file's own doc comment calls "the single canonical representation
+# of the YAML policy schema". The two shapes differ, and not only cosmetically:
+#
+#     YAML key            proto field
+#     filesystem_policy   filesystem
+#
+# Using the SDK therefore means reimplementing that YAML→proto conversion in
+# Python, in a second language, for the file that IS the security boundary of
+# this entire example. A field quietly dropped by a Python translation layer
+# is a policy silently not enforced, and nothing downstream would report it:
+# the sandbox would come up, the agent would run, and the isolation proof in
+# the README would pass for a policy that no longer says what it reads.
+#
+# `openshell sandbox create --policy <file>` hands the YAML to the canonical
+# Rust parser, which has `#[serde(deny_unknown_fields)]` on every struct — so a
+# typo'd key is a hard error, not a silent omission. That property is worth far
+# more than typed method calls.
+#
+# It is also, as a side effect, much less to carry. The SDK route needed
+# grpcio, protobuf, httpx and cloudpickle (see the wheel's METADATA); the CLI
+# route needs nothing beyond the stdlib.
+#
+# For the record, since the plan claimed otherwise: the SDK *is* packaged.
+# Release v0.0.116 publishes `openshell-0.0.116-py3-none-any.whl` with the
+# `_proto` stubs already generated. The "no pyproject.toml, must run protoc at
+# build time" blocker was a false alarm — the git tree is not the release.
+#
+# ---------------------------------------------------------------------------
+
+ARG PYTHON_BASE=registry.suse.com/bci/python:3.13
+
+# ----------------------------------------------------------------- fetch CLI --
+FROM ${PYTHON_BASE} AS cli
+
+# Pin the release. The version is also asserted at runtime by the orchestrator
+# (see files/orchestrator.py) so an image rebuilt against a newer CLI cannot
+# drift from the flags this code was written for.
+ARG OPENSHELL_VERSION=0.0.116
+
+# Digests from the release's own `openshell-checksums-sha256.txt`, re-verified
+# locally against the downloaded artifacts on 2026-09-16.
+#
+# Pinned here rather than downloading that checksums file and running
+# `sha256sum -c` against it: a checksums file fetched from the same place as
+# the artifact proves only that the two agree with each other. These values are
+# in git, reviewed in a diff, and change only when someone deliberately bumps
+# them.
+ARG OPENSHELL_SHA256_arm64=7a949c48d1e000cd280869eea1e203e24816b9cfefc575b68a8b72b939cb3f43
+ARG OPENSHELL_SHA256_amd64=4fb4476d80a1875a0b83547ec3aba999cf0a2e2d75f95f2f709b622e2103520e
+
+ARG TARGETARCH
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      arm64) triple=aarch64-unknown-linux-musl; sha="${OPENSHELL_SHA256_arm64}" ;; \
+      amd64) triple=x86_64-unknown-linux-musl;  sha="${OPENSHELL_SHA256_amd64}" ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    url="https://github.com/NVIDIA/openshell/releases/download/v${OPENSHELL_VERSION}/openshell-${triple}.tar.gz"; \
+    curl -fsSL --retry 3 -o /tmp/openshell.tar.gz "$url"; \
+    echo "${sha}  /tmp/openshell.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/openshell.tar.gz -C /usr/local/bin openshell; \
+    chmod 0755 /usr/local/bin/openshell; \
+    # musl-static, so it runs on the BCI base with no shared-library surface at
+    # all. Assert that rather than trust it — a dynamically linked build would
+    # fail at pod start with a loader error that reads like an image problem.
+    /usr/local/bin/openshell --version
+
+# ------------------------------------------------------------------- runtime --
+FROM ${PYTHON_BASE}
+
+LABEL org.opencontainers.image.title="SecOps CPU orchestrator" \
+      org.opencontainers.image.vendor="SUSE" \
+      org.opencontainers.image.base.name="registry.suse.com/bci/python:3.13" \
+      org.opencontainers.image.description="Drives one OpenShell sandbox per SecOps agent; holds the credentials the agents must not have"
+
+COPY --from=cli /usr/local/bin/openshell /usr/local/bin/openshell
+
+# The CLI resolves its state through XDG: `$XDG_CONFIG_HOME/openshell/`, with
+# gateway registrations under `gateways/<name>/` and mTLS PEMs under
+# `gateways/<name>/mtls/`. It also writes there at runtime (active gateway,
+# last sandbox), so it cannot live on a read-only mount — hence an emptyDir in
+# the chart rather than projecting the Secret straight into place.
+#
+# The orchestrator populates the registration itself at start-up; see
+# `_bootstrap_gateway()` in files/orchestrator.py for why it writes
+# metadata.json directly instead of running `openshell gateway add`.
+ENV XDG_CONFIG_HOME=/var/lib/openshell/.config \
+    HOME=/var/lib/openshell \
+    PYTHONUNBUFFERED=1
+RUN mkdir -p /var/lib/openshell/.config && chown -R 65532:65532 /var/lib/openshell
+
+# The orchestrator source is NOT baked in. It is mounted from a ConfigMap by
+# charts/secops-cpu-agents, so the workflow can be re-driven with an edited
+# prompt without a rebuild and a registry round trip — which matters because
+# prompt iteration is most of the work in getting a 4B model to behave. The
+# image supplies the one thing a ConfigMap cannot: the CLI binary.
+
+# 65532:65532 matches build/Dockerfile.operator's nonroot convention, so the
+# pod securityContext is the same shape as the rest of the product.
+RUN groupadd -g 65532 nonroot && \
+    useradd -u 65532 -g 65532 -M -d /var/lib/openshell -s /usr/sbin/nologin nonroot
+USER 65532:65532
+WORKDIR /var/lib/openshell
+
+ENTRYPOINT ["python3", "/workflow/orchestrator.py"]

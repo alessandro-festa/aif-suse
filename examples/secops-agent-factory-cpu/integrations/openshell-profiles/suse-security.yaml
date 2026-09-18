@@ -1,0 +1,76 @@
+# SUSE Security (NeuVector) — an OpenShell provider profile.
+#
+# WHY THIS FILE EXISTS. `charts/secops-cpu-agents/values.yaml` attaches the
+# provider `suse-security` to the triage and validation agents. OpenShell has no
+# builtin profile for NeuVector — the builtin list is aws, aws-s3, google-cloud,
+# anthropic, aws-bedrock, deepinfra, google-vertex-ai, nvidia, openai,
+# claude-code, codex, copilot, cursor, github, pypi — so `sandbox create
+# --provider suse-security` fails with
+#
+#   provider 'suse-security' not found and 'suse-security' is not a recognized
+#   provider type
+#
+# until this profile is imported and a provider instance is created from it.
+#
+# THE PROFILE DECLARES NO `endpoints:`, AND THAT IS THE WHOLE DESIGN. A profile
+# that lists endpoints contributes them to every sandbox it is attached to,
+# which would make this file a second place where "what may the agents reach"
+# is decided. The five files in charts/secops-cpu-agents/files/policies/ are
+# meant to be the only such place — that is the thesis of this profile, and the
+# isolation proof in the README depends on it being literally true.
+#
+# An endpointless profile instead requires each policy to say where the
+# credential may be used, with
+#
+#   credential_binding:
+#     provider: suse-security
+#
+# on the NeuVector endpoint. See triage.yaml and validation.yaml. OpenShell
+# rejects an endpointless provider that no policy binds, so a policy that
+# forgets the binding fails loudly at `sandbox create` rather than quietly
+# sending the request without a credential.
+#
+# Import it with:
+#   openshell -g <gw> --workspace ns-secops-sandboxes provider profile import \
+#     --file suse-security.yaml
+#
+# There is no `provider profile create`; `import` is how a custom profile is
+# registered. Profiles are workspace-scoped unless `--global` is passed, and
+# the providers created from them must live in the same workspace as the
+# sandboxes ([[openshell-gotchas]] #11).
+id: suse-security
+display_name: SUSE Security
+description: SUSE Security (NeuVector) controller REST API, for scan reads and rescan requests
+category: other
+inference_capable: false
+
+credentials:
+  - name: api_key
+    # NeuVector's API-key authentication is a single header whose value is
+    # `<key name>:<key secret>` — not a bearer token, and not HTTP basic. So
+    # `auth_style: header` with an explicit `header_name`, rather than
+    # `bearer`, which would prepend "Bearer " and fail authentication.
+    #
+    # The key is minted against the controller on downstream-1 with the admin
+    # role. That is deliberate and it is the demo: with a reader key, `POST
+    # /v1/policy/rule` would be refused by NeuVector and the sandbox policy
+    # would never be exercised. The README's isolation proof claims the
+    # *policy* is what stops it, and an under-privileged key would make that
+    # claim untestable rather than true.
+    description: NeuVector API key, formatted "<key name>:<key secret>"
+    env_vars: [NEUVECTOR_API_KEY]
+    required: true
+    auth_style: header
+    header_name: x-auth-apikey
+
+discovery:
+  # What `provider create --from-existing` scans for. Harmless here — nothing
+  # sets NEUVECTOR_API_KEY in a normal shell — but it keeps the profile usable
+  # outside this blueprint.
+  credentials: [api_key]
+
+binaries:
+  # The only thing in the sandbox image that talks to a REST API. opencode's
+  # own HTTP client is not in this list because opencode reaches the model
+  # through inference.local, which is a supervisor route and needs no profile.
+  - /usr/bin/curl

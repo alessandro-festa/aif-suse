@@ -1,0 +1,166 @@
+# Gitea — the forge that holds both human gates.
+#
+# THIS FILE IS A REFERENCE COPY. The values that actually install are inline in
+# the Blueprint (`20-blueprint-secops-cpu.yaml`, component `gitea`), because a
+# Blueprint component carries its own values and cannot point at a file. Keeping
+# a standalone copy here is what makes the chart re-verifiable without applying
+# a Blueprint:
+#
+#   helm template gitea oci://docker.gitea.com/charts/gitea --version 12.7.0 \
+#     -f examples/secops-agent-factory-cpu/integrations/gitea/values.yaml
+#
+# If the two ever disagree, the Blueprint is the one that runs.
+#
+# WHY THE UPSTREAM CHART AND NOT THE APPLICATION COLLECTION
+#
+# The plan said to prefer Application Collection, to keep the supply chain on
+# SUSE's registry. It has no Gitea and no Forgejo:
+#
+#   helm show chart oci://dp.apps.rancher.io/charts/gitea
+#   Error: unable to locate any tags in provided repository
+#
+# That is a real absence and not an authentication failure — `postgresql`
+# (0.7.0) and `milvus` (5.0.25) resolve anonymously from the same registry in
+# the same session.
+#
+# WHY NOT WRAPPED IN A CHART OF OURS
+#
+# The only reason to wrap would be to pin the image by digest, and the upstream
+# chart already exposes `image.digest`. A wrapper would add a version to bump,
+# a values passthrough to maintain, and nothing else.
+
+# The Service must be `gitea-http`, because that hostname is compiled into
+# three sandbox policies and into the orchestrator's GITEA_URL. Without this
+# the name follows the Helm release, which the operator derives from the chart
+# name — and a policy host that depends on a release name is a policy that
+# breaks when someone renames the component.
+fullnameOverride: gitea
+
+image:
+  registry: docker.gitea.com
+  repository: gitea
+  # Pinned to the multi-arch INDEX digest for 1.27.0-rootless, verified to
+  # carry linux/arm64 (also amd64 and riscv64). Pinning the index rather than
+  # the arm64 manifest keeps the same value usable on an amd64 cluster.
+  #
+  #   docker buildx imagetools inspect docker.gitea.com/gitea:1.27.0-rootless
+  digest: sha256:414ba5b2b1163480e9ed4213a989cd798579cfa88582a2359303273009b2b852
+  # Chart default, restated because it is load-bearing: the rootless variant
+  # runs as uid 1000 and needs no securityContext exemption on a cluster that
+  # may grow a restricted PodSecurity label later.
+  rootless: true
+  pullPolicy: IfNotPresent
+
+# One pod. This is a demo forge holding one repository, and its storage is a
+# ReadWriteOnce local-path volume that a second replica could not mount anyway.
+replicaCount: 1
+
+# -----------------------------------------------------------------------------
+# Everything the chart would otherwise bring with it
+# -----------------------------------------------------------------------------
+# The chart's defaults are a production forge: PostgreSQL HA and a three-node
+# Valkey cluster, six pods before Gitea itself starts. On a 22.8 GiB no-swap VM
+# already carrying two kind clusters, llama.cpp and Qdrant, that is the whole
+# remaining budget spent on the component that does the least work.
+#
+# With all four disabled the chart falls back to Gitea's own defaults —
+# `memory` for session and cache, `level` for the queue (chart README, "Redis
+# and Valkey"). Those are single-pod defaults and that is exactly what this is.
+postgresql-ha:
+  enabled: false
+postgresql:
+  enabled: false
+valkey-cluster:
+  enabled: false
+valkey:
+  enabled: false
+
+gitea:
+  config:
+    database:
+      DB_TYPE: sqlite3
+      # On the shared PVC, so the repository and its metadata survive a
+      # restart together. A demo whose approval history vanishes on a pod
+      # reschedule cannot be used to demonstrate an approval gate.
+      PATH: /data/gitea/gitea.db
+
+    server:
+      # No SSH. The agents push over HTTP with a token injected at the egress
+      # boundary; an SSH port would be a second credential path with no policy
+      # in front of it, and nothing in this profile uses it.
+      START_SSH_SERVER: false
+      DISABLE_SSH: true
+      # Reached by port-forward from the Mac — the podman network is not
+      # routable from the host and downstream-1 has no ingress controller. This
+      # must match the port-forward in the README, or every clone URL Gitea
+      # renders in its own UI is wrong.
+      #
+      # DOMAIN is set too: it defaults to `git.example.com`, which would show
+      # up next to a correct ROOT_URL and read like a half-configured install.
+      ROOT_URL: http://localhost:3000/
+      DOMAIN: localhost
+
+    service:
+      # The only accounts are the human reviewer and `secops-bot`, both created
+      # by the seed script. Open registration on a forge whose whole purpose is
+      # to be an authorization boundary would be an odd thing to leave on.
+      DISABLE_REGISTRATION: true
+
+    # Quieter logs, and no outbound anything. There is nowhere outside the
+    # cluster for this forge to talk to, and the sovereignty claim is easier to
+    # audit when that is configuration rather than an accident of firewalling.
+    cron:
+      ENABLED: false
+    "cron.update_checker":
+      ENABLED: false
+
+  admin:
+    # NOT the chart default. values.yaml ships `password: r8sA8CPHD9!bt6d` in
+    # plain text, which would put a credential in this repository the moment
+    # this file was committed. The Secret is created out of band by the seed
+    # script in the README; the chart reads exactly two keys from it,
+    # `username` and `password`.
+    existingSecret: gitea-admin-secret
+
+service:
+  http:
+    type: ClusterIP
+    port: 3000
+    # NOT the chart default, which is `None` — a HEADLESS Service. Headless
+    # resolves to the pod IP, so it would appear to work, and then the address
+    # would change on every reschedule. OpenShell's egress proxy resolves the
+    # policy's host itself, and the orchestrator holds GITEA_URL for the life
+    # of a run; both want an address that outlives the pod. Empty here makes
+    # the chart omit the field, so Kubernetes allocates a real ClusterIP.
+    clusterIP:
+
+  # There is no `service.ssh.enabled` in this chart, so the SSH Service is
+  # rendered whatever DISABLE_SSH says. It stays headless on the chart default
+  # and points at a port nothing listens on — inert, but present, and better
+  # noted here than discovered by someone reading `get svc` and concluding SSH
+  # is available.
+  ssh: {}
+
+ingress:
+  enabled: false
+
+persistence:
+  enabled: true
+  # 5Gi for one repository and a SQLite database. The chart defaults to 10Gi
+  # and sets `helm.sh/resource-policy: keep`, so this is sized deliberately
+  # rather than left to grow: a PVC that survives `helm uninstall` and cannot
+  # shrink is one to get right the first time.
+  size: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  # Empty means the cluster default, which on downstream-1 is `standard`
+  # (rancher.io/local-path, WaitForFirstConsumer).
+  storageClass:
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi

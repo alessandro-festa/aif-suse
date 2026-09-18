@@ -1,0 +1,191 @@
+# OpenShell sandbox policy — SURVEY (zero-GPU profile).
+#
+# The agent that opens the run. Read _README.md in this directory first.
+#
+# WHAT THIS AGENT IS FOR
+#
+# Nothing has been chosen when this sandbox starts. The survey agent asks SUSE
+# Security what is actually wrong in this cluster, reduces ~600 CVE records to
+# one ranked row per container image, and posts that list to the forge as a
+# numbered menu. Then the run stops until a person replies with a number.
+#
+# That ordering is the point. Every earlier revision of this profile began from
+# a hard-coded finding in `values.yaml` and asked triage to confirm it, which
+# graded the model on agreeing with its own prompt — and it did, enthusiastically,
+# against a scanner that had returned nothing at all. The scanner now decides
+# what the run is about, and a human decides which part of it matters.
+#
+# WHY THIS AGENT MAY WRITE TO THE FORGE BUT MAY NOT SCAN
+#
+# It holds two credentials, which is one more than any other agent in the run
+# except validation, so the asymmetry is worth stating. It can READ the scanner
+# and it can WRITE one issue. It cannot request a scan (`POST /v1/scan/**` is
+# denied here and granted only in validation.yaml — see triage.yaml for the
+# argument), it cannot label the issue it wrote, and it cannot touch a branch.
+#
+# It can therefore describe the cluster and ask a question. It cannot answer
+# its own question, and it cannot act on the answer.
+version: 1
+
+# ---------------------------------------------------------------------------
+# Filesystem — NVIDIA's proxy-mode baseline, unmodified. See researcher.yaml
+# for why it is not trimmed and why /sandbox/.buildah is the one omission.
+# ---------------------------------------------------------------------------
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /etc
+    - /var/log
+    - /proc
+    - /dev/urandom
+  read_write:
+    - /sandbox
+    - /workspace
+    - /tmp
+    - /dev/null
+
+landlock:
+  compatibility: hard_requirement
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+
+  # -------------------------------------------------------------------------
+  # SUSE Security — read the whole finding set, change nothing.
+  # -------------------------------------------------------------------------
+  # See triage.yaml for the `-api` hostname trap, for why this may resolve to
+  # the TLS shim, and for why there is no `access:` preset.
+  suse_security:
+    name: suse-security-read
+    endpoints:
+      - host: {{ include "secops-cpu-agents.nvHost" . }}
+        port: {{ include "secops-cpu-agents.nvPort" . }}
+        protocol: rest
+        enforcement: enforce
+        credential_binding:
+          provider: suse-security
+        rules:
+          - allow: { method: POST, path: "/v1/auth" }
+          - allow: { method: GET,  path: "/v1/scan/scanner" }
+          # READING auto_scan, which is the difference between a clean cluster
+          # and an unexamined one. With the scanner switched off every query
+          # below answers 200 with nothing in it, and the survey renders a
+          # flawless estate. `nv-survey` prints this boolean at the top of its
+          # ranked table so the transcript says which it was.
+          #
+          # The PATCH stays denied, three lines down, and the pairing is the
+          # point: an agent may find out that the scanner is off and must not
+          # be able to turn it off.
+          - allow: { method: GET,  path: "/v1/scan/config" }
+          - allow: { method: GET,  path: "/v1/workload" }
+          - allow: { method: GET,  path: "/v1/workload/**" }
+          # BOTH METHODS ARE REQUIRED, AND THIS IS NOT BELT-AND-BRACES.
+          #
+          # `/v1/vulasset` is a two-call read. The POST registers a server-side
+          # query and returns ONLY a `query_id` and the totals — zero rows. The
+          # rows come from `GET /v1/vulasset?token=<query_id>&start=…&row=…`.
+          #
+          # Grant the POST alone and the agent sees a summary and no findings;
+          # grant the GET alone and NeuVector answers `400 no query token
+          # provided`. Both failures were observed on this cluster, days apart,
+          # and both read as "the scanner has nothing" rather than as a missing
+          # half of a handshake. Neither creates a finding: the POST creates a
+          # query, and the writes stay denied below.
+          - allow: { method: POST, path: "/v1/vulasset" }
+          - allow: { method: GET,  path: "/v1/vulasset" }
+        deny_rules:
+          # The survey reads. Asking for a scan is validation's grant, and
+          # changing the scanner's configuration is nobody's — auto_scan is set
+          # by an administrator at install time, because an agent that can
+          # switch the scanner off can make any finding disappear.
+          - { method: POST,   path: "/v1/scan/repository" }
+          - { method: PATCH,  path: "/v1/scan/config" }
+          - { method: POST,   path: "/v1/policy/rule" }
+          - { method: PATCH,  path: "/v1/policy/rule" }
+          - { method: DELETE, path: "/v1/policy/rule/**" }
+          - { method: POST,   path: "/v1/admission/rules" }
+          - { method: PATCH,  path: "/v1/admission/rule/**" }
+          - { method: DELETE, path: "/v1/admission/rule/**" }
+          - { method: POST,   path: "/v1/group" }
+          - { method: PATCH,  path: "/v1/group/**" }
+          - { method: DELETE, path: "/v1/group/**" }
+          - { method: POST,   path: "/v1/file/config" }
+          - { method: GET,    path: "/v1/file/config" }
+    binaries:
+      - { path: /usr/bin/curl }
+      # nv-survey is a Python script: it shells out to curl, but the process
+      # the supervisor sees exec'd first is the interpreter.
+      - { path: /usr/bin/python3 }
+
+  # -------------------------------------------------------------------------
+  # The in-cluster git forge — one issue, and nothing else at all.
+  # -------------------------------------------------------------------------
+  # Narrower than clarifier.yaml, which is the comparison worth making. The
+  # clarifier may clone the repository, because it is proposing a change to
+  # something and should be able to look at it. The survey agent is proposing
+  # nothing — it is publishing a menu — so it gets no git wire protocol in
+  # either direction, not even fetch.
+  #
+  # CONSEQUENCE, stated rather than left to be discovered: this sandbox is
+  # handed the `forge-clone` helper, because helpers follow the provider and
+  # `git-forge` is attached. Running it fails. That is correct and is worth a
+  # demonstration — the filesystem offering a tool is not the same as the
+  # policy permitting its traffic, and here the two deliberately disagree.
+  git_forge:
+    name: git-forge-issue-only
+    endpoints:
+      - host: {{ .Values.forge.host }}
+        port: {{ .Values.forge.port }}
+        protocol: rest
+        enforcement: enforce
+        credential_binding:
+          provider: git-forge
+        allow_encoded_slash: true
+        rules:
+          - allow: { method: GET,  path: "/api/v1/version" }
+          - allow: { method: GET,  path: "/api/v1/repos/*/*" }
+          # The one write in this policy: the menu the human chooses from.
+          - allow: { method: POST, path: "/api/v1/repos/*/*/issues" }
+          # Read back what it posted, to report the issue number honestly.
+          - allow: { method: GET,  path: "/api/v1/repos/*/*/issues/*" }
+        deny_rules:
+          # No git wire protocol in either direction.
+          - { method: GET,    path: "/*/*/info/refs" }
+          - { method: POST,   path: "/*/*/git-upload-pack" }
+          - { method: POST,   path: "/*/*/git-receive-pack" }
+          # It must not be able to answer the question it asked. The selection
+          # is a human comment on this issue; letting the agent comment on it
+          # would let the agent choose its own target.
+          - { method: POST,   path: "/api/v1/repos/*/*/issues/*/comments" }
+          - { method: POST,   path: "/api/v1/repos/*/*/issues/*/labels" }
+          - { method: PUT,    path: "/api/v1/repos/*/*/issues/*/labels" }
+          - { method: PATCH,  path: "/api/v1/repos/*/*/issues/*" }
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls" }
+          - { method: POST,   path: "/api/v1/repos/*/*/contents/**" }
+          - { method: PUT,    path: "/api/v1/repos/*/*/contents/**" }
+          - { method: DELETE, path: "/api/v1/repos/*/*/contents/**" }
+          - { method: POST,   path: "/api/v1/repos/*/*/branch_protections" }
+          - { method: PATCH,  path: "/api/v1/repos/*/*/branch_protections/**" }
+          - { method: POST,   path: "/api/v1/repos/*/*/hooks" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # DELIBERATELY ABSENT
+  # -------------------------------------------------------------------------
+  # SUSE Application Collection — the survey says what is wrong, not what to
+  #   replace it with. Asking the catalogue is triage's grant and happens after
+  #   a human has narrowed the question to one image; doing it here would mean
+  #   twelve public lookups to produce a menu, on every run.
+  #
+  # The corpus — same reason. Nothing has been selected yet, so there is no
+  #   advisory to look up. `/sandbox/bin/corpus` is nevertheless present, since
+  #   it is a credential-free helper given to every agent; as with forge-clone
+  #   above, having the file is not having the grant, and running it fails.
+  #
+  # inference.local — built-in supervisor route; a rule would have no effect.

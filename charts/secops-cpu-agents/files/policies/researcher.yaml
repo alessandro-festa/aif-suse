@@ -1,0 +1,214 @@
+# OpenShell sandbox policy — RESEARCHER (zero-GPU profile).
+#
+# Two of these run concurrently. Read _README.md in this directory first for why
+# there are five policies rather than one.
+#
+# THIS IS THE SMALLEST POLICY IN THE SET, AND THAT IS ITS POINT.
+#
+# The researcher's whole job is to read the corpus and report what it found. So
+# it gets the corpus, one GET-only public CVE endpoint it can quote a record
+# from, and nothing else. Specifically:
+#
+#   * it cannot reach SUSE Security, so it cannot see a scan finding directly
+#     and cannot confuse what the scanner said with what it retrieved;
+#   * it cannot reach the git forge, so no amount of prompt injection in a
+#     retrieved advisory can turn a research turn into a commit;
+#   * it holds no credential of any kind — `providers:` is empty, and neither
+#     endpoint below has a credential_binding. An injection that reaches the
+#     network from here reaches two read endpoints and stops.
+#
+# That second one is the interesting one. The corpus is untrusted input — it is
+# text that came from somewhere else and is about to be fed to a model. On the
+# GPU profile the researcher shares a pod with the remediation agent, so a
+# successful injection there reaches a credential; here it reaches a Qdrant
+# read endpoint and stops.
+#
+# Verify it, do not take it on trust. From a live researcher sandbox:
+#
+#   curl -sk https://{{ .Values.suseSecurity.host }}:{{ .Values.suseSecurity.port }}/v1/eula   # must be DENIED
+#   curl -s  http://{{ .Values.forge.host }}:{{ .Values.forge.port }}/api/v1/version           # must be DENIED
+#   curl -s  http://{{ .Values.corpus.host }}:{{ .Values.corpus.port }}/collections            # must SUCCEED
+version: 1
+
+# ---------------------------------------------------------------------------
+# Filesystem — NVIDIA's proxy-mode baseline, unmodified.
+# ---------------------------------------------------------------------------
+# Not trimmed even though a researcher builds nothing: OpenShell's proxy-mode
+# sandbox requires this set, including read-only /proc, and attestation fails
+# without it. /sandbox/.buildah is the one entry dropped from the GPU policy —
+# no agent in this profile builds a container image.
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /etc
+    - /var/log
+    - /proc
+    - /dev/urandom
+  read_write:
+    - /sandbox
+    - /workspace
+    - /tmp
+    - /dev/null
+
+landlock:
+  # hard_requirement, not best_effort. best_effort silently starts with less
+  # isolation than requested when the kernel cannot enforce a path, and says
+  # nothing. "Ran with weaker confinement and did not report it" is the failure
+  # mode this profile exists to argue against.
+  compatibility: hard_requirement
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+# ---------------------------------------------------------------------------
+# Network — everything not listed is denied.
+# ---------------------------------------------------------------------------
+network_policies:
+
+  # -------------------------------------------------------------------------
+  # The vulnerability corpus. The only egress this agent has.
+  # -------------------------------------------------------------------------
+  # DECISION: enumerate the search surface instead of `access: read-only`.
+  #
+  # `read-only` expands to GET, HEAD and OPTIONS across every path on the host.
+  # On Qdrant that is more than it sounds: GET /collections/{c} exposes the full
+  # collection configuration, and — more to the point — a preset says nothing
+  # about POST, which is how Qdrant search actually works. A policy that granted
+  # only `read-only` would deny the search the agent is here to perform while
+  # permitting a broad read of everything else. Enumerating gets both halves
+  # right.
+  #
+  # The writes are absent on purpose. PUT /collections/{c} and PUT
+  # /collections/{c}/points are how the ingest Job populates the corpus; an
+  # agent that could call them could rewrite the advisory it is about to cite,
+  # and then cite it. Poisoning your own evidence is a short path from
+  # "retrieved a SUSE-SU" to "invented one".
+  corpus:
+    name: vulnerability-corpus
+    endpoints:
+      - host: {{ .Values.corpus.host }}
+        port: {{ .Values.corpus.port }}
+        # Plain HTTP, and deliberately so: this is in-cluster traffic to a
+        # service with no authentication, on a port the proxy terminates. See
+        # the note in charts/secops-cpu-knowledge about why the corpus carries
+        # no API key — adding one would place a credential in the very
+        # sandboxes that must read the data it protects.
+        protocol: rest
+        enforcement: enforce
+        rules:
+          # discovery — which collections exist, and how is this one shaped
+          - allow: { method: GET,  path: "/collections" }
+          - allow: { method: GET,  path: "/collections/{{ .Values.corpus.collection }}" }
+          # the actual retrieval surface
+          - allow: { method: POST, path: "/collections/{{ .Values.corpus.collection }}/points/search" }
+          - allow: { method: POST, path: "/collections/{{ .Values.corpus.collection }}/points/query" }
+          - allow: { method: POST, path: "/collections/{{ .Values.corpus.collection }}/points/scroll" }
+          # read a specific advisory back by id, so a citation can be resolved
+          - allow: { method: GET,  path: "/collections/{{ .Values.corpus.collection }}/points/*" }
+        deny_rules:
+          # Belt and braces: the allow list above already omits these. They are
+          # denied explicitly so that widening the endpoint to `access:
+          # read-write` in a hurry still cannot reach them — deny is evaluated
+          # against presets too.
+          - { method: PUT,    path: "/collections/**" }
+          - { method: POST,   path: "/collections/{{ .Values.corpus.collection }}/points" }
+          - { method: DELETE, path: "/collections/**" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # The embedding server. Required, and easy to leave out by mistake.
+  # -------------------------------------------------------------------------
+  # Qdrant does not embed anything. A semantic search is POST .../points/search
+  # with a query vector already computed, so a sandbox granted the corpus and
+  # nothing else can list collections and fetch points by id but cannot
+  # actually search — it would fall back to keyword scrolling and the retrieval
+  # half of the demo would quietly degrade to grep.
+  #
+  # So the researcher reaches the CPU embedding server directly. Note this is
+  # NOT the generative model: that arrives through the supervisor's
+  # inference.local route and needs no rule. This is the second, separate
+  # llama-server from charts/secops-cpu-inference, running
+  # nomic-embed-text-v1.5 and producing the 768-dim vectors the collection was
+  # built with.
+  #
+  # One path, one method. /v1/embeddings turns text into numbers and can do
+  # nothing else; /v1/chat/completions on this host is denied, because a second
+  # uninstrumented route to a model would make the supervisor's inference route
+  # optional rather than mandatory.
+  embeddings:
+    name: corpus-embeddings
+    endpoints:
+      - host: {{ .Values.embeddings.host }}
+        port: {{ .Values.embeddings.port }}
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: POST, path: "/v1/embeddings" }
+        deny_rules:
+          - { method: POST, path: "/v1/chat/completions" }
+          - { method: POST, path: "/v1/completions" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+{{- if .Values.cveLookup.enabled }}
+
+  # -------------------------------------------------------------------------
+  # CVE Services — the published record for one CVE id, and nothing else.
+  # -------------------------------------------------------------------------
+  # THE ONLY PUBLIC HOST IN THIS PROFILE, and the paragraph above about the
+  # smallest policy in the set is the reason it needs justifying rather than
+  # just adding. Everything else here is in-cluster, which is what makes the
+  # air-gap claim a demonstration instead of an assertion. Setting
+  # `cveLookup.enabled: false` in values.yaml removes this block entirely and
+  # restores that property; the `cve` helper stays in /sandbox/bin and reports
+  # the refusal as a configuration decision rather than an outage.
+  #
+  # Why it is worth the trade here specifically. The corpus is a handful of
+  # seeded advisories, so a CVE it has never heard of leaves this agent with
+  # nothing but a 4B model — and what a 4B model does with that gap is invent
+  # a citation. It did, on a live run. A record the reviewer can open is the
+  # cheapest available fix.
+  #
+  # No credential_binding: the API is public and unauthenticated, so there is
+  # no secret here to bind, and none to leak into a retrieved advisory's worth
+  # of untrusted text. No TLS shim either — unlike NeuVector's self-signed
+  # controller, cveawg.mitre.org verifies against webpki-roots.
+  #
+  # ONE READ-ONLY PATH. Not `/api/**`: CVE Services also exposes the record
+  # submission surface, and an agent whose input is untrusted text has no
+  # business anywhere near a write endpoint on a public vulnerability
+  # database, whatever it would answer to an unauthenticated caller.
+  cve:
+    name: cve-record-lookup
+    endpoints:
+      - host: {{ .Values.cveLookup.host }}
+        port: {{ .Values.cveLookup.port }}
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/api/cve/**" }
+        deny_rules:
+          - { method: POST,   path: "/api/**" }
+          - { method: PUT,    path: "/api/**" }
+          - { method: DELETE, path: "/api/**" }
+    binaries:
+      - { path: /usr/bin/curl }
+{{- end }}
+
+  # -------------------------------------------------------------------------
+  # DELIBERATELY ABSENT
+  # -------------------------------------------------------------------------
+  # SUSE Security — the researcher does not read findings. Triage does, and
+  #   passes what it found. Splitting those two roles is only meaningful if the
+  #   split is enforced, and this absence is the enforcement.
+  #
+  # The git forge — see the header. This is the injection boundary.
+  #
+  # inference.local — a built-in supervisor route, short-circuited before
+  #   network policy is evaluated. A rule for it would have no effect. This is
+  #   also why the embeddings block above is the only model endpoint named
+  #   anywhere in these five files.

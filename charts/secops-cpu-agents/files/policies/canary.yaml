@@ -1,0 +1,247 @@
+# OpenShell sandbox policy — CANARY VALIDATION (zero-GPU profile).
+#
+# The pre-merge measurement. Read _README.md in this directory first.
+#
+# WHY THIS FILE EXISTS, AND WHY IT IS NOT validation.yaml
+#
+# Validation used to run before anything was deployed, and could not do its job:
+# SUSE Security indexes findings by RUNNING workload, so the replacement image —
+# which nothing ran — had no findings, and the "before/after" was the old image
+# compared with itself. The first end-to-end run reported exactly that and was
+# right to. A rescan of an image nothing runs is not a weak measurement, it is
+# not a measurement.
+#
+# So the replacement is now started for real, in parallel with the image it
+# replaces, before the merge, and scanned there. That makes this agent the one
+# thing the pipeline did not have until 0.3.1: an agent that writes to a running
+# cluster BEFORE a human has approved anything.
+#
+# WHAT MAKES THAT DEFENSIBLE IS THE SHAPE OF THE GRANT BELOW, and it is worth
+# reading closely, because "validation now has cluster write" is the sort of
+# sentence that should make a reviewer stop.
+#
+#   * ONE OBJECT, BY LITERAL NAME. The allow rule names
+#     {{ .Values.deploy.canary.namespace }}/{{ .Values.deploy.canary.name }}
+#     exactly. Not a namespace wildcard, not a name wildcard. deploy.yaml has
+#     `deployments/*` within a namespace because it must discover its target
+#     from a merge; this agent's target is fixed by configuration, so there is
+#     no reason for a wildcard and it does not get one. `cluster-apply` is in
+#     this sandbox too — helpers arrive per provider — and is refused by this
+#     rule the moment it reaches for the workload under review.
+#
+#   * THAT OBJECT IS SEEDED FURNITURE, NOT A WORKLOAD. It is created once, by
+#     hand, at replicas 0, from examples/.../40-canary-storefront.yaml. It has
+#     no Service, matches no Service selector, and serves nothing.
+#
+#   * NO NEW VERB. POST is denied here exactly as it is in deploy.yaml, which is
+#     what forced the seeded design: creating the canary would have needed POST
+#     on /k8s/clusters/**, and POST cannot be scoped by name because the create
+#     path — /namespaces/<ns>/deployments — carries no name. "May create the
+#     canary" is unavoidably "may create anything in that namespace", and an
+#     agent that can create a Pod can mount a Secret. So the canary is driven by
+#     PATCH, the verb the pipeline already had.
+#
+# WHAT THE HUMAN STILL DECIDES is unchanged and is the reason the above is a
+# trade worth making: this agent can start a pod that takes no traffic. It
+# cannot change what is serving. The merge is still the only thing that does.
+#
+# Verify from a live canary sandbox:
+#
+#   rancher PATCH /k8s/clusters/{{ .Values.rancher.clusterId }}/apis/apps/v1/namespaces/{{ .Values.deploy.canary.namespace }}/deployments/{{ .Values.deploy.canary.name }}   # SUCCEEDS
+#   rancher PATCH /k8s/clusters/{{ .Values.rancher.clusterId }}/apis/apps/v1/namespaces/{{ .Values.deploy.canary.namespace }}/deployments/storefront                          # DENIED  <- the demo
+#   rancher DELETE <the canary's own path>                                                                                                                                    # DENIED
+#   curl -s -XPOST .../v1/policy/rule                                                                                                                                         # DENIED
+version: 1
+
+# ---------------------------------------------------------------------------
+# Filesystem — NVIDIA's proxy-mode baseline, unmodified. See researcher.yaml.
+# ---------------------------------------------------------------------------
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /etc
+    - /var/log
+    - /proc
+    - /dev/urandom
+  read_write:
+    - /sandbox
+    - /workspace
+    - /tmp
+    - /dev/null
+
+landlock:
+  # Same as deploy.yaml, and for the same reason: this sandbox holds a write
+  # path to a running cluster, narrow though it is.
+  compatibility: hard_requirement
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+
+  # -------------------------------------------------------------------------
+  # Rancher — the canary workload, and nothing else in the cluster.
+  # -------------------------------------------------------------------------
+  # The host is the TLS shim, for the reasons in deploy.yaml. The `Host:` header
+  # the ingress routes on is set by the shim itself from `REWRITE_HOST`, not by
+  # the helper: OpenShell rebuilds the upstream request from the absolute-form
+  # URI and discards a client-supplied Host.
+  rancher:
+    name: rancher-canary-only
+    endpoints:
+      - host: {{ include "secops-cpu-agents.rancherHost" . }}
+        port: {{ include "secops-cpu-agents.rancherPort" . }}
+        protocol: rest
+        enforcement: enforce
+        credential_binding:
+          provider: rancher
+        rules:
+          # No `*` anywhere in either path. This is the whole fence.
+          - allow: { method: GET,   path: "/k8s/clusters/{{ .Values.rancher.clusterId }}/apis/apps/v1/namespaces/{{ .Values.deploy.canary.namespace }}/deployments/{{ .Values.deploy.canary.name }}" }
+          - allow: { method: PATCH, path: "/k8s/clusters/{{ .Values.rancher.clusterId }}/apis/apps/v1/namespaces/{{ .Values.deploy.canary.namespace }}/deployments/{{ .Values.deploy.canary.name }}" }
+        deny_rules:
+          # The same list as deploy.yaml, deliberately verbatim: this agent has
+          # strictly less reach and there is no argument for it having a
+          # different set of explicit refusals. A deny is visible in the audit
+          # log as a refusal; an absent allow is only a 403.
+          - { method: DELETE, path: "/k8s/clusters/**" }
+          # Includes the canary itself. It is scaled, never created, never
+          # removed — see the header.
+          - { method: POST,   path: "/k8s/clusters/**" }
+          - { method: PUT,    path: "/k8s/clusters/**" }
+          - { method: PATCH,  path: "/k8s/clusters/local/**" }
+          - { method: GET,    path: "/k8s/clusters/local/**" }
+          - { method: GET,    path: "/k8s/clusters/*/api/v1/namespaces/*/secrets/**" }
+          - { method: GET,    path: "/v3/tokens/**" }
+          - { method: POST,   path: "/v3/**" }
+          - { method: PUT,    path: "/v3/**" }
+          - { method: DELETE, path: "/v3/**" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # SUSE Security — scan, and read the result. Nothing else.
+  # -------------------------------------------------------------------------
+  # A verbatim copy of validation.yaml's block, and it should stay verbatim:
+  # the two agents ask the scanner exactly the same questions, one before the
+  # merge and one after. The argument for why the injected key is an ADMIN key
+  # and the write families are denied on top of it is in that file and applies
+  # here unchanged — the most direct way to make a CVE disappear is to disable
+  # the scanner, and a grader that could do that is part of the attack surface.
+  suse_security:
+    name: suse-security-scan
+    endpoints:
+      - host: {{ include "secops-cpu-agents.nvHost" . }}
+        port: {{ include "secops-cpu-agents.nvPort" . }}
+        protocol: rest
+        enforcement: enforce
+        credential_binding:
+          provider: suse-security
+        rules:
+          - allow: { method: POST, path: "/v1/auth" }
+          - allow: { method: POST, path: "/v1/scan/repository" }
+          - allow: { method: GET,  path: "/v1/scan/repository/**" }
+          - allow: { method: GET,  path: "/v1/scan/scanner" }
+          # Read auto_scan; see survey.yaml for why. The PATCH stays denied.
+          - allow: { method: GET,  path: "/v1/scan/config" }
+          # `nv-survey`'s two-call read; see validation.yaml and survey.yaml.
+          - allow: { method: POST, path: "/v1/vulasset" }
+          - allow: { method: GET,  path: "/v1/vulasset" }
+        deny_rules:
+          # Explicit, now that the GET above is allowed; see survey.yaml. It
+          # matters most here — this is the agent whose verdict decides
+          # whether a human is asked to merge.
+          - { method: PATCH,  path: "/v1/scan/config" }
+          - { method: POST,   path: "/v1/policy/rule" }
+          - { method: PATCH,  path: "/v1/policy/rule" }
+          - { method: DELETE, path: "/v1/policy/rule/**" }
+          - { method: POST,   path: "/v1/admission/rules" }
+          - { method: PATCH,  path: "/v1/admission/rule/**" }
+          - { method: DELETE, path: "/v1/admission/rule/**" }
+          - { method: POST,   path: "/v1/group" }
+          - { method: PATCH,  path: "/v1/group/**" }
+          - { method: DELETE, path: "/v1/group/**" }
+          - { method: POST,   path: "/v1/file/config" }
+          - { method: GET,    path: "/v1/file/config" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # The forge — read the pull request, write one comment on it.
+  # -------------------------------------------------------------------------
+  # validation.yaml's block verbatim, including the merge denial. That one is
+  # the load-bearing refusal in this file, for a new reason: this agent now has
+  # evidence. "The canary is Ready and the scan is clean, so let it merge" is
+  # exactly the shortcut that would turn a measurement into a decision, and the
+  # measurement is worth having precisely because it is not one.
+  git_forge:
+    name: git-forge-comment
+    endpoints:
+      - host: {{ .Values.forge.host }}
+        port: {{ .Values.forge.port }}
+        protocol: rest
+        enforcement: enforce
+        credential_binding:
+          provider: git-forge
+        allow_encoded_slash: true
+        rules:
+          - allow: { method: GET,  path: "/api/v1/repos/*/*/pulls/*" }
+          - allow: { method: GET,  path: "/api/v1/repos/*/*/pulls/*/files" }
+          - allow: { method: GET,  path: "/api/v1/repos/*/*/issues/*" }
+          - allow: { method: POST, path: "/api/v1/repos/*/*/issues/*/comments" }
+        deny_rules:
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls/*/merge" }
+          - { method: PUT,    path: "/api/v1/repos/*/*/pulls/*/merge" }
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls/*/reviews" }
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls" }
+          - { method: POST,   path: "/api/v1/repos/*/*/issues/*/labels" }
+          - { method: PUT,    path: "/api/v1/repos/*/*/issues/*/labels" }
+          # `git-forge` also lands forge-clone/forge-push/forge-remediate in
+          # /sandbox/bin. Closed here, as in validation.yaml.
+          - { method: PUT,    path: "/api/v1/repos/*/*/contents/**" }
+          - { method: POST,   path: "/api/v1/repos/*/*/contents/**" }
+          - { method: DELETE, path: "/api/v1/repos/*/*/contents/**" }
+          - { method: POST,   path: "/*/*/git-receive-pack" }
+          - { method: POST,   path: "/*/*/git-upload-pack" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # DELIBERATELY ABSENT
+  # -------------------------------------------------------------------------
+  # The container registry — validation.yaml has it so a scan can be requested
+  #   by digest against a moving tag. This agent does not need it: the image it
+  #   measures is the one the kubelet actually pulled and is actually running,
+  #   which is a stronger answer to the same question than a digest lookup.
+  #
+  # The corpus — same argument as validation.yaml. This agent asks the scanner
+  #   what is true now; it does not re-read the advisory it might talk itself
+  #   into agreeing with.
+  #
+  # git over smart HTTP — no clone, no push.
+  #
+  # inference.local — built-in supervisor route; a rule would have no effect.
+
+# ---------------------------------------------------------------------------
+# Egress middleware — applied after policy admits a request and BEFORE
+# OpenShell injects provider credentials.
+# ---------------------------------------------------------------------------
+# Carried across from deploy.yaml. This sandbox writes a pull-request comment
+# and composes a JSON patch body; both are places a pasted credential could come
+# to rest. Defence in depth — it is NOT what keeps the Rancher token safe.
+network_middlewares:
+  redact-secrets:
+    name: Redact secrets in outbound requests
+    middleware: openshell/regex
+    order: 10
+    config:
+      mode: redact
+    on_error: fail_closed
+    endpoints:
+      include:
+        - "{{ .Values.forge.host }}"
+        - "{{ include "secops-cpu-agents.rancherHost" . }}"
+        - "{{ include "secops-cpu-agents.nvHost" . }}"

@@ -1,0 +1,47 @@
+# The in-cluster git forge — an OpenShell provider profile.
+#
+# Companion to suse-security.yaml; read the long comment there first, because
+# the reasoning about endpointless profiles and `credential_binding` is the
+# same and is not repeated here.
+#
+# `git-forge` rather than `gitea`, and `source_control` rather than a
+# Gitea-specific category, because the whole point of §7 of the architecture
+# doc is that a real deployment repoints this at the customer's own forge. The
+# name a policy file references should survive that swap; `gitea` would not.
+#
+# There IS a builtin `github` profile, and it is not usable here: its endpoints
+# are api.github.com and github.com, which do not exist on this cluster and are
+# not reachable from it.
+id: git-forge
+display_name: Git forge
+description: Git forge API and HTTP git transport for the SecOps agents
+category: source_control
+inference_capable: false
+
+credentials:
+  - name: token
+    # Gitea accepts a personal access token three ways: `Authorization: token
+    # <t>`, `Authorization: Bearer <t>`, and as the password half of HTTP
+    # basic. `bearer` is chosen for the REST API because it is the one of the
+    # three that OpenShell can describe without also inventing a username.
+    #
+    # KNOWN GAP, and it is why the remediation agent is the one to watch during
+    # the isolation proof: git-over-HTTP push (`POST /*/*/git-receive-pack`,
+    # allowed in remediation.yaml) authenticates with HTTP basic, and a
+    # placeholder embedded in a base64 basic-auth header is not the same string
+    # the proxy is looking for. If push turns out to need a credential the
+    # sandbox cannot present, the remediation agent uses the API contents
+    # endpoints instead and the orchestrator opens the PR — which is already
+    # how files/orchestrator.py is written.
+    description: Git forge access token for the secops-bot account
+    env_vars: [GITEA_TOKEN, GIT_FORGE_TOKEN]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+
+discovery:
+  credentials: [token]
+
+binaries:
+  - /usr/bin/git
+  - /usr/bin/curl

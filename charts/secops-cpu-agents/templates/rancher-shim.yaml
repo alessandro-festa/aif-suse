@@ -1,0 +1,130 @@
+{{- if .Values.rancher.tlsShim.enabled }}
+# A plain-HTTP front door for the Rancher API.
+#
+# The second instance of the pattern in tls-shim.yaml, running the same
+# files/tls-shim.py with different env. Read that file's argument first; the
+# short version is that OpenShell's L7 proxy verifies every upstream
+# certificate and has no escape hatch, so an HTTPS endpoint whose CA is not in
+# the sandbox image is unreachable from a sandbox no matter what the policy
+# says. Rancher's server certificate is issued by its own `dynamiclistener` CA
+# (`O=dynamiclistener-org; CN=dynamiclistener-ca@…`), so it is one of those.
+#
+# THE SHIM IS NOT A CREDENTIAL HOLDER. The Rancher API token is added by the L7
+# proxy on the sandbox side, at the egress boundary, and passes straight through
+# here. Nothing in this pod reads it and nothing here needs a Secret.
+#
+# WHAT IS GIVEN UP, same as the SUSE Security shim: the hop from this pod to
+# Rancher is encrypted but unauthenticated, so a man in the middle inside the
+# cluster network could impersonate Rancher to this shim. Stated in the README
+# rather than buried here.
+#
+# `REWRITE_HOST` IS WHY THIS INSTANCE PARSES HTTP AND THE OTHER ONE DOES NOT.
+# Rancher is behind an ingress that routes strictly on the Host header, and the
+# Service name above is not the vhost. Until 2026-09-17 the `rancher` helper
+# sent `-H "Host: <vhost>"` itself and this pod stayed a byte relay — which did
+# not work, and the first end-to-end deploy failed on it: OpenShell's forward
+# proxy rebuilds the upstream request from the absolute-form request URI and
+# discards a client-supplied Host, so nginx saw the shim's name and answered
+# 404. Correcting the header has to happen on this side of the proxy, so this
+# instance runs tls-shim.py's reverse-proxy mode. See that file's docstring.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.rancher.tlsShim.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-agents.labels" . | nindent 4 }}
+  annotations:
+    ai-factory.suse.com/description: >-
+      Plain HTTP in, TLS out to the Rancher server. The hostname the deploy
+      policy names.
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    ai-factory.suse.com/secops-role: rancher-shim
+  ports:
+    - name: http
+      # The same port number as the Rancher server's, deliberately — the same
+      # reasoning as the SUSE Security shim: it keeps the policy, the helper
+      # and the README reading like the real endpoint, so turning the shim off
+      # on a cluster whose Rancher has a verifiable certificate is a one-line
+      # values change and nothing else.
+      port: {{ .Values.rancher.tlsShim.port }}
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.rancher.tlsShim.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-agents.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      ai-factory.suse.com/secops-role: rancher-shim
+  template:
+    metadata:
+      labels:
+        {{- include "secops-cpu-agents.labels" . | nindent 8 }}
+        ai-factory.suse.com/secops-role: rancher-shim
+      annotations:
+        checksum/workflow: {{ include (print $.Template.BasePath "/workflow.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: secops-cpu-orchestrator
+      automountServiceAccountToken: false
+      {{- include "secops-cpu-agents.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: shim
+          image: {{ include "secops-cpu-agents.orchestratorImage" . }}
+          imagePullPolicy: {{ .Values.orchestrator.image.pullPolicy }}
+          command: ["python3", "/workflow/tls-shim.py"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            # The real Rancher vhost, not a Service name: this is both the TCP
+            # destination and the TLS SNI, and the ingress needs the SNI to
+            # pick a certificate even though it routes on the Host header.
+            - name: UPSTREAM_HOST
+              value: {{ .Values.rancher.serverHost | quote }}
+            - name: UPSTREAM_PORT
+              value: {{ .Values.rancher.serverPort | quote }}
+            - name: LISTEN_PORT
+              value: {{ .Values.rancher.tlsShim.port | quote }}
+            # Setting this is what selects the reverse-proxy mode. Same value as
+            # UPSTREAM_HOST here, and they are not the same thing: one is where
+            # the TCP connection goes, the other is the vhost the ingress routes
+            # on. They would differ the moment Rancher were reached by IP.
+            - name: REWRITE_HOST
+              value: {{ .Values.rancher.serverHost | quote }}
+          ports:
+            - containerPort: {{ .Values.rancher.tlsShim.port }}
+              name: http
+          volumeMounts:
+            - name: workflow
+              mountPath: /workflow
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.rancher.tlsShim.resources | nindent 12 }}
+      volumes:
+        - name: workflow
+          configMap:
+            name: secops-cpu-workflow
+{{- end }}

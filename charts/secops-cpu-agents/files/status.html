@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SecOps agents — Orchestrator Administrative Console</title>
+<!--
+  Read-only. There is no button on this page and that is deliberate: the two
+  decisions a human makes in this pipeline are made in Gitea, where they are
+  attributable and reviewable. A stop button here would be a third, unlogged
+  control plane.
+
+  Polls /api/state every two seconds. Vanilla, no build step — it is served
+  from a ConfigMap by a stdlib http.server.
+-->
+<style>
+  :root {
+    --ink: #0c322c;
+    --blue: #30ba78;
+    --waterhole: #0c322c;
+    --line: #d8dee4;
+    --muted: #5c6b73;
+  }
+  body {
+    font: 15px/1.55 -apple-system, "Segoe UI", Inter, sans-serif;
+    margin: 0; padding: 2.5rem 2rem; color: var(--ink); background: #fbfcfd;
+  }
+  h1 { font-size: 1.35rem; margin: 0 0 .25rem; }
+  .sub { color: var(--muted); margin: 0 0 2rem; }
+  .finding {
+    background: #fff; border: 1px solid var(--line); border-left: 3px solid var(--blue);
+    border-radius: 4px; padding: .9rem 1.1rem; margin-bottom: 1.75rem;
+  }
+  .finding b { display: block; font-size: .72rem; letter-spacing: .07em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: .3rem; }
+  ol { list-style: none; margin: 0; padding: 0; }
+  li {
+    background: #fff; border: 1px solid var(--line); border-radius: 4px;
+    padding: .85rem 1.1rem; margin-bottom: .6rem;
+    display: grid; grid-template-columns: 1.1rem 1fr auto; gap: .9rem; align-items: baseline;
+  }
+  .dot { width: .6rem; height: .6rem; border-radius: 50%; background: var(--line); }
+  .running .dot { background: var(--blue); animation: pulse 1.2s infinite; }
+  .waiting .dot { background: #e5a50a; animation: pulse 1.2s infinite; }
+  .done    .dot { background: var(--blue); }
+  .failed  .dot { background: #c9211e; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  .name { font-weight: 600; }
+  .agent { color: var(--muted); font-size: .85rem; margin-left: .5rem; font-weight: 400; }
+  .detail { color: var(--muted); font-size: .85rem; }
+  .secs { color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
+  pre {
+    grid-column: 2 / 4; margin: .6rem 0 0; padding: .7rem .85rem; background: #f4f6f8;
+    border-radius: 3px; white-space: pre-wrap; font-size: .82rem; color: #26343d;
+    max-height: 16rem; overflow-y: auto;
+  }
+  footer { margin-top: 2rem; color: var(--muted); font-size: .85rem; }
+  a { color: var(--waterhole); }
+</style>
+</head>
+<body>
+<h1>Sovereign Agentic SecOps — Orchestrator Administrative Console</h1>
+<p class="sub">One sandbox per agent, one policy per agent. Every decision below
+is made by a model inside a sandbox or by a person in the forge — never by the
+orchestrator.</p>
+
+<!-- The image a HUMAN picked out of the survey, not one the machine chose.
+     Empty until the selection gate returns, which is the honest thing for it
+     to say: before then the run genuinely has no subject. `state.finding`
+     holds the whole ranked survey and is far too long for a banner — it is on
+     the Survey step's own output block below. -->
+<div class="finding"><b>Container under analysis</b><span id="target">…</span></div>
+<ol id="steps"></ol>
+<footer id="foot"></footer>
+
+<script>
+const STATES = {pending: "", running: "running", waiting: "waiting", done: "done", failed: "failed"};
+
+function render(state) {
+  document.getElementById("target").textContent =
+    state.target || "— nothing selected yet; a human chooses on the survey issue";
+
+  document.getElementById("steps").innerHTML = state.steps.map(s => `
+    <li class="${STATES[s.state] || ""}">
+      <span class="dot"></span>
+      <span>
+        <span class="name">${esc(s.name)}</span>
+        <span class="agent">${esc(s.agent)}</span>
+        ${s.detail ? `<div class="detail">${esc(s.detail)}</div>` : ""}
+      </span>
+      <span class="secs">${s.seconds !== null ? s.seconds + "s" : ""}</span>
+      ${s.output ? `<pre>${esc(s.output)}</pre>` : ""}
+    </li>`).join("");
+
+  const links = [];
+  if (state.surveyIssue) links.push(`<a href="${state.giteaUrl}/issues/${state.surveyIssue}">survey #${state.surveyIssue}</a>`);
+  if (state.issue) links.push(`<a href="${state.giteaUrl}/issues/${state.issue}">plan issue #${state.issue}</a>`);
+  if (state.pull)  links.push(`<a href="${state.giteaUrl}/pulls/${state.pull}">pull request #${state.pull}</a>`);
+  document.getElementById("foot").innerHTML =
+    (state.verdict ? esc(state.verdict) + " — " : "") +
+    (links.length ? "review in the forge: " + links.join(" · ")
+                  : `forge: <a href="${state.giteaUrl}">${esc(state.giteaUrl)}</a>`);
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+}
+
+async function poll() {
+  try { render(await (await fetch("/api/state")).json()); } catch (e) { /* keep last frame */ }
+}
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

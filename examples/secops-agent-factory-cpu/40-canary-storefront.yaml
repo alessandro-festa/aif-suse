@@ -1,0 +1,93 @@
+# The canary twin — applied once, by hand, before the first run.
+#
+#   kubectl --context kind-downstream-1 apply -f 40-canary-storefront.yaml
+#
+# WHY THIS EXISTS. Validation used to run before anything was deployed, which
+# made it structurally incapable of measuring what it was asked to measure: SUSE
+# Security builds its findings from images it sees RUNNING (`nv-survey` reads
+# `/v1/vulasset`, which is keyed by workload), so a rescan of an image no pod
+# runs returns nothing at all. The first end-to-end run showed this exactly —
+# the validation agent scanned the old image twice and correctly concluded
+# "identical before and after, indicating no actual remediation took place".
+#
+# So the replacement image is now really run, before the merge, in parallel with
+# the one it replaces, and really scanned. This Deployment is where it runs.
+#
+# WHY IT IS SEEDED AT replicas: 0 RATHER THAN CREATED BY THE AGENT. Creating a
+# workload is a POST, and the deploy policy denies POST on /k8s/clusters/**
+# because an agent that can create a Pod can mount a Secret and has escaped the
+# sandbox by a route no egress rule sees. Worse, POST cannot be scoped by name:
+# the create path is `/namespaces/<ns>/deployments` and carries no name at all,
+# so permitting "create the canary" is permitting "create anything here".
+#
+# Seeding it instead means the canary is driven entirely by PATCH — the verb the
+# pipeline already had — and the validation agent's policy can pin it to this
+# one object by literal name. Nothing new is granted to make the canary work.
+#
+# WHY IT IS A TWIN AND NOT A BARE POD. Everything except the image, the name and
+# the replica count is copied from `workloads/nginx.yaml`'s storefront: the same
+# probe on the same port, the same dropped capabilities, the same pull secret.
+# That is most of the value. The open question about any Application Collection
+# replacement is not "does the image exist" but "does it come up under the pod
+# spec the workload already has" — SLE BCI images commonly run non-root on 8080
+# where the Debian one binds 80 as root. A twin answers that before a human
+# merges rather than after.
+#
+# IT TAKES NO TRAFFIC. The `storefront` Service selects
+# `app.kubernetes.io/name: storefront`; this carries `storefront-canary`. There
+# is no Service for it and there should not be one.
+#
+# IT IS NOT IN THE MANIFESTS REPOSITORY, deliberately. `forge-remediate` finds
+# the file to patch by grepping the clone for the image being replaced, and
+# requires exactly one hit; a second manifest naming the same image would break
+# the remediation step. The canary is cluster furniture, like the TLS shims —
+# not something the pipeline proposes changes to.
+#
+# LIFECYCLE. `cluster-canary` scales it to 1 on the new image; `cluster-apply`
+# scales it back to 0 after the real rollout succeeds. A run that is never
+# merged leaves it running — the handover comment says so, and the fix is
+#   kubectl -n ns-demo-web scale deploy/storefront-canary --replicas=0
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: storefront-canary
+  namespace: ns-demo-web
+  labels:
+    app.kubernetes.io/name: storefront-canary
+    ai-factory.suse.com/secops-role: canary
+spec:
+  # Idle by default. The scanner has nothing to say about a workload with no
+  # pods, which is the correct state between runs.
+  replicas: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: storefront-canary
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: storefront-canary
+    spec:
+      imagePullSecrets:
+        - name: appco-pull
+      containers:
+        # The container name is read off the live object by `cluster-canary`,
+        # not assumed — but keeping it `nginx`, as the storefront has it, keeps
+        # the twin a twin.
+        - name: nginx
+          # Whatever the storefront runs today. It is never pulled at replicas 0
+          # and is overwritten by the first PATCH; it is here so that a
+          # `kubectl get deploy -n ns-demo-web` reads as two rows of the same
+          # thing rather than as a mystery.
+          image: docker.io/library/nginx:1.31.6
+          ports:
+            - { containerPort: 80, name: http }
+          resources:
+            limits: { cpu: 200m, memory: 128Mi }
+            requests: { cpu: 50m, memory: 32Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "SETGID", "SETUID", "NET_BIND_SERVICE"]
+          readinessProbe:
+            httpGet: { path: /, port: http }

@@ -1,0 +1,10 @@
+{
+  "id": "base-image-distro-cves",
+  "doc_type": "advisory",
+  "title": "Distribution base-image CVEs in upstream application containers — nginx, perl, glibc, curl, openssl",
+  "affected_package": "base image (perl, glibc, curl, openssl, zlib, libxml2)",
+  "affected_images": "docker.io/library/nginx, and other upstream application images built on a general-purpose distribution base",
+  "illustrative": true,
+  "severity": "mixed",
+  "text": "A container scan of a current, fully up-to-date upstream application image routinely reports tens of critical and hundreds of high findings. Almost none of them are in the application. They are in the general-purpose distribution base underneath it — perl, glibc, curl, openssl, zlib, libxml2 and the rest of a full Debian or Ubuntu userland, most of which the application never calls. docker.io/library/nginx is the standard example: the nginx binary is current mainline, and the findings are the base. Upgrading nginx does not move these numbers, because nginx is not what is vulnerable. This is the single most common misreading of a container scan result, and it sends teams chasing an application upgrade that cannot fix the finding. Two remediations are genuinely available. The first is to rebuild the image on a minimal or vendor-maintained base that omits the unused packages and carries the vendor's patched builds of the ones that remain — see runbook-rebase-to-application-collection. The second is a package bump inside the existing image, which works only when the distribution has published fixed packages for every affected component and is repeated every time it publishes more. When the same application version is available on a maintained base, the rebase is the smaller and more durable change, because it removes the packages rather than patching them. Judge the remediation by rescanning the replacement image, not by counting the CVE identifiers the advisory text mentions: the finding count falls because the package is absent, and an absent package produces no finding and no future one."
+}

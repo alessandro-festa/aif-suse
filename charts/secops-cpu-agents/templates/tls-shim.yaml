@@ -1,0 +1,114 @@
+{{- if .Values.suseSecurity.tlsShim.enabled }}
+# A plain-HTTP front door for SUSE Security's REST API.
+#
+# The full argument is in files/tls-shim.py. In one paragraph: OpenShell's L7
+# proxy verifies every upstream certificate and has no escape hatch, NeuVector
+# serves a self-signed certificate with no service SANs, and the only policy
+# setting that bypasses verification also stops the proxy injecting the API key
+# — which would put the real credential inside the sandbox and destroy the
+# property this whole profile exists to demonstrate. So the sandboxes speak
+# plain HTTP to this pod, the proxy inspects and credential-injects exactly as
+# before, and this pod does the unverified TLS hop instead.
+#
+# THE SHIM IS NOT A CREDENTIAL HOLDER. It relays bytes and parses nothing; the
+# API key is added by the L7 proxy on the sandbox side and simply passes
+# through. Nothing here reads it, and nothing here needs a Secret.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.suseSecurity.tlsShim.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-agents.labels" . | nindent 4 }}
+  annotations:
+    ai-factory.suse.com/description: >-
+      Plain HTTP in, TLS out to the SUSE Security controller. The hostname the
+      triage and validation policies name.
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    ai-factory.suse.com/secops-role: suse-security-shim
+  ports:
+    - name: http
+      # The SAME port number as the controller's, deliberately. It keeps the
+      # policies, the briefings and the README reading like the real endpoint,
+      # so swapping the shim out on a cluster whose NeuVector has a verifiable
+      # certificate is a one-line hostname change and nothing else.
+      port: {{ .Values.suseSecurity.tlsShim.port }}
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.suseSecurity.tlsShim.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-agents.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      ai-factory.suse.com/secops-role: suse-security-shim
+  template:
+    metadata:
+      labels:
+        {{- include "secops-cpu-agents.labels" . | nindent 8 }}
+        ai-factory.suse.com/secops-role: suse-security-shim
+      annotations:
+        checksum/workflow: {{ include (print $.Template.BasePath "/workflow.yaml") . | sha256sum }}
+    spec:
+      # Same posture as the orchestrator: no API access, nothing mounted that
+      # it does not read, and no writable root.
+      serviceAccountName: secops-cpu-orchestrator
+      automountServiceAccountToken: false
+      {{- include "secops-cpu-agents.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: shim
+          # The orchestrator image, reused rather than built again: it is the
+          # SLE BCI Python base this profile already publishes, and the shim is
+          # stdlib-only for the same reason orchestrator.py is.
+          image: {{ include "secops-cpu-agents.orchestratorImage" . }}
+          imagePullPolicy: {{ .Values.orchestrator.image.pullPolicy }}
+          command: ["python3", "/workflow/tls-shim.py"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: UPSTREAM_HOST
+              value: {{ .Values.suseSecurity.host | quote }}
+            - name: UPSTREAM_PORT
+              value: {{ .Values.suseSecurity.port | quote }}
+            - name: LISTEN_PORT
+              value: {{ .Values.suseSecurity.tlsShim.port | quote }}
+          ports:
+            - containerPort: {{ .Values.suseSecurity.tlsShim.port }}
+              name: http
+          volumeMounts:
+            - name: workflow
+              mountPath: /workflow
+              readOnly: true
+          # No HTTP probe: this is a byte relay with no health endpoint of its
+          # own, and probing it by opening a TCP connection is exactly what a
+          # client does anyway.
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.suseSecurity.tlsShim.resources | nindent 12 }}
+      volumes:
+        - name: workflow
+          configMap:
+            name: secops-cpu-workflow
+{{- end }}

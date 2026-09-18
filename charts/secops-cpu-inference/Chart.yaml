@@ -1,0 +1,26 @@
+annotations:
+  licenses: Apache-2.0
+  # Both Deployments run the same upstream llama.cpp server image; only the
+  # flags differ. Listed once, as the image really is one image.
+  helm.sh/images: |
+    - image: ghcr.io/ggml-org/llama.cpp:server
+      name: llama-server
+apiVersion: v2
+name: secops-cpu-inference
+version: 0.1.1
+description: |
+  CPU-only inference for the Sovereign Agentic SecOps zero-GPU profile: one
+  llama.cpp server for generation and one for embeddings, no GPU, no NIM.
+type: application
+home: https://github.com/SUSE/aif
+sources:
+  - https://github.com/SUSE/aif
+appVersion: "0.1.0"
+maintainers:
+  - url: https://www.suse.com/
+    name: SUSE LLC
+keywords:
+  - ai
+  - llama.cpp
+  - cpu
+  - secops

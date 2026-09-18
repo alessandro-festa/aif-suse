@@ -1,0 +1,84 @@
+# ClusterRepos consumed by the zero-GPU SecOps blueprints.
+#
+# Blueprint components reference a chart repository by the NAME of a Rancher
+# ClusterRepo, not by URL. There is no allowlist: if the name does not resolve
+# to a ClusterRepo on the target cluster, the HelmOp never produces a release
+# and the AIWorkload stalls without a useful message. Apply this file first.
+#
+#   kubectl --context=kind-sims-datacenter apply -f 00-clusterrepos.yaml
+#   kubectl --context=kind-sims-datacenter get clusterrepo
+#
+# APPLY IT TO sims-datacenter — the RANCHER LOCAL CLUSTER — even though every
+# workload in this profile runs on downstream-1. The lookup is done by the
+# operator's own client (`resolveClusterRepo`, blueprint.go:1099 → `r.Get`),
+# and the operator runs on local. So the repo is read where the operator is,
+# not where the chart lands. Applying this to downstream-1 instead is the
+# quiet failure: the AIWorkload reports the ClusterRepo not ready, and the
+# downstream cluster has a ClusterRepo nothing ever reads.
+#
+# Same for the Blueprint and AIWorkload CRs in 10-/20-/30-: all three go to
+# local, and `targetClusters: ["c-jhrj6"]` is what sends the HelmOp downstream.
+#
+# THREE REPOS, AND ONLY THREE. The GPU profile needs four NGC endpoints; this
+# one reaches no NVIDIA registry at all, because no NVIDIA image in that
+# blueprint has a linux/arm64 manifest. Nothing here installs SUSE Security
+# either — it is a platform prerequisite, installed per
+# integrations/suse-security/README.md, and what this directory contributes is
+# the integration rather than the install.
+#
+# None of the three can be indexed by Rancher (an OCI namespace path exposes no
+# catalog API), so all three sit at DOWNLOAD TIME "" and their charts do not
+# appear in the UI catalog browser. That affects browsing only — the Blueprint
+# install path never reads the index.
+---
+# The three charts written for this profile: secops-cpu-inference,
+# secops-cpu-knowledge, secops-cpu-agents.
+#
+# For an OCI repo the controller builds the reference as
+# `<spec.url>/<chartName>`, so this URL plus chartName `secops-cpu-inference`
+# resolves to oci://ghcr.io/alessandro-festa/charts/secops-cpu-inference.
+#
+# PUSH THE CHARTS BEFORE APPLYING THE BLUEPRINT. From the repository root:
+#
+#   for c in secops-cpu-inference secops-cpu-knowledge secops-cpu-agents; do
+#     helm package charts/$c -d /tmp/charts
+#     helm push /tmp/charts/$c-0.1.0.tgz oci://ghcr.io/alessandro-festa/charts
+#   done
+#
+# And BUMP THE CHART VERSION on every push. `perHelmOpRenderDigest` hashes the
+# chartVersion, not the chart content, so re-pushing 0.1.0 with a fix is a
+# silent no-op: Fleet sees the same digest and never re-renders.
+apiVersion: catalog.cattle.io/v1
+kind: ClusterRepo
+metadata:
+  name: secops-cpu
+spec:
+  url: oci://ghcr.io/alessandro-festa/charts
+---
+# OpenShell gateway and workspace charts. Identical to
+# examples/openshell/00-clusterrepo.yaml — if that file has already been
+# applied to this cluster, this document is a no-op.
+apiVersion: catalog.cattle.io/v1
+kind: ClusterRepo
+metadata:
+  name: openshell
+spec:
+  url: oci://ghcr.io/nvidia/openshell
+---
+# Gitea, the forge that holds both human gates.
+#
+# The upstream chart, not a wrapper and not Application Collection. AppCo has
+# neither `gitea` nor `forgejo`, and that is a real absence rather than an
+# authentication failure: `postgresql` and `milvus` resolve anonymously from
+# oci://dp.apps.rancher.io/charts in the same session, while both forges return
+# "unable to locate any tags in provided repository".
+#
+# No wrapper chart of ours, because the only thing a wrapper would have added
+# is pinning the image by digest, and the chart already exposes `image.digest`.
+# See integrations/gitea/values.yaml.
+apiVersion: catalog.cattle.io/v1
+kind: ClusterRepo
+metadata:
+  name: gitea
+spec:
+  url: oci://docker.gitea.com/charts

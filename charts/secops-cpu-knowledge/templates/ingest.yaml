@@ -1,0 +1,118 @@
+{{- if .Values.ingest.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: secops-cpu-corpus
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-knowledge.labels" . | nindent 4 }}
+data:
+  # The seed corpus, one JSON document per key. Committed as files under
+  # corpus/ rather than inlined here so they stay reviewable in a diff and can
+  # be validated with an ordinary JSON parser.
+  #
+  # Well inside the 1 MiB ConfigMap ceiling at five documents. A real corpus is
+  # ingested from SUSE's published advisory data instead — see corpus/README.md
+  # — and would not go through a ConfigMap at all.
+  {{- range $path, $_ := .Files.Glob "corpus/*.json" }}
+  {{ base $path }}: |
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: secops-cpu-ingest-script
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-knowledge.labels" . | nindent 4 }}
+data:
+  ingest.py: |
+    {{- .Files.Get "files/ingest.py" | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # A FIXED name, not one carrying .Release.Revision. The revision made every
+  # upgrade produce a Job with a new name, so before-hook-creation below never
+  # had a previous Job to delete and the old ones accumulated — fourteen of
+  # them on the first install, each holding a running pod, on a cluster with no
+  # swap. A fixed name is also the only thing that makes the delete policy mean
+  # what the comment below says it means.
+  name: secops-cpu-ingest
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-knowledge.labels" . | nindent 4 }}
+  annotations:
+    # post-install AND post-upgrade: the corpus is part of the chart, so a
+    # corpus edit is a chart upgrade and must re-ingest. The script is
+    # idempotent (UUID5 point ids), so a re-run overwrites rather than
+    # duplicating.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    # NOT hook-delete-policy: hook-succeeded. The Job's logs are the only record
+    # of what was ingested and whether the embedding dimensions matched, and
+    # deleting it on success throws that away exactly when someone later asks
+    # why the corpus looks the way it does. It is deleted before the next run
+    # instead.
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.ingest.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "secops-cpu-knowledge.labels" . | nindent 8 }}
+        ai-factory.suse.com/component: corpus-ingest
+    spec:
+      restartPolicy: Never
+      {{- include "secops-cpu-knowledge.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: ingest
+          image: {{ .Values.ingest.image.repository }}:{{ .Values.ingest.image.tag }}
+          imagePullPolicy: {{ .Values.ingest.image.pullPolicy }}
+          command: ["python3", "/scripts/ingest.py"]
+          env:
+            - name: QDRANT_URL
+              value: http://secops-cpu-qdrant:{{ .Values.qdrant.service.httpPort }}
+            - name: COLLECTION_NAME
+              value: {{ .Values.collection.name }}
+            - name: VECTOR_SIZE
+              value: "{{ .Values.collection.vectorSize }}"
+            - name: DISTANCE
+              value: {{ .Values.collection.distance }}
+            - name: EMBEDDING_URL
+              value: {{ .Values.ingest.embeddingUrl }}
+            - name: EMBEDDING_MODEL
+              value: {{ .Values.ingest.embeddingModel }}
+            - name: CORPUS_DIR
+              value: /corpus
+            - name: WAIT_TIMEOUT_SECONDS
+              value: "{{ .Values.ingest.waitTimeoutSeconds }}"
+          volumeMounts:
+            - name: corpus
+              mountPath: /corpus
+              readOnly: true
+            - name: script
+              mountPath: /scripts
+              readOnly: true
+          resources:
+            {{- toYaml .Values.ingest.resources | nindent 12 }}
+      volumes:
+        - name: corpus
+          configMap:
+            name: secops-cpu-corpus
+        - name: script
+          configMap:
+            name: secops-cpu-ingest-script
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

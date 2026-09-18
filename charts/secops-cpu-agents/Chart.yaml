@@ -1,0 +1,25 @@
+annotations:
+  licenses: Apache-2.0
+  helm.sh/images: |
+    - image: ghcr.io/alessandro-festa/secops-cpu-orchestrator:0.1.0
+      name: orchestrator
+apiVersion: v2
+name: secops-cpu-agents
+version: 0.3.3
+description: |
+  Agent plane for the Sovereign Agentic SecOps zero-GPU profile: an orchestrator
+  that drives one OpenShell sandbox per specialist agent, the seven per-agent
+  policies that are the security boundary, and a read-only status page.
+type: application
+home: https://github.com/SUSE/aif
+sources:
+  - https://github.com/SUSE/aif
+appVersion: "0.1.0"
+maintainers:
+  - url: https://www.suse.com/
+    name: SUSE LLC
+keywords:
+  - ai
+  - agents
+  - openshell
+  - secops

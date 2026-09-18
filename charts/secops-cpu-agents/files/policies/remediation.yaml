@@ -1,0 +1,273 @@
+# OpenShell sandbox policy — REMEDIATION ENGINEER (zero-GPU profile).
+#
+# The only agent in this profile that can write to a source repository. Read
+# _README.md in this directory first.
+#
+# This is the closest of the five to the GPU profile's single
+# `remediation-sandbox.yaml`, and the decisions in that file's `git_forge`
+# block transfer almost unchanged. What differs: the forge is in-cluster, so
+# the host is a Service name rather than api.github.com + github.com, and the
+# path prefix is Gitea's `/api/v1/...` rather than GitHub's `/...`.
+#
+# TWO GATES, AND THIS POLICY IS ONLY ONE OF THEM
+#
+# The agent may push a branch and open a pull request. It may not merge one —
+# denied here, AND denied by the forge, because the `secops-bot` account is
+# granted write-but-not-merge on the repository. Both layers refuse it and only
+# one of them is the thing being demonstrated: the point of the demo is that
+# the request never leaves the sandbox, so the forge's own 403 is the backstop
+# you hope never fires.
+#
+# Verify from a live remediation sandbox, after it has opened a PR:
+#
+#   curl -s -XPOST http://{{ .Values.forge.host }}:{{ .Values.forge.port }}/api/v1/repos/{{ .Values.forge.owner }}/{{ .Values.forge.repo }}/pulls/1/merge   # DENIED at the proxy
+version: 1
+
+# ---------------------------------------------------------------------------
+# Filesystem — NVIDIA's proxy-mode baseline, unmodified. See researcher.yaml.
+# ---------------------------------------------------------------------------
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /etc
+    - /var/log
+    - /proc
+    - /dev/urandom
+  read_write:
+    - /sandbox
+    - /workspace
+    - /tmp
+    - /dev/null
+
+landlock:
+  # hard_requirement matters more here than anywhere else in the set: this is
+  # the sandbox holding a write credential to a source repository, and
+  # "started with less isolation than requested, and did not say so" is
+  # precisely the failure mode to design against.
+  compatibility: hard_requirement
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+
+  # -------------------------------------------------------------------------
+  # The in-cluster git forge. The only write access in this profile.
+  # -------------------------------------------------------------------------
+  # DECISION: explicit allow rules instead of `access: read-write`, carried
+  # over from the GPU policy along with its reasoning.
+  #
+  # `access: read-write` is a preset expanding to GET, HEAD, OPTIONS, POST, PUT
+  # and PATCH across every path on the host. That is enough to open a pull
+  # request — and also enough to merge it, approve it, disable branch
+  # protection, rotate a webhook, or delete a release. The whole argument for
+  # autonomous remediation is that a human still approves the change.
+  #
+  # So the API surface is enumerated: the agent may read the repository, push a
+  # branch, and open a pull request. It may not merge, review, or touch
+  # protection settings.
+  git_forge:
+    name: git-forge-write
+    endpoints:
+      - host: {{ .Values.forge.host }}
+        port: {{ .Values.forge.port }}
+        protocol: rest
+        enforcement: enforce
+        allow_encoded_slash: true
+        # See triage.yaml. Note the caveat in the `git-forge` profile: this
+        # binds the token for the REST calls below, and git-over-HTTP push
+        # authenticates with HTTP basic, which is a different path.
+        credential_binding:
+          provider: git-forge
+        rules:
+          # --- read ---
+          - allow: { method: GET, path: "/api/v1/version" }
+          - allow: { method: GET, path: "/api/v1/repos/*/*" }
+          - allow: { method: GET, path: "/api/v1/repos/*/*/**" }
+          # --- git over smart HTTP: CLONE ONLY ---
+          # `git-upload-pack` is the clone. It works because its request body
+          # is ASCII pkt-lines ("want <sha>\n…"), which the L7 `rest`
+          # middleware can parse.
+          - allow: { method: GET,  path: "/*/*/info/refs" }
+          - allow: { method: POST, path: "/*/*/git-upload-pack" }
+          #
+          # `git-receive-pack` — the push — USED TO BE ALLOWED HERE, with a
+          # comment calling it "the entire difference in capability between
+          # proposing a change and making one". It never once worked, and the
+          # allow rule was not what was stopping it.
+          #
+          # Measured on 2026-09-17 from a live remediation sandbox. The ref
+          # advertisement (`GET /info/refs?service=git-receive-pack`) reaches
+          # Gitea and returns 200 — so the credential and the write permission
+          # are both fine. The POST that follows it carries a binary packfile,
+          # and the proxy answers before Gitea ever sees it:
+          #
+          #   HTTP/1.1 403 Forbidden
+          #   {"error":"middleware_failed","policy":"git_forge",
+          #    "detail":"Request could not be processed by configured middleware"}
+          #
+          # A body of `0000`, or any ASCII, goes through; any binary body of
+          # any size is refused. OpenShell's L7 protocols are rest, websocket,
+          # graphql and sql — there is no raw or passthrough mode, the endpoint
+          # schema has no body-inspection toggle, and it is declared
+          # `deny_unknown_fields`, so one cannot be added from a policy either.
+          # A git push cannot traverse an OpenShell REST endpoint. Not a
+          # misconfiguration; a property of the gateway.
+          #
+          # So the write happens over the forge's REST API instead, below —
+          # which is a better fit for this whole design anyway, because a path
+          # glob can scope it and a packfile cannot be scoped at all.
+          #
+          # --- write the change, as JSON, into a new branch ---
+          # `PUT …/contents/<path>` with `new_branch` creates the branch and
+          # commits in one call. Scoped to `workloads/` deliberately: the
+          # unscoped `contents/**` would also let this agent write
+          # `.gitea/workflows/*`, and a CI workflow is arbitrary code
+          # execution in the forge. The agent's job is to edit a manifest.
+          - allow: { method: PUT,  path: "/api/v1/repos/*/*/contents/workloads/**" }
+          # --- open the pull request and explain it ---
+          - allow: { method: POST, path: "/api/v1/repos/*/*/pulls" }
+          - allow: { method: POST, path: "/api/v1/repos/*/*/issues/*/comments" }
+        deny_rules:
+          # Merging its own pull request. Also refused by the forge — see the
+          # header — which is the backstop, not the demonstration.
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls/*/merge" }
+          - { method: PUT,    path: "/api/v1/repos/*/*/pulls/*/merge" }
+          # Reviewing or approving its own pull request.
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls/*/reviews" }
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls/*/requested_reviewers" }
+          # Labelling the plan issue, i.e. walking itself through gate #1.
+          - { method: POST,   path: "/api/v1/repos/*/*/issues/*/labels" }
+          - { method: PUT,    path: "/api/v1/repos/*/*/issues/*/labels" }
+          # Writing anywhere in the repository other than `workloads/`. The
+          # allow above is already scoped, and these make the intent explicit
+          # rather than implicit in a glob: a CI workflow file is arbitrary
+          # code execution, and this agent edits manifests.
+          - { method: PUT,    path: "/api/v1/repos/*/*/contents/.gitea/**" }
+          - { method: PUT,    path: "/api/v1/repos/*/*/contents/.github/**" }
+          - { method: POST,   path: "/api/v1/repos/*/*/contents/**" }
+          - { method: DELETE, path: "/api/v1/repos/*/*/contents/**" }
+          # Branch protection, hooks, releases, and anything that runs code.
+          - { method: POST,   path: "/api/v1/repos/*/*/branch_protections" }
+          - { method: PATCH,  path: "/api/v1/repos/*/*/branch_protections/**" }
+          - { method: DELETE, path: "/api/v1/repos/*/*/branch_protections/**" }
+          - { method: POST,   path: "/api/v1/repos/*/*/hooks" }
+          - { method: DELETE, path: "/api/v1/repos/*/*/releases/**" }
+          # Deleting the branch a human is about to review, or the repo.
+          - { method: DELETE, path: "/api/v1/repos/*/*" }
+          - { method: DELETE, path: "/api/v1/repos/*/*/branches/**" }
+          # Granting itself the permission it lacks.
+          - { method: PUT,    path: "/api/v1/repos/*/*/collaborators/**" }
+          - { method: POST,   path: "/api/v1/users/*/tokens" }
+    binaries:
+      - { path: /usr/bin/git }
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # The corpus — read-only, so the pull request carries a resolvable citation.
+  # -------------------------------------------------------------------------
+  # A remediation PR whose body says "bumps to a fixed version" is a diff with
+  # a sentence attached. One that says "bumps to the version named in
+  # SUSE-SU-…, corpus document <id>" is reviewable in about a minute, because
+  # the reviewer can open the document and check that it says what the agent
+  # claims. That is the difference this grant buys.
+  corpus:
+    name: vulnerability-corpus
+    endpoints:
+      - host: {{ .Values.corpus.host }}
+        port: {{ .Values.corpus.port }}
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET,  path: "/collections/{{ .Values.corpus.collection }}" }
+          - allow: { method: GET,  path: "/collections/{{ .Values.corpus.collection }}/points/*" }
+          - allow: { method: POST, path: "/collections/{{ .Values.corpus.collection }}/points/search" }
+          - allow: { method: POST, path: "/collections/{{ .Values.corpus.collection }}/points/scroll" }
+        deny_rules:
+          - { method: PUT,    path: "/collections/**" }
+          - { method: POST,   path: "/collections/{{ .Values.corpus.collection }}/points" }
+          - { method: DELETE, path: "/collections/**" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  embeddings:
+    name: corpus-embeddings
+    endpoints:
+      - host: {{ .Values.embeddings.host }}
+        port: {{ .Values.embeddings.port }}
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: POST, path: "/v1/embeddings" }
+        deny_rules:
+          - { method: POST, path: "/v1/chat/completions" }
+          - { method: POST, path: "/v1/completions" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # DELIBERATELY ABSENT
+  # -------------------------------------------------------------------------
+  # SUSE Security — the agent that writes the patch does not get to grade it.
+  #   This is the single most important absence in the file, and it is the
+  #   reason validation exists as a separate agent with a separate policy at
+  #   all. An agent holding both a write credential and the scan endpoint could
+  #   patch, rescan, and report — three steps with no independent party in any
+  #   of them.
+  #
+  # pypi.org / files.pythonhosted.org / registry.npmjs.org — the GPU policy
+  #   omits these for the same reason and states it well: a sandbox that can
+  #   fetch and execute an arbitrary package from a public index, and then
+  #   commit, is a supply-chain attack with extra steps. Everything the
+  #   toolchain needs is in the sandbox image, which is why that image is a
+  #   security artefact and not a convenience.
+  #
+  # The Kubernetes API — the agent proposes a change to a manifest in git. It
+  #   does not apply it. That is what keeps "autonomous remediation" from
+  #   meaning "unreviewed production change".
+  #
+  #   Since 0.3.0 a change IS eventually applied, by the deploy agent, under
+  #   deploy.yaml. That does not weaken this absence, it depends on it: the
+  #   apply happens in a different sandbox, with a different credential, only
+  #   after a human merges the pull request this agent opened. One agent that
+  #   could both write the manifest and patch the cluster would make the merge
+  #   decorative.
+  #
+  # registry.suse.com / updates.suse.com / scc.suse.com — present in the GPU
+  #   policy because that profile rebuilds a container image. This one does
+  #   not: the remediation is a version bump in a manifest, reviewed as a diff.
+  #   Granting a registry the agent has no use for would widen the boundary for
+  #   nothing.
+  #
+  # inference.local — built-in supervisor route; a rule would have no effect.
+
+# ---------------------------------------------------------------------------
+# Egress middleware — applied after policy admits a request and BEFORE
+# OpenShell injects provider credentials.
+# ---------------------------------------------------------------------------
+# Only this policy carries it, because only this sandbox writes text that
+# persists somewhere a human and a machine will both read later: a commit
+# message, a branch name, a pull-request body.
+network_middlewares:
+  redact-secrets:
+    name: Redact secrets in outbound requests
+    # openshell/ is reserved for built-ins, which need no gateway.toml
+    # registration — so this is reachable declaratively. Custom gRPC middleware
+    # is not; it must be registered on the gateway out of band.
+    middleware: openshell/regex
+    order: 10
+    config:
+      mode: redact
+    # Deny the request if the stage fails. A fail_closed selector is rejected
+    # at validation if it could match a `tls: skip` endpoint; none here do.
+    on_error: fail_closed
+    endpoints:
+      include:
+        - "{{ .Values.forge.host }}"
+    # Scope note, so nobody over-reads this control: it is regex-based, not
+    # parser-aware. It is defence in depth against an agent pasting a key into
+    # a commit message. It is NOT what keeps the forge token safe — boundary
+    # injection is, and the token is not in the sandbox to leak.

@@ -1,0 +1,101 @@
+# CPU retrieval for the zero-GPU SecOps profile.
+#
+# This replaces nvidia-blueprint-rag v2.6.0, which needs a GPU reranker, a GPU
+# embedder and a Milvus deployment. What survives the substitution is the only
+# part the demo actually needs: the researcher agents must be able to retrieve a
+# SUSE-SU advisory and cite it, and a human must be able to open the thing that
+# was cited and read it.
+#
+# THE CORPUS IS NOT THE SCAN DATA. Vulnerability findings come from the live
+# SUSE Security install on this cluster — see
+# examples/secops-agent-factory-cpu/integrations/suse-security/. What lives in
+# Qdrant is the advisory and runbook text the agents reason *about*. Shipping a
+# canned scan export would remove the one oracle in the design that is not the
+# model.
+
+imagePullSecrets: []
+global:
+  imagePullSecrets: []
+
+qdrant:
+  image:
+    repository: qdrant/qdrant
+    # Verified multi-arch: linux/amd64, linux/arm64. downstream-1 is arm64, so
+    # this is a hard gate, not a preference.
+    tag: v1.12.4
+    digest: ""
+    pullPolicy: IfNotPresent
+
+  # Qdrant's built-in dashboard at /dashboard is a deliberate part of the
+  # design, not a debugging leftover. It is human surface #2 in the plan: the
+  # reviewer opens the point the agent cited and reads the advisory text for
+  # themselves. That is what makes "with a citation" mean something. It ships in
+  # the image; there is nothing to build.
+  dashboard:
+    enabled: true
+
+  persistence:
+    enabled: true
+    # Empty means the cluster default. downstream-1 has exactly one
+    # StorageClass: `standard` (rancher.io/local-path, RWO,
+    # WaitForFirstConsumer).
+    storageClass: ""
+    size: 4Gi
+
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+  service:
+    type: ClusterIP
+    httpPort: 6333
+    grpcPort: 6334
+
+collection:
+  name: secops_vulnerability_corpus
+  # MUST match the embedding model's output dimensionality.
+  # nomic-embed-text-v1.5 emits 768. Changing the model in
+  # secops-cpu-inference without changing this produces an ingest Job that
+  # fails on every single upsert, with an error that names the vector size and
+  # not the cause.
+  vectorSize: 768
+  distance: Cosine
+
+ingest:
+  enabled: true
+  image:
+    # SUSE base, and the script is stdlib-only urllib — no pip at runtime, so
+    # nothing is resolved from the internet while the Job runs. Same argument
+    # as the sandbox image's Application Collection `index-url` decision, one
+    # step further: no index at all.
+    repository: registry.suse.com/bci/python
+    tag: "3.13"
+    pullPolicy: IfNotPresent
+
+  # Where to embed. Defaults match the Service names in secops-cpu-inference.
+  # Both charts are installed by the same Blueprint into the same namespace, so
+  # the short name resolves.
+  embeddingUrl: http://secops-cpu-embed:8000/v1/embeddings
+  embeddingModel: nomic-embed-text
+
+  # The embedding server pulls its GGUF on first start inside a 20-minute
+  # startup-probe budget, so this Job will find it unavailable for a while. It
+  # polls rather than failing, and the backoffLimit is the outer safety net.
+  waitTimeoutSeconds: 1500
+  backoffLimit: 3
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

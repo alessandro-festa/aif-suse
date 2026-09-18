@@ -1,0 +1,236 @@
+# OpenShell sandbox policy — DEPLOY AGENT (zero-GPU profile).
+#
+# The only policy in this profile that permits a write to a running cluster.
+# Read _README.md in this directory first.
+#
+# WHAT AUTHORISES THIS AGENT TO EXIST
+#
+# Everything upstream of it proposes; this one applies. That is only defensible
+# because a human merged the pull request first, and the merge is the entire
+# authorisation — there is no other signal, no override, and no path by which
+# this agent reaches the cluster before one exists. `cluster-apply` refuses an
+# unmerged pull request, and refuses one merged by {{ .Values.forge.botUser }},
+# because "the merge is the approval" has to be enforced by the thing that acts
+# on it rather than asserted in a briefing.
+#
+# THE CREDENTIAL IS DELIBERATELY OVER-PRIVILEGED
+#
+# Stated plainly, as the `suse-security` profile states the same choice: the
+# Rancher credential behind this policy is an admin API token. It could do
+# anything to any cluster Rancher manages. Everything that stops it is in this
+# file, which is the point — a scoped RoleTemplate would make the isolation
+# proof pass for a reason that has nothing to do with OpenShell, and a demo
+# that cannot fail is not evidence. Tightening the Rancher role is the right
+# production move and it is orthogonal to what this file demonstrates.
+#
+# THE RESIDUAL, ALSO STATED
+#
+# L7 matching here is by method and path. Within the one PATCH that is allowed,
+# this agent could in principle send a strategic-merge body that changes
+# something other than an image — replicas, an env var, a command. The helper
+# only ever composes an image swap, but the helper is not the fence. Closing
+# that gap needs admission control (SUSE Security) or a Rancher RoleTemplate
+# scoped to the field. It is a real gap and it is written down rather than
+# implied by the deny list below.
+#
+# Verify from a live deploy sandbox, after it has applied a merge:
+#
+#   rancher DELETE /k8s/clusters/{{ .Values.rancher.clusterId }}/apis/apps/v1/namespaces/ns-demo-web/deployments/storefront   # DENIED
+#   rancher PATCH  /k8s/clusters/{{ .Values.rancher.clusterId }}/apis/apps/v1/namespaces/kube-system/deployments/coredns      # DENIED
+#   rancher GET    /v3/tokens                                                                                                 # DENIED
+version: 1
+
+# ---------------------------------------------------------------------------
+# Filesystem — NVIDIA's proxy-mode baseline, unmodified. See researcher.yaml.
+# ---------------------------------------------------------------------------
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /etc
+    - /var/log
+    - /proc
+    - /dev/urandom
+  read_write:
+    - /sandbox
+    - /workspace
+    - /tmp
+    - /dev/null
+
+landlock:
+  # Same reasoning as remediation.yaml, one step stronger: that sandbox holds a
+  # write credential to a repository, this one holds a write credential to a
+  # cluster. "Started with less isolation than requested, and did not say so"
+  # is the failure mode to design against.
+  compatibility: hard_requirement
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+
+  # -------------------------------------------------------------------------
+  # Rancher — the one write path to a running workload in this whole profile.
+  # -------------------------------------------------------------------------
+  # The host is the TLS shim, not Rancher itself: Rancher's certificate is
+  # issued by its own `dynamiclistener` CA, which nothing in the sandbox image
+  # can verify, and OpenShell verifies every upstream certificate with no
+  # escape hatch. See templates/rancher-shim.yaml. The `Host:` header that
+  # makes the ingress route correctly is set by the shim, not by the helper:
+  # OpenShell matches this endpoint on the absolute-form request URI and
+  # discards a client-supplied Host, so a header set in the sandbox never
+  # arrives. That cost the first end-to-end deploy an nginx 404.
+  #
+  # THE ALLOW RULES ARE GENERATED, AND THAT IS THE DESIGN. One GET/PATCH pair
+  # per entry in `deploy.targets`. There is no wildcard namespace anywhere
+  # below and there must never be one: the repository this pipeline reads from
+  # also contains manifests for `kube-system/coredns` and for
+  # `ns-secops-cpu/qdrant` — cluster DNS, and the vector database this very
+  # pipeline queries. A survey can legitimately surface either. The agent is
+  # generic enough to try; the list below is what stops it, at the egress
+  # boundary, in the audit log.
+  #
+  # The single `*` is the workload NAME inside an explicitly named namespace
+  # and kind. Pinning a literal name is a one-line tightening if a deployment
+  # ever needs it.
+  rancher:
+    name: rancher-workload-image
+    endpoints:
+      - host: {{ include "secops-cpu-agents.rancherHost" . }}
+        port: {{ include "secops-cpu-agents.rancherPort" . }}
+        protocol: rest
+        enforcement: enforce
+        credential_binding:
+          provider: rancher
+        rules:
+        {{- range .Values.deploy.targets }}
+          # {{ .namespace }}/{{ .kind }} — read the live object, then swap one image.
+          - allow: { method: GET,   path: "/k8s/clusters/{{ $.Values.rancher.clusterId }}/apis/apps/v1/namespaces/{{ .namespace }}/{{ .kind }}/*" }
+          - allow: { method: PATCH, path: "/k8s/clusters/{{ $.Values.rancher.clusterId }}/apis/apps/v1/namespaces/{{ .namespace }}/{{ .kind }}/*" }
+        {{- end }}
+        deny_rules:
+          # Each of these is an assertion the isolation proof exercises, not a
+          # belt-and-braces duplicate of "it wasn't allowed". A deny is visible
+          # in the audit log as a refusal; an absent allow is just a 403.
+          #
+          # Cannot remove the workload it was asked to update.
+          - { method: DELETE, path: "/k8s/clusters/**" }
+          # Cannot create anything — no new Deployment, no Job, no Pod. An
+          # agent that can create a Pod can mount a Secret and has escaped.
+          - { method: POST,   path: "/k8s/clusters/**" }
+          # No whole-object replace. PUT would let an image swap carry an
+          # arbitrary rewrite of every other field with it; the strategic-merge
+          # PATCH above cannot remove what it does not mention.
+          - { method: PUT,    path: "/k8s/clusters/**" }
+          # Never the Rancher management cluster, whatever `deploy.targets`
+          # says. `local` is where Rancher itself runs.
+          - { method: PATCH,  path: "/k8s/clusters/local/**" }
+          - { method: GET,    path: "/k8s/clusters/local/**" }
+          # Cannot read Secrets on any cluster. The allow rules are scoped to
+          # apps/v1 and would not reach these anyway; this states it.
+          - { method: GET,    path: "/k8s/clusters/*/api/v1/namespaces/*/secrets/**" }
+          # An admin token must not be able to enumerate or mint tokens — the
+          # one action that would let this agent escape its own policy by
+          # acquiring a credential the proxy does not know it has.
+          - { method: GET,    path: "/v3/tokens/**" }
+          - { method: POST,   path: "/v3/**" }
+          - { method: PUT,    path: "/v3/**" }
+          - { method: DELETE, path: "/v3/**" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # The forge — read the merged pull request, write one comment on it.
+  # -------------------------------------------------------------------------
+  # A verbatim copy of validation.yaml's `git-forge-comment` block, and it
+  # should stay verbatim: both agents have exactly the same relationship to the
+  # repository, which is that they report on a pull request they did not write
+  # and cannot change. The read is how this agent learns it was authorised —
+  # `"merged": true`, who merged it, and the `Change:` line naming the images.
+  #
+  # `POST /pulls` is denied even though nothing here would call it, because the
+  # `git-forge` provider also lands `forge-remediate` and `forge-push` in
+  # /sandbox/bin. Helpers come per provider group, so the way to ensure they do
+  # nothing is to deny what they reach for.
+  git_forge:
+    name: git-forge-comment
+    endpoints:
+      - host: {{ .Values.forge.host }}
+        port: {{ .Values.forge.port }}
+        protocol: rest
+        enforcement: enforce
+        credential_binding:
+          provider: git-forge
+        allow_encoded_slash: true
+        rules:
+          - allow: { method: GET,  path: "/api/v1/repos/*/*/pulls/*" }
+          - allow: { method: GET,  path: "/api/v1/repos/*/*/pulls/*/files" }
+          - allow: { method: GET,  path: "/api/v1/repos/*/*/issues/*" }
+          - allow: { method: POST, path: "/api/v1/repos/*/*/issues/*/comments" }
+          # Read the merged manifest back out of `main`. This is how the target
+          # workload is discovered rather than configured: the pull request
+          # names the file, the file names the namespace, kind and workload.
+          - allow: { method: GET,  path: "/api/v1/repos/*/*/contents/**" }
+        deny_rules:
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls/*/merge" }
+          - { method: PUT,    path: "/api/v1/repos/*/*/pulls/*/merge" }
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls/*/reviews" }
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls" }
+          - { method: POST,   path: "/api/v1/repos/*/*/issues/*/labels" }
+          - { method: PUT,    path: "/api/v1/repos/*/*/issues/*/labels" }
+          # It reads the repository; it does not write to it. The remediation
+          # agent's one write path, closed here.
+          - { method: PUT,    path: "/api/v1/repos/*/*/contents/**" }
+          - { method: POST,   path: "/api/v1/repos/*/*/contents/**" }
+          - { method: DELETE, path: "/api/v1/repos/*/*/contents/**" }
+          - { method: POST,   path: "/*/*/git-receive-pack" }
+          - { method: POST,   path: "/*/*/git-upload-pack" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # DELIBERATELY ABSENT
+  # -------------------------------------------------------------------------
+  # SUSE Security — this agent applies a change; it does not grade the result.
+  #   The post-apply rescan is the validation agent's second run, with the
+  #   validation policy, for the same reason validation was split out of
+  #   remediation: whoever made the change does not get to certify it.
+  #
+  # The corpus and the embeddings model — there is nothing left to research.
+  #   Every decision this agent acts on was made upstream and approved by a
+  #   human. Reading the corpus here could only be used to second-guess the
+  #   merge, which is exactly the behaviour to design out.
+  #
+  # The Kubernetes API of the local cluster, directly — the agent goes through
+  #   Rancher, so the audit trail is Rancher's and the credential is one
+  #   Rancher token rather than a ServiceAccount mounted into a pod. The
+  #   sandbox has no ServiceAccount token to begin with.
+  #
+  # inference.local — built-in supervisor route; a rule would have no effect.
+
+# ---------------------------------------------------------------------------
+# Egress middleware — applied after policy admits a request and BEFORE
+# OpenShell injects provider credentials.
+# ---------------------------------------------------------------------------
+# Carried across from remediation.yaml with the Rancher shim added to the
+# include list. This sandbox writes a pull-request comment describing what it
+# did to a cluster, and composes a JSON patch body; both are places a pasted
+# credential could come to rest.
+network_middlewares:
+  redact-secrets:
+    name: Redact secrets in outbound requests
+    middleware: openshell/regex
+    order: 10
+    config:
+      mode: redact
+    on_error: fail_closed
+    endpoints:
+      include:
+        - "{{ .Values.forge.host }}"
+        - "{{ include "secops-cpu-agents.rancherHost" . }}"
+    # Same scope note as remediation.yaml: regex-based, not parser-aware.
+    # Defence in depth against an agent pasting a key into a comment. It is NOT
+    # what keeps the Rancher token safe — boundary injection is, and the token
+    # is not in the sandbox to leak.

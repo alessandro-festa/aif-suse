@@ -1,0 +1,27 @@
+annotations:
+  licenses: Apache-2.0
+  helm.sh/images: |
+    - image: qdrant/qdrant:v1.12.4
+      name: qdrant
+    - image: registry.suse.com/bci/python:3.13
+      name: corpus-ingest
+apiVersion: v2
+name: secops-cpu-knowledge
+version: 0.1.4
+description: |
+  CPU retrieval tier for the Sovereign Agentic SecOps zero-GPU profile: a Qdrant
+  vector store plus a one-shot Job that embeds a seed advisory corpus against the
+  CPU embedding server.
+type: application
+home: https://github.com/SUSE/aif
+sources:
+  - https://github.com/SUSE/aif
+appVersion: "0.1.0"
+maintainers:
+  - url: https://www.suse.com/
+    name: SUSE LLC
+keywords:
+  - ai
+  - rag
+  - qdrant
+  - secops

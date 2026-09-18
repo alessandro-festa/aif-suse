@@ -1,0 +1,4 @@
+# Python bytecode. A stale .pyc must never ship inside a chart whose files/
+# become a ConfigMap.
+__pycache__/
+*.pyc

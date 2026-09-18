@@ -1,0 +1,231 @@
+# OpenShell sandbox policy — VALIDATION (zero-GPU profile).
+#
+# The independent grader. Read _README.md in this directory first.
+#
+# WHY THIS AGENT EXISTS SEPARATELY FROM REMEDIATION
+#
+# SUSE Security sits at both ends of the loop: a finding opens the job, a
+# rescan closes it. The second half is the reason for this file. The validation
+# agent must be able to ask an authority that is not itself whether the patch
+# actually removed the CVE — and, just as importantly, must not have been the
+# one that wrote the patch. An agent that grades its own work has produced an
+# opinion, not evidence.
+#
+# So the capability split is exactly inverted from remediation.yaml:
+#
+#                     scan        push/PR      comment on a PR
+#   remediation        no           yes             yes
+#   validation        yes            no             yes
+#
+# Both can comment, because the scan diff has to land where the human reviewing
+# the pull request will see it. Neither can do the other's job.
+#
+# Verify from a live validation sandbox:
+#
+#   curl -s -XPOST .../v1/scan/repository                          # SUCCEEDS
+#   curl -s -XPOST .../v1/policy/rule                              # DENIED  <- the demo
+#   git -C repo push                                               # DENIED
+version: 1
+
+# ---------------------------------------------------------------------------
+# Filesystem — NVIDIA's proxy-mode baseline, unmodified. See researcher.yaml.
+# ---------------------------------------------------------------------------
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /etc
+    - /var/log
+    - /proc
+    - /dev/urandom
+  read_write:
+    - /sandbox
+    - /workspace
+    - /tmp
+    - /dev/null
+
+landlock:
+  compatibility: hard_requirement
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+
+  # -------------------------------------------------------------------------
+  # SUSE Security — scan, and read the result. Nothing else.
+  # -------------------------------------------------------------------------
+  # Hostname note: `-api` suffix, see triage.yaml for why, and for the latent
+  # bug this surfaced in the GPU profile's policy.
+  #
+  # DECISION: no `access:` preset, and the four dangerous families denied
+  # explicitly on top of an enumerated allow list. Straight from the GPU
+  # policy, and the argument is the sharpest one in this whole example:
+  # `read-write` on this host would let the agent rewrite the very rules it is
+  # being judged against. The most direct way to make a CVE disappear is to
+  # disable the scanner, and a policy that permits that turns the oracle into
+  # part of the attack surface.
+  #
+  # THE DENIAL BELOW IS THE DEMO. `POST /v1/policy/rule` must fail at the
+  # sandbox policy — before the request is ever made — and not at NeuVector's
+  # own authorization.
+  #
+  # Which is why the injected API key carries the **admin** role, against the
+  # instinct to scope it down. A reader key would also produce a refusal, from
+  # NeuVector, and a refusal from the wrong layer proves nothing: the claim
+  # being made is that the execution boundary holds even when the credential
+  # behind it does not. Run the proof with `enforcement: audit` on this
+  # endpoint once to see the request reach NeuVector and succeed, then put it
+  # back — that is the control, and it is the only way to know the enforced
+  # denial is real rather than incidental.
+  suse_security:
+    name: suse-security-scan
+    endpoints:
+      # NOT `.Values.suseSecurity.host` directly: on a cluster whose NeuVector
+      # has no verifiable certificate this resolves to the TLS shim, over plain
+      # HTTP, because the L7 proxy cannot verify the controller. The proxy
+      # still parses and enforces everything below, and still injects the key.
+      # See the tlsShim note in values.yaml.
+      - host: {{ include "secops-cpu-agents.nvHost" . }}
+        port: {{ include "secops-cpu-agents.nvPort" . }}
+        protocol: rest
+        enforcement: enforce
+        # See triage.yaml — the `suse-security` profile declares no endpoints,
+        # so this binding is what allows the key to be spent here at all.
+        credential_binding:
+          provider: suse-security
+        rules:
+          # exchange the injected API key for a session token (X-Auth-Token).
+          # The key is substituted by the proxy at the boundary; this sandbox
+          # never holds it, so an agent that dumps its environment gets nothing.
+          - allow: { method: POST, path: "/v1/auth" }
+          # scan the affected image, then read the result
+          - allow: { method: POST, path: "/v1/scan/repository" }
+          - allow: { method: GET,  path: "/v1/scan/repository/**" }
+          # CVE-database freshness. A remediation graded against a stale
+          # database is not evidence — the agent is instructed to refuse to
+          # report a pass if this call shows a cvedb older than the finding.
+          - allow: { method: GET,  path: "/v1/scan/scanner" }
+          # Read auto_scan; see survey.yaml for why. The PATCH stays denied.
+          - allow: { method: GET,  path: "/v1/scan/config" }
+          # Read the findings. `nv-survey` — the first two steps of this
+          # agent's briefing, and the tool the before/after comparison is
+          # entirely made of — is built on the two-call `/v1/vulasset` read
+          # described in survey.yaml: the POST registers a server-side query
+          # and returns a token, the GET pages the rows.
+          #
+          # These were missing until 2026-09-17, so the agent's own briefing
+          # asked it to run a command its policy forbade. It reported
+          # "POST /v1/vulasset not permitted by policy" and graded the
+          # remediation unverified — correct behaviour on the agent's part, and
+          # a policy bug on ours. Worth recording rather than quietly fixing:
+          # a deny that stops the *intended* path reads exactly like a deny
+          # that stopped an attack, and only the briefing tells them apart.
+          #
+          # The POST creates a query, not a finding, and every write to the
+          # scanner's configuration stays denied below.
+          - allow: { method: POST, path: "/v1/vulasset" }
+          - allow: { method: GET,  path: "/v1/vulasset" }
+        deny_rules:
+          # Explicit, now that the GET above is allowed; see survey.yaml.
+          # This agent is allowed to ASK for a scan, which makes the ability
+          # to switch scanning off the neighbouring capability rather than a
+          # distant one.
+          - { method: PATCH,  path: "/v1/scan/config" }
+          - { method: POST,   path: "/v1/policy/rule" }
+          - { method: PATCH,  path: "/v1/policy/rule" }
+          - { method: DELETE, path: "/v1/policy/rule/**" }
+          - { method: POST,   path: "/v1/admission/rules" }
+          - { method: PATCH,  path: "/v1/admission/rule/**" }
+          - { method: DELETE, path: "/v1/admission/rule/**" }
+          - { method: POST,   path: "/v1/group" }
+          - { method: PATCH,  path: "/v1/group/**" }
+          - { method: DELETE, path: "/v1/group/**" }
+          - { method: POST,   path: "/v1/file/config" }
+          - { method: GET,    path: "/v1/file/config" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # The container registry — read-only, so a scan can be requested by digest.
+  # -------------------------------------------------------------------------
+  # `POST /v1/scan/repository` takes a repository and tag. Resolving that tag to
+  # the digest that was actually scanned is what makes the before/after
+  # comparison honest: a rescan of a moving tag can report a difference that
+  # came from someone else's push rather than from this pull request.
+  #
+  # GET and HEAD on /v2/** only — the OCI distribution read surface. No push.
+  registry:
+    name: container-registry
+    endpoints:
+      - host: {{ .Values.registry.host }}
+        port: {{ .Values.registry.port }}
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET,  path: "/v2/**" }
+          - allow: { method: HEAD, path: "/v2/**" }
+        deny_rules:
+          - { method: POST,   path: "/v2/**" }
+          - { method: PUT,    path: "/v2/**" }
+          - { method: PATCH,  path: "/v2/**" }
+          - { method: DELETE, path: "/v2/**" }
+    binaries:
+      - { path: /usr/bin/curl }
+      - { path: /usr/bin/skopeo }
+
+  # -------------------------------------------------------------------------
+  # The forge — comment on the pull request, and nothing else.
+  # -------------------------------------------------------------------------
+  # The narrowest forge grant of the three that have one. No git protocol at
+  # all: `info/refs`, `git-upload-pack` and `git-receive-pack` are all absent,
+  # so this agent cannot even clone, let alone push. It reads the pull request
+  # through the API to see what it is grading, and writes one comment.
+  #
+  # It also cannot merge — the same denial as remediation.yaml. Worth stating
+  # plainly because it is the one that a reader might expect to be relaxed:
+  # "the scan passed, so let it merge" is exactly the shortcut that removes the
+  # human from the loop. A green scan is evidence for a reviewer, not a
+  # substitute for one.
+  git_forge:
+    name: git-forge-comment
+    endpoints:
+      - host: {{ .Values.forge.host }}
+        port: {{ .Values.forge.port }}
+        protocol: rest
+        enforcement: enforce
+        # See triage.yaml — `git-forge` declares no endpoints of its own.
+        credential_binding:
+          provider: git-forge
+        allow_encoded_slash: true
+        rules:
+          - allow: { method: GET,  path: "/api/v1/repos/*/*/pulls/*" }
+          - allow: { method: GET,  path: "/api/v1/repos/*/*/pulls/*/files" }
+          - allow: { method: GET,  path: "/api/v1/repos/*/*/issues/*" }
+          - allow: { method: POST, path: "/api/v1/repos/*/*/issues/*/comments" }
+        deny_rules:
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls/*/merge" }
+          - { method: PUT,    path: "/api/v1/repos/*/*/pulls/*/merge" }
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls/*/reviews" }
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls" }
+          - { method: POST,   path: "/api/v1/repos/*/*/issues/*/labels" }
+          - { method: PUT,    path: "/api/v1/repos/*/*/issues/*/labels" }
+          - { method: POST,   path: "/*/*/git-receive-pack" }
+          - { method: POST,   path: "/*/*/git-upload-pack" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # DELIBERATELY ABSENT
+  # -------------------------------------------------------------------------
+  # The corpus — the only agent of the five with no corpus grant, and the
+  #   omission is the point. Validation does not reason about what the advisory
+  #   said; it asks the scanner what is true now and reports the difference. An
+  #   agent that could re-read the advisory could talk itself into agreeing with
+  #   the remediation it is supposed to be independently checking.
+  #
+  # git over smart HTTP — see the forge block. No clone, no push.
+  #
+  # inference.local — built-in supervisor route; a rule would have no effect.

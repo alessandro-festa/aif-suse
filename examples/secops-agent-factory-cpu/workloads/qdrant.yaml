@@ -1,0 +1,49 @@
+# The vulnerability corpus store.
+#
+# Deliberately kept in this repository alongside coredns.yaml as the OTHER
+# outcome: SUSE Application Collection does not publish Qdrant, so the triage
+# agent's catalogue lookup comes back empty and the remediation cannot be an
+# image swap to a supported build. A demo in which every lookup succeeds is a
+# demo that has not been tested.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qdrant
+  namespace: ns-secops-cpu
+  labels:
+    app.kubernetes.io/name: qdrant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: qdrant
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: qdrant
+    spec:
+      containers:
+        - name: qdrant
+          image: qdrant/qdrant:v1.12.4
+          ports:
+            - { containerPort: 6333, name: http }
+            - { containerPort: 6334, name: grpc }
+          env:
+            - name: QDRANT__SERVICE__HTTP_PORT
+              value: "6333"
+          resources:
+            limits: { cpu: "1", memory: 1Gi }
+            requests: { cpu: 100m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+          volumeMounts:
+            - name: storage
+              mountPath: /qdrant/storage
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: qdrant-storage

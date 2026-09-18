@@ -1,0 +1,3 @@
+{{- if .Values.embedding.enabled }}
+{{ include "secops-cpu-inference.llama" (dict "ctx" $ "role" "embedding" "cfg" .Values.embedding) }}
+{{- end }}

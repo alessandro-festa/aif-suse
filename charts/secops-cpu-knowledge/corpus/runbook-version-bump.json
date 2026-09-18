@@ -1,0 +1,7 @@
+{
+  "id": "runbook-version-bump",
+  "doc_type": "runbook",
+  "title": "Runbook — remediating a base-image CVE with a pinned version bump",
+  "illustrative": true,
+  "text": "Scope: a container image flagged by a repository scan for a vulnerable OS or language package. Procedure. 1. Identify the exact package and installed version from the scan result, not from the image tag; a tag says nothing about what is inside. 2. Locate where the version is fixed: a base image reference, an explicit package pin in the Containerfile, or a lockfile. If the package arrives transitively from the base image, the correct change is to bump the base image, not to layer an override on top of it, because an override diverges from the vendor's build and will be silently undone by the next base rebuild. 3. Pin the replacement explicitly. Replacing one floating reference with another floating reference is not a remediation; it makes the next scan result non-reproducible. 4. Rebuild and rescan before opening the change. A patch that has not been rescanned is a claim, not a fix. 5. In the pull request, state the CVE, the advisory the fix is justified by, the before and after versions, and the scan result for both. A reviewer who cannot see the before and after cannot review the change, only approve it. Anti-pattern: suppressing the finding, adding a scanner exception, or bumping only the top-level declared dependency while a shaded or vendored copy of the vulnerable library remains inside the artifact."
+}

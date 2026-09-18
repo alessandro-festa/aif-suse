@@ -1,0 +1,3 @@
+{{- if .Values.generative.enabled }}
+{{ include "secops-cpu-inference.llama" (dict "ctx" $ "role" "generative" "cfg" .Values.generative) }}
+{{- end }}

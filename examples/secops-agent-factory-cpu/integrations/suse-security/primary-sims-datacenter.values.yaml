@@ -1,0 +1,117 @@
+# SUSE Security (NeuVector) — PRIMARY cluster, the federated master.
+#
+# Target: kind-sims-datacenter (Rancher management cluster, Fleet ID `local`).
+# Chart:  neuvector 110.0.1+up2.11.1 from rancher-charts (core 2.11.1).
+#
+# This is NOT installed by a Blueprint. SUSE Security is a platform
+# prerequisite — see ../../../secops-agent-factory/integrations/suse-security-prereq.md.
+# What this file contributes is the seam: the values that make a two-cluster
+# federation work on a laptop, where there is no LoadBalancer and no spare RAM.
+#
+# WHY A FEDERATION AND NOT ONE INSTALL
+#
+# The agents run on downstream-1, and the validation agent's whole job is to
+# ask an authority that is not itself whether a patch actually removed a CVE.
+# That call has to reach a controller REST API. Two ways to arrange it:
+#
+#   single install on the Rancher cluster -> the agents are on a different
+#     cluster, so the in-cluster DNS name in the sandbox policy does not
+#     resolve and the endpoint has to be rewritten to a cross-cluster IP:port
+#
+#   federation -> SUSE Security runs on BOTH clusters. The agents talk to
+#     their own local controller at the name the policy already contains, and
+#     the human reads one federated view on the primary.
+#
+# The second is both simpler and the real product topology: the security
+# platform runs where the workloads are, and the master aggregates.
+#
+# WHAT THIS CLUSTER IS
+#
+# The federated master. It holds the aggregated view, the federated policy,
+# and the UI the human actually looks at. The remote cluster joins it — see
+# managed-downstream-1.values.yaml.
+
+# DELIBERATELY NOT SET, and not merely forgotten.
+#
+# Leaving bootstrapPassword empty does NOT give you the documented `admin` /
+# `admin` default. A `neuvector-bootstrap-secret` is generated with a random
+# password and the admin account is initialised from it, so the first login
+# fails with "Wrong password" and five attempts lock the account for five
+# minutes. Read the generated value back with:
+#
+#   kubectl -n cattle-neuvector-system get secret neuvector-bootstrap-secret \
+#     -o jsonpath='{.data.bootstrapPassword}' | base64 -d
+#
+# To choose your own, pass --set bootstrapPassword=... AT FIRST INSTALL. It
+# cannot be set later: the Secret already exists and Helm refuses to adopt an
+# object it did not create, so the upgrade fails on ownership metadata.
+#
+# It stays unset here so that no password is committed to the repository, and
+# because the designed path — Rancher SSO for the human, an API key for the
+# agents — never uses the local admin account.
+# bootstrapPassword: ""
+
+global:
+  # DECISION: keep Rancher's own values exactly as Cluster Tools sets them.
+  # `cattle.url` is what the controller's Rancher SSO redirect is built from,
+  # and it must match the Rancher server-url setting or the SSO round trip
+  # lands on a host the browser cannot reach. Read from the live cluster:
+  #   kubectl get settings.management.cattle.io server-url -o jsonpath='{.value}'
+  # It is the sslip.io ingress, NOT a port-forward URL — a port-forward port
+  # changes between sessions and would silently break SSO on the next one.
+  cattle:
+    clusterId: local
+    clusterName: local
+    rkePathPrefix: ""
+    rkeWindowsPathPrefix: ""
+    systemDefaultRegistry: registry.rancher.com
+    systemProjectId: p-5ptgb
+    url: https://rancher-192-168-1-74.sslip.io:8443
+  systemDefaultRegistry: registry.rancher.com
+
+controller:
+  # DECISION: 1, not the chart default of 3.
+  #
+  # sims-datacenter is a SINGLE-NODE kind cluster. Three controller replicas
+  # on one node is not high availability — it is the same failure domain
+  # three times, at three times the memory. Measured before this change: the
+  # sims-datacenter container alone held 6.0 GB of a 22.8 GiB podman VM that
+  # also hosts downstream-1, with no swap. On a no-swap VM an overcommit is an
+  # OOM kill, not a slowdown.
+  replicas: 1
+
+  federation:
+    mastersvc:
+      # DECISION: NodePort, not the upstream default of LoadBalancer.
+      #
+      # kind has no LoadBalancer implementation, so a LoadBalancer Service
+      # sits at <pending> forever and the remote cluster can never join. Both
+      # kind clusters are containers on the same podman network, so a NodePort
+      # on this cluster's node IP is directly reachable from downstream-1:
+      #
+      #   sims-datacenter-control-plane   10.89.0.2
+      #   downstream-1-control-plane      10.89.0.3
+      #   downstream-1-worker             10.89.0.4
+      #   downstream-1-worker2            10.89.0.5
+      #
+      # The join URL for the remote cluster is therefore:
+      #   https://10.89.0.2:30443
+      #
+      # Note that 10.89.0.0/24 lives INSIDE the podman VM and is not routable
+      # from macOS. That is fine — only the remote cluster needs to reach it.
+      # The human reaches the UI through Rancher.
+      type: NodePort
+      # Service port is fixed at 11443 by the chart; this is the node port.
+      # Nothing else on either cluster uses a NodePort today (verified).
+      nodePort: 30443
+
+cve:
+  scanner:
+    # Same argument as controller.replicas. The scanner is the single largest
+    # consumer in the install and three of them buy nothing here.
+    #
+    # DO NOT also set cve.scanner.resources to squeeze further without
+    # measuring first: the scan call is the one the validation agent depends
+    # on, and a scanner that is OOM-killed mid-scan fails the gate in a way
+    # that looks like an agent bug.
+    replicas: 1

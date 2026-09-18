@@ -1,0 +1,218 @@
+# OpenShell sandbox policy — CLARIFIER (zero-GPU profile).
+#
+# The plan gate. Read _README.md in this directory first.
+#
+# THIS FILE IS WHERE THE HUMAN GATE STOPS BEING A CONVENTION.
+#
+# The clarifier writes the proposed remediation into the forge as an issue and
+# then the pipeline halts until a person applies a label. What makes that a
+# gate rather than a pause is this policy: the clarifier can open an issue and
+# read labels, and it **cannot push a branch**. Not "is instructed not to" — it
+# cannot, because `git-receive-pack` is not in its allow list.
+#
+# §7 of the architecture doc puts the requirement as "a policy that lets the
+# agent approve its own change quietly deletes the reviewer". The same logic
+# applies one step earlier: an agent that can propose a plan AND start
+# executing it has not really proposed anything.
+#
+# THE GIT SMART-HTTP SPLIT, WHICH IS THE WHOLE TRICK
+#
+# Gitea serves the REST API and the git wire protocol on the same host and
+# port, so the separation has to be made in the path rules:
+#
+#   GET  /{owner}/{repo}/info/refs?service=git-upload-pack    fetch  -> ALLOWED
+#   POST /{owner}/{repo}/git-upload-pack                      fetch  -> ALLOWED
+#   GET  /{owner}/{repo}/info/refs?service=git-receive-pack   push   -> DENIED
+#   POST /{owner}/{repo}/git-receive-pack                     push   -> DENIED
+#
+# The clarifier may therefore clone the repository to see what it is proposing
+# a change to, and may not write a single object into it.
+#
+# Caveat worth stating rather than hiding: the `info/refs` discovery request
+# distinguishes fetch from push by QUERY STRING, not by path, and OpenShell's
+# L7 matcher is path-based. So `GET /*/*/info/refs` is allowed for both
+# services and the push is stopped one request later, at `POST
+# /{owner}/{repo}/git-receive-pack`. That is sufficient — no objects move
+# during discovery — but it means the denial surfaces as a failed push rather
+# than a failed `git remote` probe. Do not read the successful discovery as the
+# policy having let a push through.
+#
+# Verify from a live clarifier sandbox:
+#
+#   git clone http://{{ .Values.forge.host }}:{{ .Values.forge.port }}/{{ .Values.forge.owner }}/{{ .Values.forge.repo }}.git   # SUCCEEDS
+#   git -C {{ .Values.forge.repo }} commit --allow-empty -m probe && git -C {{ .Values.forge.repo }} push                        # DENIED
+version: 1
+
+# ---------------------------------------------------------------------------
+# Filesystem — NVIDIA's proxy-mode baseline, unmodified. See researcher.yaml.
+# ---------------------------------------------------------------------------
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /etc
+    - /var/log
+    - /proc
+    - /dev/urandom
+  read_write:
+    - /sandbox
+    - /workspace
+    - /tmp
+    - /dev/null
+
+landlock:
+  compatibility: hard_requirement
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+
+  # -------------------------------------------------------------------------
+  # The in-cluster git forge — issues only.
+  # -------------------------------------------------------------------------
+  # DECISION: an in-cluster Gitea rather than api.github.com + github.com, the
+  # two hosts the GPU policy names.
+  #
+  # This is what makes the sovereignty claim literal instead of rhetorical. The
+  # forge token never leaves the cluster because there is nowhere outside the
+  # cluster for it to go: github.com appears in none of these five policies,
+  # and the one public host this file can name — cveawg.mitre.org, in the CVE
+  # block below when `cveLookup.enabled` is true — is a GET-only endpoint with
+  # no credential_binding, so there is no credential to spend against it.
+  #
+  # With `cveLookup.enabled: false` the profile names no public host at all
+  # and needs no internet, which is the difference between a claim about
+  # air-gapped operation and a demonstration of it. That switch is the honest
+  # place to make the claim from; leaving it on trades the demonstration for a
+  # citation the reviewer can resolve. See the CVE block further down.
+  #
+  # For a real deployment this group points back at the customer's own forge,
+  # and the path rules below are the part that transfers — the Gitea and GitHub
+  # REST surfaces differ in prefix (`/api/v1/repos/...` against `/repos/...`)
+  # but not in shape.
+  git_forge:
+    name: git-forge-issues
+    endpoints:
+      - host: {{ .Values.forge.host }}
+        port: {{ .Values.forge.port }}
+        protocol: rest
+        enforcement: enforce
+        # Where the forge token may be spent. The `git-forge` profile declares
+        # the credential and no endpoints — see triage.yaml for why that shape
+        # was chosen — so without this binding the agent reaches the forge
+        # unauthenticated.
+        credential_binding:
+          provider: git-forge
+        # Gitea embeds %2F in some namespaced paths; without this the L7 path
+        # canonicalizer rejects those requests and the failure looks like a bad
+        # URL rather than a policy decision.
+        allow_encoded_slash: true
+        rules:
+          # --- read the repository through the API ---
+          - allow: { method: GET, path: "/api/v1/version" }
+          - allow: { method: GET, path: "/api/v1/repos/*/*" }
+          - allow: { method: GET, path: "/api/v1/repos/*/*/**" }
+          # --- the one write: open the plan issue, and comment on it ---
+          - allow: { method: POST, path: "/api/v1/repos/*/*/issues" }
+          - allow: { method: POST, path: "/api/v1/repos/*/*/issues/*/comments" }
+          # --- git fetch over smart HTTP, so the agent can read the tree ---
+          - allow: { method: GET,  path: "/*/*/info/refs" }
+          - allow: { method: POST, path: "/*/*/git-upload-pack" }
+        deny_rules:
+          # The push half of smart HTTP. This single line is the gate.
+          - { method: POST,   path: "/*/*/git-receive-pack" }
+          # Everything that would let the clarifier act on its own proposal.
+          - { method: POST,   path: "/api/v1/repos/*/*/pulls" }
+          - { method: POST,   path: "/api/v1/repos/*/*/branches" }
+          - { method: POST,   path: "/api/v1/repos/*/*/git/refs" }
+          - { method: POST,   path: "/api/v1/repos/*/*/contents/**" }
+          - { method: PUT,    path: "/api/v1/repos/*/*/contents/**" }
+          - { method: DELETE, path: "/api/v1/repos/*/*/contents/**" }
+          # Approving its own plan. The label is the gate, so the agent that
+          # writes the issue must not be able to label it — otherwise the whole
+          # halt is theatre.
+          - { method: POST,   path: "/api/v1/repos/*/*/issues/*/labels" }
+          - { method: PUT,    path: "/api/v1/repos/*/*/issues/*/labels" }
+          - { method: PATCH,  path: "/api/v1/repos/*/*/issues/*" }
+          # Branch protection and hooks, as in the GPU policy.
+          - { method: POST,   path: "/api/v1/repos/*/*/branch_protections" }
+          - { method: PATCH,  path: "/api/v1/repos/*/*/branch_protections/**" }
+          - { method: DELETE, path: "/api/v1/repos/*/*/branch_protections/**" }
+          - { method: POST,   path: "/api/v1/repos/*/*/hooks" }
+    binaries:
+      - { path: /usr/bin/git }
+      - { path: /usr/bin/curl }
+
+  # -------------------------------------------------------------------------
+  # The corpus — read-only, so the plan issue can cite document ids the human
+  # can then open in Qdrant's dashboard.
+  # -------------------------------------------------------------------------
+  # This is the seam between the two human surfaces. The clarifier writes
+  # "corpus document <id>" into the issue; the reviewer reads the issue in
+  # Gitea and resolves the id in the Qdrant dashboard. Without this grant the
+  # citation would have to be copied out of the researchers' prose by the
+  # orchestrator, and a citation nobody can resolve is decoration.
+  corpus:
+    name: vulnerability-corpus
+    endpoints:
+      - host: {{ .Values.corpus.host }}
+        port: {{ .Values.corpus.port }}
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET,  path: "/collections/{{ .Values.corpus.collection }}" }
+          - allow: { method: GET,  path: "/collections/{{ .Values.corpus.collection }}/points/*" }
+          - allow: { method: POST, path: "/collections/{{ .Values.corpus.collection }}/points/scroll" }
+        deny_rules:
+          - { method: PUT,    path: "/collections/**" }
+          - { method: POST,   path: "/collections/{{ .Values.corpus.collection }}/points" }
+          - { method: DELETE, path: "/collections/**" }
+    binaries:
+      - { path: /usr/bin/curl }
+
+{{- if .Values.cveLookup.enabled }}
+
+  # -------------------------------------------------------------------------
+  # CVE Services — so the advisory id on the plan issue resolves.
+  # -------------------------------------------------------------------------
+  # Same grant and same reasoning as researcher.yaml; read the long note
+  # there, including the caveat that this is the only public host in the
+  # profile and that `cveLookup.enabled: false` removes it.
+  #
+  # It is here for the clarifier's own field. `plan-issue` takes an <advisory>
+  # argument, the human approves or rejects on what that issue says, and the
+  # briefing already warns against borrowing an advisory id from a different
+  # vulnerability to fill the field. This is what turns that warning into
+  # something checkable: the id either has a record or it does not.
+  cve:
+    name: cve-record-lookup
+    endpoints:
+      - host: {{ .Values.cveLookup.host }}
+        port: {{ .Values.cveLookup.port }}
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/api/cve/**" }
+        deny_rules:
+          - { method: POST,   path: "/api/**" }
+          - { method: PUT,    path: "/api/**" }
+          - { method: DELETE, path: "/api/**" }
+    binaries:
+      - { path: /usr/bin/curl }
+{{- end }}
+
+  # -------------------------------------------------------------------------
+  # DELIBERATELY ABSENT
+  # -------------------------------------------------------------------------
+  # SUSE Security — the clarifier restates what triage found; it does not go
+  #   back to the oracle for a second opinion. Keeping it out means the plan
+  #   issue and the triage summary cannot disagree about what the scanner said.
+  #
+  # The embedding server — the clarifier resolves citations by id, which needs
+  #   no vector. Compare researcher.yaml, where the grant IS needed because
+  #   Qdrant does not embed anything itself.
+  #
+  # inference.local — built-in supervisor route; a rule would have no effect.

@@ -1,0 +1,137 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: secops-cpu-qdrant
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-knowledge.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.qdrant.service.type }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    ai-factory.suse.com/component: qdrant
+  ports:
+    - name: http
+      port: {{ .Values.qdrant.service.httpPort }}
+      targetPort: http
+    - name: grpc
+      port: {{ .Values.qdrant.service.grpcPort }}
+      targetPort: grpc
+{{- if .Values.qdrant.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: secops-cpu-qdrant-storage
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-knowledge.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- with .Values.qdrant.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.qdrant.persistence.size }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: secops-cpu-qdrant
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-knowledge.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    # RWO volume: a rolling update deadlocks because the new pod cannot bind the
+    # PVC until the old one releases it.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      ai-factory.suse.com/component: qdrant
+  template:
+    metadata:
+      labels:
+        {{- include "secops-cpu-knowledge.labels" . | nindent 8 }}
+        ai-factory.suse.com/component: qdrant
+    spec:
+      {{- include "secops-cpu-knowledge.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: qdrant
+          image: {{ include "secops-cpu-knowledge.qdrantImage" . }}
+          imagePullPolicy: {{ .Values.qdrant.image.pullPolicy }}
+          env:
+            - name: QDRANT__SERVICE__HTTP_PORT
+              value: "{{ .Values.qdrant.service.httpPort }}"
+            - name: QDRANT__SERVICE__GRPC_PORT
+              value: "{{ .Values.qdrant.service.grpcPort }}"
+            # No API key is set, deliberately and narrowly: this Service is
+            # ClusterIP with no ingress, the sandbox policies name it
+            # explicitly, and the human reaches the dashboard only through
+            # `kubectl port-forward`. Adding an API key here would put a
+            # credential into the researcher sandboxes to protect data those
+            # same sandboxes are supposed to read.
+            - name: QDRANT__TELEMETRY_DISABLED
+              value: "true"
+            # MUST be inside the mounted PVC. Qdrant's working directory is
+            # /qdrant and the snapshots default is the relative ./snapshots,
+            # which resolves to /qdrant/snapshots — a directory baked into the
+            # image and owned by root. The pod runs as uid 1000, fsGroup chowns
+            # only the mounted volume, and Qdrant creates this directory
+            # eagerly at start-up whether or not a snapshot is ever taken. The
+            # result is a panic in TableOfContent::new with EACCES, observed on
+            # the first install of this chart.
+            #
+            # The storage path needs no such override: its default, ./storage,
+            # already lands on the volume mounted at /qdrant/storage.
+            - name: QDRANT__STORAGE__SNAPSHOTS_PATH
+              value: /qdrant/storage/snapshots
+          ports:
+            - containerPort: {{ .Values.qdrant.service.httpPort }}
+              name: http
+            - containerPort: {{ .Values.qdrant.service.grpcPort }}
+              name: grpc
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 20
+          volumeMounts:
+            - name: storage
+              mountPath: /qdrant/storage
+          resources:
+            {{- toYaml .Values.qdrant.resources | nindent 12 }}
+      volumes:
+        - name: storage
+        {{- if .Values.qdrant.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: secops-cpu-qdrant-storage
+        {{- else }}
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

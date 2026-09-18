@@ -1,0 +1,2681 @@
+# secops-cpu-agents — the agent plane of the zero-GPU profile.
+#
+# Sized for downstream-1: 3 arm64 kind nodes on a shared 22.8 GiB podman VM
+# with NO SWAP. On a no-swap host an overcommit is an OOM kill, not a slowdown,
+# so every limit here was chosen against a measured budget rather than rounded
+# up for comfort. See the Step 0 budget in the plan.
+
+# -----------------------------------------------------------------------------
+# The orchestrator
+# -----------------------------------------------------------------------------
+orchestrator:
+  image:
+    # Built from examples/secops-agent-factory-cpu/orchestrator-image/. It is a
+    # SUSE Python BCI plus ONE statically linked upstream binary (the `openshell`
+    # CLI, pinned by SHA-256) — no pip install runs at any stage.
+    #
+    # Published under this repository's own GitHub org, alongside the forked
+    # sandbox images in ghcr.io/alessandro-festa/openshell-community/. The BASE
+    # is registry.suse.com; only the built artefact lives on ghcr.
+    repository: ghcr.io/alessandro-festa/secops-cpu-orchestrator
+    tag: "0.1.0"
+    # Pinned, as charts/secops-cpu-inference does for llama.cpp. This is the
+    # linux/arm64 image built on 2026-09-16; inside it, `openshell --version`
+    # reports 0.0.116 (matching the runtime assertion in orchestrator.py) and
+    # `ldd` reports "not a dynamic executable", which is the musl-static claim
+    # the Containerfile makes, checked rather than trusted.
+    digest: "sha256:df1c3bf44ff685155d034a131757e500e6be9ae96c3e20257a7f2f2ecdb099d2"
+    pullPolicy: IfNotPresent
+
+  # One replica, and it must stay one. The orchestrator is a sequencer holding
+  # a single run's state in memory; a second replica would drive the same
+  # pipeline twice, open two plan issues, and leave a human wondering which one
+  # to approve. If this ever needs HA, the state has to move out of the process
+  # first.
+  replicas: 1
+
+  resources:
+    # Small on purpose. It spawns subprocesses and polls an HTTP API; the actual
+    # work happens in the sandboxes and in llama.cpp.
+    limits:
+      cpu: "500m"
+      memory: 256Mi
+    requests:
+      cpu: "100m"
+      memory: 128Mi
+
+  # The read-only status page. No button on it — the two decisions a human
+  # makes are made in the forge, where they are attributable.
+  service:
+    type: ClusterIP
+    port: 8080
+
+  # The gateway registration the orchestrator writes at start-up.
+  gateway:
+    name: aif-cluster
+    # `openshell.openshell.svc.cluster.local` is a DEFAULT SAN on the server
+    # certificate (crates/openshell-bootstrap/src/pki.rs, DEFAULT_SERVER_SANS),
+    # so this verifies with no extra pkiInitJob.serverDnsNames and without
+    # --gateway-insecure. It only holds if the gateway release is named
+    # `openshell` in namespace `openshell` — which OpenShell gotcha #1 already
+    # requires for an unrelated reason (HelmOp name collisions). Two arguments,
+    # one constraint.
+    endpoint: https://openshell.openshell.svc.cluster.local:8080
+    # Secret holding tls.crt / tls.key / ca.crt, produced by the gateway
+    # chart's cert-gen job. Must be copied into the agents' namespace.
+    clientTlsSecret: openshell-client-tls
+    # Providers and inference routes are workspace-scoped (gotcha #11): omit
+    # the workspace and the sandboxes see no model at all.
+    workspace: ns-secops-sandboxes
+
+  # Asserted against `openshell --version` at start-up. The orchestrator parses
+  # flags of a binary it does not build, so a silently newer image should fail
+  # immediately and loudly rather than three phases in.
+  expectedCliVersion: "0.0.116"
+
+# -----------------------------------------------------------------------------
+# The sandboxes
+# -----------------------------------------------------------------------------
+sandbox:
+  # The openclaw-suse sandbox image. MUST be a linux/arm64 manifest — an
+  # amd64-only one gives a pod that schedules and then fails with an
+  # exec-format error, which reads like a broken command rather than a broken
+  # image.
+  #
+  # This digest IS arm64, and was built for it: natively on an Apple Silicon
+  # host from OpenShell-Community/sandboxes/openclaw-suse, on top of the
+  # sandboxes/suse base already published as arm64. NOT built by
+  # .github/workflows/openclaw-suse.yml, which sets no `platforms:` and no
+  # QEMU and so produces amd64 only. Verified inside the image: `uname -m` is
+  # aarch64 and all five CLIs report a version, opencode 1.2.18 included.
+  #
+  # Pinned by digest rather than `:latest` — both tags point here today, but
+  # this is the reference the orchestrator hands to
+  # `openshell sandbox create --from`, and a sandbox whose image can change
+  # underneath it is a policy decision nothing records.
+  image: ghcr.io/alessandro-festa/openshell-community/sandboxes/openclaw-suse@sha256:2d817c37977977c94fc5d02d1066ced1451996e537dfda0c375e3b4ecb5e552b
+
+  # Which CLI runs inside. `opencode`, not `claude`: the OpenShell router
+  # speaks `openai_chat_completions` only (crates/openshell-router/src/
+  # config.rs) and has no Anthropic /v1/messages surface, so the Anthropic CLI
+  # cannot reach the model at all. Same image either way — this is the CLI in
+  # it that fits the endpoint.
+  #
+  # The prompt is appended as the final argument by the orchestrator, and
+  # `--agent secops` is appended by the orchestrator too — see `opencode` below
+  # for why running opencode's stock agent is not an option here.
+  command: ["opencode", "run"]
+
+  # ---------------------------------------------------------------------------
+  # Credential helpers, written into each sandbox next to opencode.json
+  # ---------------------------------------------------------------------------
+  # WHY THESE EXIST. `credential_binding` is substitution, not injection: the
+  # sandbox environment holds an opaque handle and the agent has to put that
+  # handle in a header itself, whereupon the L7 proxy swaps in the real secret
+  # at the egress boundary. That means the agent's request must expand
+  # `${GITEA_TOKEN}` — and a 4B model writing a long curl line gets the quoting
+  # wrong reliably. Two live runs produced the same failure: the model reported
+  # `token is required`, concluded the token was missing, and wrote an essay
+  # about the misconfiguration instead of opening the issue.
+  #
+  # The handle is not a secret, so this is not about hiding it. It is about not
+  # asking a small model to get `-H "Authorization: Bearer ${GITEA_TOKEN}"`
+  # exactly right, in single versus double quotes, inside an argument that also
+  # contains JSON. The shell quoting lives here, where it is written once and
+  # reviewed, and the briefing shrinks to `sh /sandbox/bin/forge POST <path>
+  # <json>` — which also costs a fraction of the 8192-token context.
+  #
+  # Keyed by PROVIDER NAME, plus one reserved key. An agent gets exactly the
+  # helpers for the providers its entry in `agents` attaches, so the researcher
+  # — which attaches none — gets no credentialed helper at all. That is the same
+  # boundary its policy draws, expressed a second time in the filesystem.
+  #
+  # `common` is the reserved key and it is NOT a provider: every agent gets it.
+  # It holds the two helpers that spend no credential — the corpus reader (see
+  # charts/secops-cpu-knowledge for why Qdrant has no API key here) and the CVE
+  # record lookup (public, unauthenticated API). Keeping it separate preserves
+  # the invariant worth having — a helper that spends a CREDENTIAL exists only
+  # where the provider that owns it is attached.
+  #
+  # A NOTE ON WHY `cve` IS HERE AND NOT IN A GROUP OF ITS OWN, because the
+  # obvious-looking alternative does not work. Every name in an agent's
+  # `providers:` list becomes `openshell sandbox create --provider <name>`, so
+  # a group invented purely to scope a helper would need a registered provider
+  # behind it, and sandbox creation fails outright without one. Scoping is the
+  # POLICY's job regardless: only researcher.yaml and clarifier.yaml name
+  # cveawg.mitre.org, so the other five agents hold a file whose every call is
+  # refused at the boundary. That costs them nothing — a file in /sandbox/bin
+  # is not context, and no briefing but those two mentions it.
+  #
+  # Rendered through `tpl`, like the briefings and the policies.
+  helpers:
+    common:
+      corpus: |
+        #!/bin/sh
+        # usage: corpus list            — every document id and title
+        #        corpus get <id>        — one document in full
+        #
+        # Qdrant's scroll endpoint is a POST that reads, and a GET to the same
+        # path is not a degraded read — it is routed to the point-lookup handler
+        # and answers `expected a valid point ID, but "scroll" was provided`.
+        # A live run lost a researcher turn to exactly that, so the method is
+        # fixed here rather than left to the model.
+        base="http://{{ .Values.corpus.host }}:{{ .Values.corpus.port }}/collections/{{ .Values.corpus.collection }}/points/scroll"
+        case "$1" in
+          list|"")
+            body='{"limit":25,"with_vector":false,"with_payload":["id","title","cve","affected_package","fixed_version","severity"]}'
+            ;;
+          get)
+            [ -n "$2" ] || { echo "usage: corpus get <id>" >&2; exit 2; }
+            body='{"limit":1,"with_vector":false,"with_payload":true,"filter":{"must":[{"key":"id","match":{"value":"'"$2"'"}}]}}'
+            ;;
+          *) echo "usage: corpus list | corpus get <id>" >&2; exit 2 ;;
+        esac
+        out=$(curl -s -X POST -H 'content-type: application/json' -d "$body" "$base") || exit 1
+        # Qdrant answers with TWO ids per record: the point's own UUID at the
+        # top level, and the document id inside "payload". A plan issue from a
+        # live run cited `b3625616-6ad9-5da3-a42e-8de1245c415e` — the UUID —
+        # which a human cannot look up, breaking the one property this whole
+        # profile exists to demonstrate: that you can retrieve what the agent
+        # cited and judge it yourself.
+        #
+        # The briefing already warned against this in three sentences and the
+        # model did it anyway. That is the lesson of `forge-find`, `plan-issue`,
+        # `forge-swap` and `survey-issue` restated once more: at 4B you do not
+        # resolve an ambiguity by explaining it, you remove it. So `list` prints
+        # the document id and nothing that could be mistaken for one — the UUID
+        # is not merely deprecated here, it is never shown.
+        #
+        # perl, not awk: see forge-swap for what this image actually ships.
+        #
+        # `get` is the call whose output the researcher reads in full, and it
+        # leads with the point UUID — so it is the likelier source of a bad
+        # citation than `list`, not a special case to wave through. The UUID is
+        # deleted here too. A document id can never match this pattern, so
+        # nothing legitimate is at risk; both comma positions are handled so
+        # what is left is still valid JSON.
+        if [ "$1" = "get" ]; then
+          printf '%s\n' "$out" | perl -pe '
+            s/"id":"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}",//g;
+            s/,"id":"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}"//g;'
+          exit 0
+        fi
+        printf '%s' "$out" | perl -ne '
+          my $n = 0;
+          while (/"payload":\{(.*?)\}/g) {
+            my $r = $1;
+            my %f;
+            while ($r =~ /"([a-z_]+)":"((?:[^"\\]|\\.)*)"/g) {
+              my ($k, $v) = ($1, $2);
+              $v =~ s/\\u[0-9a-fA-F]{4}/-/g; $v =~ s/\\(.)/$1/g;
+              $f{$k} = $v;
+            }
+            next unless defined $f{id};
+            $n++;
+            print "$f{id}\n    $f{title}\n" if defined $f{title};
+            my @e;
+            push @e, "package $f{affected_package}" if $f{affected_package};
+            push @e, "fixed in $f{fixed_version}"   if $f{fixed_version};
+            push @e, $f{severity}                   if $f{severity};
+            print "    ", join(", ", @e), "\n" if @e;
+          }
+          print "\n$n documents. The id is the first line of an entry; read one with: corpus get <id>\n";
+        '
+      cve: |
+        #!/usr/bin/env python3
+        # usage: cve CVE-2024-6387    — the published record for one CVE id
+        #
+        # WHY IT EXISTS. The researcher's only source is a corpus of a handful
+        # of seeded advisories, so a CVE the corpus has never heard of has
+        # nothing behind it but a 4B model — and on a live run the clarifier
+        # filled that gap by inventing document ids (`Cites: doc-123,doc-456`,
+        # resolving to nothing). In a demo whose whole premise is that you can
+        # check what the agent claims, a fabricated citation is the worst
+        # defect available. This makes the honest path the one that produces
+        # output: the last line printed is the human URL for the same record,
+        # which a reviewer opens and reads.
+        #
+        # NOT A REPLACEMENT FOR THE SCANNER. SUSE Security carries the
+        # per-distro `fixed_version` that decides what the remediation
+        # actually is, and cve.org does not. This adds prose and provenance;
+        # the numbers stay the scanner's.
+        #
+        # SAME STATUS CONTRACT AS `nv-survey`, for the same reason: every run
+        # ends in exactly one `  status:` line, so "the model got nothing
+        # back" and "there is no such CVE" are different answers rather than
+        # one silence. See the long note on nv-survey.
+        import json, re, subprocess, sys
+
+        BASE = "https://{{ .Values.cveLookup.host }}:{{ .Values.cveLookup.port }}"
+
+        def fail(kind, detail):
+            # On stdout, and deliberately: an error only on stderr is one the
+            # agent reading this cannot see.
+            print("  status: ERROR %s - %s" % (kind, " ".join(str(detail).split())[:300]))
+            sys.stderr.write("cve:  status: ERROR %s\n" % kind)
+            sys.exit(3)
+
+        arg = sys.argv[1] if len(sys.argv) > 1 else ""
+        cid = arg.strip().upper()
+        if not re.match(r"^CVE-[0-9]{4}-[0-9]{4,}$", cid):
+            sys.stderr.write("usage: cve CVE-YYYY-NNNNN   (got: %r)\n" % arg)
+            sys.exit(2)
+
+        try:
+            p = subprocess.run(["curl", "-s", "-w", "\n%{http_code}",
+                                BASE + "/api/cve/" + cid],
+                               capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            fail("UNREACHABLE", "%s did not answer within 60s" % BASE)
+        text, _, code = p.stdout.rpartition("\n")
+        code = code.strip()
+        # The refusal an operator who set `cveLookup.enabled: false` will see.
+        # It is a policy decision and has to read as one — an agent told only
+        # "connection failed" will retry it, or worse, answer from memory.
+        if "policy_denied" in text or "not permitted by policy" in text:
+            fail("DISABLED",
+                 "CVE lookup is switched off in this installation "
+                 "(cveLookup.enabled=false); the sandbox policy refuses "
+                 + BASE + ". Work from the corpus and say that is what you did.")
+        if p.returncode != 0 or code in ("", "000"):
+            fail("UNREACHABLE", "curl exit %d, HTTP %r, contacting %s"
+                                % (p.returncode, code, BASE))
+        if code == "404":
+            # A real answer, not a fault: the service has no record under
+            # this id. Usually a typo or an id the model made up, which is
+            # exactly the thing worth catching here.
+            print(cid)
+            print("  status: NO-RECORD")
+            print("  CVE Services has no published record under this id. Do not")
+            print("  cite it. If you copied it from a scanner finding, quote the")
+            print("  finding instead.")
+            sys.exit(0)
+        if not code.startswith("2"):
+            fail("HTTP-" + code, "GET /api/cve/%s: %s" % (cid, text[:200]))
+        try:
+            rec = json.loads(text)
+        except ValueError:
+            fail("NOT-JSON", "GET /api/cve/%s answered HTTP %s with a non-JSON "
+                             "body: %s" % (cid, code, text[:200]))
+
+        meta = rec.get("cveMetadata") or {}
+        cna = (rec.get("containers") or {}).get("cna") or {}
+
+        # The description VERBATIM. Not summarised, not truncated to a
+        # sentence: the point of fetching it is that the agent quotes text it
+        # did not write, and a paraphrase here would be the pipeline putting
+        # words in the record's mouth. English first; the API returns a list
+        # of translations and the order is not guaranteed.
+        descs = cna.get("descriptions") or []
+        body = ""
+        for d in descs:
+            if (d.get("lang") or "").lower().startswith("en"):
+                body = d.get("value") or ""
+                break
+        if not body and descs:
+            body = descs[0].get("value") or ""
+
+        vector, score = "", ""
+        for m in (cna.get("metrics") or []):
+            for k, v in m.items():
+                if k.startswith("cvssV") and isinstance(v, dict):
+                    vector = v.get("vectorString") or vector
+                    if v.get("baseScore") is not None:
+                        score = "%s %s" % (v.get("baseScore"), v.get("baseSeverity") or "")
+        # Advisory only, and thin on purpose: the remediation is decided by
+        # SUSE Security's per-distro `fixed_version`, which this record does
+        # not carry. `*`, `0` and `unspecified` are how a CNA writes "not
+        # applicable" here — Red Hat's CVE-2024-6387 entry is literally `*` —
+        # and printing those as a version number would be the helper inventing
+        # a fix, which is the exact failure it exists to prevent.
+        fixes = sorted({
+            ver.get("lessThan") or ver.get("version") or ""
+            for a in (cna.get("affected") or [])
+            for ver in (a.get("versions") or [])
+            if ver.get("status") == "unaffected"
+        } - {"", "*", "0", "unspecified"})
+
+        print(cid)
+        print("  status: PUBLISHED")
+        print("  assigned by: " + (meta.get("assignerShortName") or "unknown"))
+        print("  published: " + (meta.get("datePublished") or "unknown")[:10])
+        if score or vector:
+            print("  cvss: " + " ".join(x for x in (score, vector) if x))
+        if fixes:
+            print("  reported unaffected: " + ", ".join(fixes[:4]))
+        print("  description:")
+        for line in (body or "(the record carries no description)").splitlines():
+            print("    " + line)
+        # LAST, because it is the line that makes the citation checkable and
+        # the agents are briefed to copy the last thing they are given.
+        print("  cite this URL: https://www.cve.org/CVERecord?id=" + cid)
+    git-forge:
+      forge: |
+        #!/bin/sh
+        # usage: forge <METHOD> <path> [json-body]
+        #   forge GET  /api/v1/repos/o/r
+        #   forge POST /api/v1/repos/o/r/issues '{"title":"x","body":"y"}'
+        #
+        # ${GITEA_TOKEN} is a handle, not a secret. The network boundary
+        # replaces it with the real token on the way out, and only for this
+        # host — sent anywhere else it is rejected as a credential mismatch.
+        method="$1"; path="$2"; body="$3"
+        [ -n "$method" ] && [ -n "$path" ] || { echo "usage: forge <METHOD> <path> [json]" >&2; exit 2; }
+        set -- -s -X "$method" -H "Authorization: Bearer ${GITEA_TOKEN}"
+        [ -n "$body" ] && set -- "$@" -H "content-type: application/json" -d "$body"
+        exec curl "$@" "http://{{ .Values.forge.host }}:{{ .Values.forge.port }}${path}"
+      survey-issue: |
+        #!/bin/sh
+        # usage: survey-issue            — NO ARGUMENTS. Runs the scanner
+        #        survey-issue "<row>" …  — explicit rows, for a manual retry.
+        #
+        # Builds the numbered menu and opens the survey issue.
+        #
+        # Same reason as plan-issue, and then a worse failure. First: told to
+        # compose `forge POST … '{"title":…,"body":"1. …\n2. …"}'`, the model
+        # wrote a multi-line argument inside single quotes and bash answered
+        # `unexpected EOF while looking for matching '`. It recovered on the
+        # retry, so the issue got posted — but the turn was spent.
+        #
+        # So this helper took the rows as quoted arguments instead. On
+        # 2026-09-17 that failed harder. Handed six rows of ~70 characters to
+        # retype, the model did not run the command at all — it printed the
+        # command line, quotes and backslashes and all, AS ITS ANSWER. No issue
+        # was created, the orchestrator's fallback published that command text
+        # as the issue body, and because a one-line string holds no numbered
+        # menu the selection gate then parsed zero options and rejected every
+        # number the human typed. One mistake, and the run looked broken in two
+        # unrelated-seeming places.
+        #
+        # The rows were never the agent's to author: they are nv-survey's own
+        # table, in nv-survey's own order, which the briefing already forbade it
+        # to renumber or reorder. Asking it to retype them added a transcription
+        # step and no judgement. So with no arguments this helper runs the
+        # scanner itself and the agent's command becomes a bare word with
+        # nothing to quote, nothing to escape and nothing to copy.
+        #
+        # That is the fifth instance of the one lesson — forge-find, plan-issue,
+        # forge-swap, corpus, and now this: at 4B you do not fix a composition
+        # error by describing the format more precisely, you delete the
+        # composition.
+        #
+        # AND THEN IT FAILED AGAIN, with nothing left to compose. Handed a bare
+        # `/sandbox/bin/survey-issue` and told in capitals to run it, the model
+        # answered with the four words `/survey-issue` and stopped. Not a
+        # quoting fault and not a policy denial: it simply did not call the
+        # tool.
+        #
+        # What distinguishes this step from every step that works is that it was
+        # the agent's SECOND command. The first command in a briefing has
+        # executed on every run we have logged — nv-survey never once failed to
+        # run — and it is the second that comes back as prose describing what
+        # the agent was about to do. A 4B model treats one tool call as having
+        # discharged the turn.
+        #
+        # So the briefing now asks for one command and this helper is it: the
+        # scanner read and the issue post behind a single verb, with the menu
+        # echoed back so the agent still has a table to report. The rule that
+        # falls out, and it is the more useful half of the lesson above: do not
+        # give this model a second errand. Where two calls are unavoidable, put
+        # the one that must not be skipped first.
+        if [ "$#" -eq 0 ]; then
+          rows=/tmp/.survey-rows
+          # nv-survey prints an entry as two lines — `[N] <image>` then an
+          # indented `critical=.. high=.. medium=.. low=..   namespaces: ..`.
+          # Pair them, and keep the counts but not the namespaces, which is the
+          # row text the menu wants.
+          /sandbox/bin/nv-survey | perl -ne '
+            if (/^\[\d+\]\s+(\S+)/) { $img = $1; next }
+            if ($img && /^\s+(critical=\d+\s+high=\d+\s+medium=\d+\s+low=\d+)/) {
+              print "$img - $1\n"; $img = "";
+            }
+          ' > "$rows" || { rm -f "$rows"; exit 1; }
+          [ -s "$rows" ] || {
+            rm -f "$rows"
+            echo "nv-survey ranked no images, so there is no menu to post." >&2
+            echo "Report that verbatim: an empty scanner means auto-scan is" >&2
+            echo "off, not that the cluster is clean." >&2
+            exit 1; }
+          # Split on newlines only, so a row keeps its spaces and becomes one
+          # argument; -f because an image reference must never be globbed.
+          # IFS is built with printf rather than written as a quoted literal
+          # newline: this script is a YAML block scalar, and a bare newline
+          # inside quotes here ends the block and breaks the chart.
+          set -f; OLDIFS=$IFS; IFS=$(printf '\nx'); IFS=${IFS%x}
+          set -- $(cat "$rows")
+          IFS=$OLDIFS; set +f
+          rm -f "$rows"
+        fi
+        esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+        n=0; body=""
+        for row in "$@"; do
+          n=$((n + 1))
+          body="${body}${n}. $(esc "$row")\\n"
+        done
+        body="${body}\\nReply with the number of the image to analyse."
+        json="{\"title\":\"Vulnerability survey - choose a target\",\"body\":\"${body}\"}"
+        out=$(/sandbox/bin/forge POST \
+          "/api/v1/repos/{{ .Values.forge.owner }}/{{ .Values.forge.repo }}/issues" "$json") || exit 1
+        num=$(printf '%s' "$out" | sed -n 's/.*"number"[ ]*:[ ]*\([0-9]\{1,\}\).*/\1/p' | head -1)
+        if [ -z "$num" ]; then
+          echo "the forge rejected the request. Quote this reply and try once more:" >&2
+          printf '%s\n' "$out" >&2
+          exit 1
+        fi
+        # Echo the menu that was posted. The agent's stdout is what the status
+        # page shows and what `_survey_options` falls back to, so the helper
+        # hands back the table rather than leaving the agent to reproduce a list
+        # it no longer has a reason to have read.
+        i=0
+        for row in "$@"; do i=$((i + 1)); echo "${i}. ${row}"; done
+        echo "SURVEY ISSUE #${num} CREATED with ${n} rows. The menu is posted and your task is complete."
+      plan-issue: |
+        #!/bin/sh
+        # usage: plan-issue <old-image> <new-image> <advisory> <corpus-ids> <rationale>
+        # Opens the remediation plan issue. Five plain arguments; this builds the
+        # JSON and makes the request.
+        #
+        # BOTH IMAGES IN FULL, registry host included. This used to take a free
+        # text <change> field and the clarifier filled it with "1.31.6 ->
+        # 1.31.6-5.16" — two bare tags. That reads fine to a human who already
+        # knows the answer, and it is unusable to everything downstream: the
+        # remediation agent had to reconstruct a registry from a tag, and on
+        # 2026-09-17 it invented `docker.io/suse-app-collection/nginx` for a
+        # catalogue that is actually at `dp.apps.rancher.io/containers`. The
+        # image was never checked against anything, because by then there was
+        # nothing left to check it against.
+        #
+        # It is also what makes the gate mean something. The human approves
+        # this issue, `forge-remediate` reads the change back out of it, and
+        # the reference that gets written into the manifest is the one on the
+        # page they approved — not the model's recollection of it a step later.
+        # A plan that cannot be executed verbatim is a suggestion.
+        #
+        # WHY THIS EXISTS, and it is two failures rather than one.
+        #
+        # The briefing used to hand the agent a `forge POST … '{"title":…}'`
+        # line to fill in. Every live run lost a turn to the same shell error —
+        # `unexpected EOF while looking for matching '` — because a 4B model
+        # writes a multi-line JSON argument inside single quotes. It recovered,
+        # but it paid a turn each time, on a model that has few to spare.
+        #
+        # Worse, that briefing ended "the reply contains number; report that
+        # number; that is how you finish", which makes the agent's successful
+        # output a BARE INTEGER. On 2026-09-17 the model skipped to the last
+        # instruction, emitted `4258`, and made no request at all — and the
+        # orchestrator's soft-failure path then posted `4258` as the plan a
+        # human was asked to approve. A success criterion that is satisfiable
+        # without doing the work is not a success criterion. Here the only way
+        # to produce the confirmation line is to have made the request.
+        [ "$#" -eq 5 ] || {
+          echo "usage: plan-issue <old-image> <new-image> <advisory> <corpus-ids> <rationale>" >&2
+          echo "  give five arguments, each quoted; no JSON and no newlines" >&2
+          exit 2; }
+        # Reject a bare tag before it reaches the forge. `1.31.6-5.16` is not an
+        # image reference and the pipeline cannot recover one from it; failing
+        # here costs the clarifier one turn, while letting it through costs the
+        # run a fabricated registry three steps later. A reference the helper
+        # accepts has a registry or repository path and a tag.
+        for ref in "$1" "$2"; do
+          case "$ref" in
+            */*:*) ;;
+            *) echo "not a full image reference: $ref" >&2
+               echo "  give the whole thing, registry host and tag — for example" >&2
+               echo "  dp.apps.rancher.io/containers/nginx:1.31.6-5.16, which is the" >&2
+               echo "  'pull as:' line in the triage findings. A bare tag is not enough:" >&2
+               echo "  the remediation applies this issue literally and cannot guess" >&2
+               echo "  which registry you meant." >&2
+               exit 2;;
+          esac
+        done
+        esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+        image=$(esc "$1"); newimage=$(esc "$2"); adv=$(esc "$3")
+        cites=$(esc "$4"); why=$(esc "$5")
+        # `Change: <old> -> <new>` is a contract, not prose: forge-remediate
+        # parses exactly this line. Keep the arrow and keep both sides whole.
+        body="Image: ${image}\\nAdvisory: ${adv}\\nChange: ${image} -> ${newimage}\\nCites: ${cites}\\n\\n${why}"
+        json="{\"title\":\"Remediate ${adv} in ${image}\",\"body\":\"${body}\"}"
+        out=$(/sandbox/bin/forge POST \
+          "/api/v1/repos/{{ .Values.forge.owner }}/{{ .Values.forge.repo }}/issues" "$json") || exit 1
+        num=$(printf '%s' "$out" | sed -n 's/.*"number"[ ]*:[ ]*\([0-9]\{1,\}\).*/\1/p' | head -1)
+        if [ -z "$num" ]; then
+          echo "the forge rejected the request. Quote this reply and try once more:" >&2
+          printf '%s\n' "$out" >&2
+          exit 1
+        fi
+        echo "PLAN ISSUE #${num} CREATED. The plan is filed and your task is complete."
+      forge-clone: |
+        #!/bin/sh
+        # usage: forge-clone [target-dir]
+        # Clones the manifests repository and leaves git configured to send the
+        # credential handle as a header on every later fetch and push. The
+        # handle never goes in the remote URL, so it stays out of .git/config's
+        # origin entry and out of anything that prints a URL.
+        target="${1:-/tmp/{{ .Values.forge.repo }}}"
+        auth="Authorization: Bearer ${GITEA_TOKEN}"
+        url="http://{{ .Values.forge.host }}:{{ .Values.forge.port }}/{{ .Values.forge.owner }}/{{ .Values.forge.repo }}.git"
+        export GIT_TERMINAL_PROMPT=0
+        rm -rf "$target"
+        git -c http.extraHeader="$auth" clone -q "$url" "$target" || exit 1
+        git -C "$target" config http.extraHeader "$auth"
+        git -C "$target" config user.name secops-bot
+        git -C "$target" config user.email secops-bot@secops.invalid
+        echo "$target"
+      forge-find: |
+        #!/bin/sh
+        # usage: forge-find <image-reference>
+        # Clones the manifests repository and prints the files that run <image>.
+        #
+        # WHY THIS EXISTS. The briefing used to say `grep -rl '<image>' workloads/`
+        # and the agent answered "the tool `grep` is not accessible due to
+        # permission restrictions", then stopped — no branch, no pull request.
+        # Nothing had denied it: `process` sets no binary allow-list and grep is
+        # in the image. opencode disables all fourteen of its built-in tools for
+        # these agents (`"*": false`), one of which is called `grep`, and a 4B
+        # model reading the word in a briefing reaches for the tool of that name
+        # rather than composing a shell line. Naming the search as a helper with
+        # one fixed argument removes the ambiguity, which is the same fix the
+        # `nv-survey`, `corpus` and `appco` helpers already represent.
+        [ -n "$1" ] || { echo "usage: forge-find <image-reference>" >&2; exit 2; }
+        dir=$(/sandbox/bin/forge-clone) || exit 1
+        echo "clone: $dir"
+        hits=$(grep -rl -- "$1" "$dir" 2>/dev/null | grep -v '/\.git/')
+        if [ -z "$hits" ]; then
+          echo "No file in the repository runs $1. Stop here and say so."
+          exit 0
+        fi
+        echo "files that run $1:"
+        echo "$hits"
+      forge-swap: |
+        #!/bin/sh
+        # usage: forge-swap <file> <old-image> <new-image>
+        # Replaces one image reference in one file, in the clone forge-find
+        # made, and prints the resulting diff.
+        #
+        # WHY THIS EXISTS. The briefing used to say "open the file with your
+        # read tool and change the image line with your edit tool", and the
+        # agent answered that "the operations to read and edit the file
+        # /tmp/cluster-manifests/workloads/nginx.yaml are denied by the
+        # system's security rules", then stopped — no branch, no pull request.
+        #
+        # Nothing in OpenShell denied it. This agent's policy grants /tmp
+        # read-write and its tool list includes read/write/edit. opencode scopes
+        # those built-in tools to its own working directory, and the clone is
+        # outside it, so opencode refused — and the model reported that refusal
+        # as a *security policy* denial, which is a dangerous thing for a
+        # security demo to have on screen, because it is indistinguishable from
+        # the real denials the policies are there to produce.
+        #
+        # Third instance of one failure mode: a 4B model cannot tell opencode's
+        # tool plumbing from the sandbox boundary. `forge-find` was the first
+        # (`grep`), `plan-issue` the second (JSON quoting). The fix is always
+        # the same — make it a shell helper with fixed arguments, so no built-in
+        # tool is involved. With this, remediation needs bash alone; dropping
+        # read/write/edit also returns ~700 tokens to an 8192-token context.
+        [ "$#" -eq 3 ] || { echo "usage: forge-swap <file> <old-image> <new-image>" >&2; exit 2; }
+        file="$1"; old="$2"; new="$3"
+        [ -f "$file" ] || { echo "no such file: $file — use the path forge-find printed" >&2; exit 1; }
+        grep -qF -- "$old" "$file" || { echo "$file does not contain $old; nothing to change" >&2; exit 1; }
+        # A LITERAL replacement. An image reference is full of dots and slashes
+        # and a tag can hold characters a regex would read as syntax, so the
+        # escaping needed to make a hand-written `sed s///` safe here is itself
+        # the bug-prone part — an earlier attempt died on `bad flag in
+        # substitute command` because a `/` inside a bracket expression closed
+        # the s///. perl's \Q..\E quotes the metacharacters for us.
+        #
+        # NOT awk. The sandbox image has no awk — no gawk, no mawk, no busybox
+        # either — and the version of this helper that used it got as far as a
+        # live run before failing with `awk: command not found`, which the agent
+        # reported accurately and then correctly refused to work around. That is
+        # twice now that this helper was written against an assumed toolchain
+        # rather than a measured one. What the image actually has, checked
+        # inside a running sandbox: bash as /bin/sh, GNU sed 4.9, GNU grep,
+        # perl, git, curl, tr/cut/head/tail. No awk, no jq, no diff, no patch.
+        # `git diff` below is git's own, not the missing diff(1).
+        #
+        # old/new go through the environment, not the command line, so nothing
+        # in an image reference can be read as perl source.
+        #
+        # ONLY ON `image:` LINES. A manifest mentions its image in prose as well
+        # as in the field — the demo workload's header comment names the tag it
+        # is about — and a blind global replace rewrote that comment into a
+        # sentence that was no longer true. The pull request is reviewed by a
+        # human against "the image reference is the only delta", so a helper
+        # that also edits commentary makes the reviewer's job harder for no
+        # gain. Everything that is not an image field is passed through byte
+        # for byte.
+        # Count only what will actually change — lines holding the old
+        # reference AND an `image:` field, the same condition perl applies
+        # below. Counting every line that merely mentions the old tag reports
+        # the header comment as a pending edit, and a helper that overstates
+        # what it did is the same class of hazard as one that fails silently.
+        n=$(grep -F -- "$old" "$file" | grep -c 'image:')
+        old="$old" new="$new" perl -i -pe 's/\Q$ENV{old}\E/$ENV{new}/g if /image:/' "$file" || exit 1
+        echo "changed $n image reference(s)" >&2
+        grep -qF -- "$new" "$file" || { echo "the replacement did not take; $file is unchanged" >&2; exit 1; }
+        # -C the file's own directory rather than a hardcoded clone path: git
+        # walks up to the repository root by itself, and a wrong path here
+        # would print an empty diff, which reads as "nothing changed" to an
+        # agent that was told the diff is the confirmation.
+        echo "--- diff ---"
+        git -C "$(dirname "$file")" --no-pager diff -- "$file" 2>/dev/null || true
+        echo "--- end diff ---"
+        # No "next step" trailer. This helper is called by `forge-remediate`,
+        # which does the branch, the commit and the pull request itself, and a
+        # line saying `Next: forge-push …` is a second errand handed to the one
+        # kind of reader that cannot be given one — it appears in the agent's
+        # transcript as an instruction from the system, outranking the briefing
+        # that just told it the single command was the whole task.
+        echo "Edit applied."
+      forge-push: |
+        #!/bin/sh
+        # usage: forge-push <branch> <commit-message>
+        # Branches, commits every modified tracked file, and pushes. Run it
+        # after you have edited the file forge-find pointed you at.
+        #
+        # Three git invocations the agent used to have to compose, each with its
+        # own flags and its own -C. Fixed arguments here for the same reason as
+        # forge-find; the interesting failure — a push rejected by the branch
+        # protection rule on main — still surfaces verbatim, which is the point.
+        [ -n "$1" ] && [ -n "$2" ] || { echo "usage: forge-push <branch> <message>" >&2; exit 2; }
+        dir="/tmp/{{ .Values.forge.repo }}"
+        [ -d "$dir/.git" ] || { echo "no clone at $dir — run forge-find first" >&2; exit 1; }
+        git -C "$dir" checkout -q -b "$1" || exit 1
+        git -C "$dir" commit -q -am "$2" || { echo "nothing changed — you did not edit the file" >&2; exit 1; }
+        git -C "$dir" push -u origin HEAD 2>&1
+      forge-remediate: |
+        #!/bin/sh
+        # usage: forge-remediate <plan-issue-number>
+        # Carries out an approved plan issue end to end: read the issue, clone,
+        # find the manifest, swap the image, branch, commit, push, open the pull
+        # request. Prints PULL REQUEST #<n> OPENED.
+        #
+        # WHY THIS EXISTS, and it is the same lesson twice over.
+        #
+        # ONE ERRAND. The remediation briefing used to list four commands —
+        # forge-find, forge-swap, forge-push, then a hand-composed
+        # `forge POST …/pulls '{"title":…}'`. On 2026-09-17 the agent ran the
+        # first two, silently dropped the third, and went straight to the
+        # fourth, which failed with `ref "remediate-base-image-distro-cves"
+        # does not exist`. That is the third time in this chart that a briefing
+        # with more than one command has come back with the first one done and
+        # the rest described in prose: a 4B model treats a single tool call as
+        # discharging the turn. `survey-issue` was collapsed to one call for
+        # exactly this reason. Four was never going to work.
+        #
+        # And the last of the four was a hand-written JSON argument, which is
+        # the failure `plan-issue` was written to remove — reintroduced here
+        # because the pull request endpoint had no helper of its own.
+        #
+        # THE CHANGE COMES FROM THE ISSUE, NOT FROM THE MODEL. The same run
+        # wrote `docker.io/suse-app-collection/nginx:1.31.6-5.16` into the
+        # manifest. No such registry namespace exists; SUSE Application
+        # Collection is `dp.apps.rancher.io/containers`, which `appco` had
+        # printed correctly two steps earlier. The agent was not lying, it was
+        # interpolating — it held a tag and a vendor name and produced the
+        # reference those imply. Nothing downstream could catch it, because the
+        # scanner has no credential for a registry that does not exist and an
+        # unpullable image and a clean image report identically.
+        #
+        # So this helper does not take an image at all. It reads the `Change:`
+        # line out of the issue a human approved and applies that, byte for
+        # byte. The single argument is a number the orchestrator already put in
+        # the agent's task text, which is the one value a model cannot
+        # plausibly invent a variant of.
+        [ -n "$1" ] || { echo "usage: forge-remediate <plan-issue-number>" >&2; exit 2; }
+        case "$1" in *[!0-9]*) echo "not an issue number: $1" >&2; exit 2;; esac
+        issue="$1"
+        repo="/api/v1/repos/{{ .Values.forge.owner }}/{{ .Values.forge.repo }}"
+
+        out=$(/sandbox/bin/forge GET "${repo}/issues/${issue}") || exit 1
+        # Unescape the JSON string by hand — no jq in this image, see the
+        # toolchain note in forge-swap. Only the four escapes Gitea can produce
+        # in an issue body written by `plan-issue` are handled.
+        pair=$(printf '%s' "$out" | perl -0777 -ne '
+          exit 1 unless /"body"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+          my $b = $1;
+          $b =~ s/\\n/\n/g; $b =~ s/\\t/\t/g; $b =~ s/\\"/"/g; $b =~ s/\\\\/\\/g;
+          for (split /\n/, $b) {
+            if (/^\s*Change:\s*(\S+)\s+->\s+(\S+)\s*$/) { print "$1 $2\n"; exit 0 }
+          }
+          exit 1;')
+        if [ -z "$pair" ]; then
+          echo "issue #${issue} has no parsable 'Change: <old> -> <new>' line." >&2
+          echo "Quote this and stop — do not guess the images:" >&2
+          printf '%s\n' "$out" | head -c 1200 >&2
+          exit 1
+        fi
+        old=${pair%% *}; new=${pair##* }
+        echo "issue #${issue} approves: ${old} -> ${new}"
+        for ref in "$old" "$new"; do
+          case "$ref" in
+            */*:*) ;;
+            *) echo "issue #${issue} names '$ref', which is not a full image reference." >&2
+               echo "The plan cannot be applied as written. Say so and stop." >&2
+               exit 1;;
+          esac
+        done
+
+        dir=$(/sandbox/bin/forge-clone) || exit 1
+        # Only files that run the image, not files that mention it. Same
+        # condition forge-swap applies, checked here so that "no file runs it"
+        # is reported once and clearly rather than as a swap failure per file.
+        files=""
+        for f in $(grep -rlF -- "$old" "$dir" 2>/dev/null | grep -v '/\.git/'); do
+          grep -F -- "$old" "$f" | grep -q 'image:' && files="$files $f"
+        done
+        if [ -z "$files" ]; then
+          echo "No file in the repository runs ${old}. Stop here and say so — an" >&2
+          echo "invented file is worse than no pull request." >&2
+          exit 1
+        fi
+        for f in $files; do
+          /sandbox/bin/forge-swap "$f" "$old" "$new" || exit 1
+        done
+
+        esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+        # THE CHANGE IS DELIVERED AS JSON, NOT AS A GIT PUSH.
+        #
+        # `git push` cannot work from inside an OpenShell sandbox and never
+        # could. The packfile is binary, the L7 proxy in front of the forge
+        # speaks `rest`, and it answers the receive-pack POST itself with
+        # `{"error":"middleware_failed"}` before the request reaches Gitea.
+        # The full measurement is in the policy file; the short version is
+        # that the clone works because its request body is ASCII and the push
+        # does not because its body is not. There is no passthrough protocol
+        # to switch to.
+        #
+        # `PUT …/contents/<path>` with `new_branch` creates the branch and
+        # commits to it in one call, so the clone above is now only used to
+        # FIND and EDIT the file — the blob that gets committed is uploaded
+        # base64-encoded in a JSON body.
+        #
+        # Named after the issue, not after the advisory: the advisory is free
+        # text from an earlier agent and has already produced one branch name
+        # nobody could reproduce.
+        branch="remediate-issue-${issue}"
+        ebranch=$(esc "$branch")
+        msg=$(esc "Bump ${old} to ${new} (closes #${issue})")
+        # First file creates the branch; any further file commits onto it.
+        target_branch="main"; new_branch="$branch"
+        for f in $files; do
+          rel=${f#"$dir"/}
+          # The blob sha the edit was based on. Gitea requires it and rejects
+          # the write if someone else has changed the file since the clone,
+          # which is the optimistic-locking behaviour we want: better a
+          # refusal than silently reverting a change nobody here saw.
+          cur=$(/sandbox/bin/forge GET "${repo}/contents/${rel}?ref=main") || exit 1
+          sha=$(printf '%s' "$cur" | perl -ne 'print $1 if /"sha"\s*:\s*"([0-9a-f]{40})"/')
+          [ -n "$sha" ] || { echo "could not read the current blob sha for ${rel}" >&2; exit 1; }
+          b64=$(base64 < "$f" | tr -d '\n')
+          if [ -n "$new_branch" ]; then
+            nb=",\"new_branch\":\"${ebranch}\""
+          else
+            nb=""
+          fi
+          body="{\"message\":\"${msg}\",\"content\":\"${b64}\",\"sha\":\"${sha}\",\"branch\":\"${target_branch}\"${nb}}"
+          out=$(printf '%s' "$body" | /sandbox/bin/forge PUT "${repo}/contents/${rel}" @-) || exit 1
+          printf '%s' "$out" | grep -q '"commit"' || {
+            echo "the forge refused to write ${rel}. Quote this reply and stop:" >&2
+            printf '%s\n' "$out" | head -c 800 >&2
+            exit 1; }
+          echo "committed ${rel} on ${branch}"
+          target_branch="$branch"; new_branch=""
+        done
+
+        eold=$(esc "$old"); enew=$(esc "$new")
+        # THE `Change:` LINE IS A PARSING CONTRACT, not decoration. `plan-issue`
+        # writes the same line for the same reason, and here `cluster-apply`
+        # reads it back after the merge to learn what it is allowed to apply.
+        # Keep the arrow, keep both sides fully qualified, keep it on its own
+        # line. Changing its shape silently breaks the deploy step.
+        #
+        # The paragraph under it is the other half. Everything that denies the
+        # bot a merge — Gitea's branch protection, the policy deny rules — is
+        # invisible to the human reading this pull request, so the artefact has
+        # to say what merging MEANS. Before this text existed the pipeline
+        # stopped at an open PR and simply looked finished.
+        json="{\"title\":\"Bump ${eold} to ${enew}\",\"head\":\"${branch}\",\"base\":\"main\",\"body\":\"Closes #${issue}.\\nChange: ${eold} -> ${enew}\\n\\nApplies the change approved on that issue: \`${eold}\` -> \`${enew}\`.\\nThe image reference is the only edit; no other field is touched.\\n\\n**MERGING THIS IS THE AUTHORISATION.** Nothing in the cluster has changed. On merge, the deploy agent replaces this one image on the workload this file describes, through the Rancher API, and does nothing else. If you do not want that, close this pull request instead.\\n\\nThe bot cannot merge it: \`main\` is protected and the sandbox policy denies the merge endpoint.\"}"
+        pr=$(/sandbox/bin/forge POST "${repo}/pulls" "$json") || exit 1
+        num=$(printf '%s' "$pr" | sed -n 's/.*"number"[ ]*:[ ]*\([0-9]\{1,\}\).*/\1/p' | head -1)
+        if [ -z "$num" ]; then
+          echo "the forge rejected the pull request. Quote this reply:" >&2
+          printf '%s\n' "$pr" >&2
+          exit 1
+        fi
+        # Same shape as plan-issue's closing line, and for the same reason: the
+        # only way to print it is to have made the request.
+        echo "PULL REQUEST #${num} OPENED for ${old} -> ${new}. Your task is complete."
+    suse-security:
+      nv: |
+        #!/bin/sh
+        # usage: nv <METHOD> <path> [json-body]
+        #   nv GET  /v1/scan/scanner
+        #   nv POST /v1/vulasset '{}'
+        #
+        # ${NEUVECTOR_API_KEY} is a handle, not a key — see forge.
+        method="$1"; path="$2"; body="$3"
+        [ -n "$method" ] && [ -n "$path" ] || { echo "usage: nv <METHOD> <path> [json]" >&2; exit 2; }
+        set -- -s -X "$method" -H "X-Auth-Apikey: ${NEUVECTOR_API_KEY}"
+        [ -n "$body" ] && set -- "$@" -H "content-type: application/json" -d "$body"
+        exec curl "$@" "{{ include "secops-cpu-agents.nvScheme" . }}://{{ include "secops-cpu-agents.nvHost" . }}:{{ include "secops-cpu-agents.nvPort" . }}${path}"
+      nv-survey: |
+        #!/usr/bin/env python3
+        # usage: nv-survey            — every image the scanner has findings for,
+        #                               ranked most urgent first, numbered
+        #        nv-survey <image>     — the findings for one image, in detail
+        #
+        # WHY THIS IS A TOOL AND NOT A PROMPT. SUSE Security answers with one
+        # record per CVE, each carrying a paragraph of prose and the full list of
+        # workloads it was found in. A laptop cluster produces ~600 of those, two
+        # orders of magnitude past the agent's 8192-token context. The inversion
+        # — one row per image, counted by severity, ranked — is arithmetic, not
+        # judgement, so it happens here. What the agent still does is decide what
+        # the table means and what to recommend.
+        #
+        # TWO CALLS, NOT ONE. `POST /v1/vulasset` registers a server-side query
+        # and returns only `query_id` and the totals; the rows come from
+        # `GET /v1/vulasset?token=<query_id>`. Every earlier revision of this
+        # profile POSTed once, read `summary`, and reported zero findings.
+        #
+        # ${NEUVECTOR_API_KEY} is a substitution handle, not the key.
+        #
+        # EVERY SINGLE-IMAGE CALL ENDS IN EXACTLY ONE `  status:` LINE, one of
+        # SCANNED / NOT-SCANNED / ERROR <kind>. Before that contract existed the
+        # only signal was the presence of a `counts:` line, so an empty result
+        # meant all of: the image is genuinely unscanned, the API key was
+        # rejected, the shim was down, the sandbox policy refused the call, or
+        # curl timed out. Both consumers read this through `2>/dev/null` and
+        # rendered every one of those as UNSCANNED. That is fail-safe in outcome
+        # and undiagnosable in practice, and it cost a whole live run.
+        import json, os, subprocess, sys
+
+        BASE = "{{ include "secops-cpu-agents.nvScheme" . }}://{{ include "secops-cpu-agents.nvHost" . }}:{{ include "secops-cpu-agents.nvPort" . }}"
+        KEY = os.environ.get("NEUVECTOR_API_KEY", "")
+        WANT = sys.argv[1] if len(sys.argv) > 1 else None
+        # SIX, NOT TWELVE, AND THE BRIEFING SAYS SIX TOO. A twelve-row table with
+        # its fix lines is ~1.5k tokens, and the survey agent has an 8192-token
+        # context it must also fit the briefing, the table and a JSON issue body
+        # into. On a live run it reached n_tokens=5980, lost the fact that it had
+        # already posted, and ran the whole task a second time — two identical
+        # issues, then a third round killed by the 900s exec timeout. Ranking is
+        # arithmetic done here, so the cheapest place to cut the context is here.
+        TOP = 6
+
+        def fail(kind, detail):
+            # ON STDOUT, AND THAT IS THE ENTIRE POINT. Both consumers pipe this
+            # helper through `2>/dev/null` and read stdout with sed, so an error
+            # written only to stderr is an error they cannot see. It is mirrored
+            # on stderr as well, for the human reading the transcript.
+            line = "  status: ERROR %s - %s" % (kind, " ".join(str(detail).split())[:300])
+            print(line)
+            sys.stderr.write("nv-survey:" + line.rstrip() + "\n")
+            sys.exit(3)
+
+        def call(method, path, body=None, soft=False):
+            # soft=True is for the diagnostic header only: a controller that
+            # will not answer `GET /v1/scan/config` should degrade that one line
+            # to "unknown", not abort a survey that is otherwise fine. The
+            # measurement itself is never soft.
+            def bad(kind, detail):
+                if soft:
+                    return None
+                fail(kind, detail)
+            cmd = ["curl", "-s", "-w", "\n%{http_code}", "-X", method,
+                   "-H", "X-Auth-Apikey: " + KEY]
+            if body is not None:
+                cmd += ["-H", "content-type: application/json", "-d", json.dumps(body)]
+            try:
+                p = subprocess.run(cmd + [BASE + path], capture_output=True,
+                                   text=True, timeout=180)
+            except subprocess.TimeoutExpired:
+                return bad("UNREACHABLE",
+                           "%s %s did not answer within 180s at %s" % (method, path, BASE))
+            text, _, code = p.stdout.rpartition("\n")
+            code = code.strip()
+            if p.returncode != 0 or code in ("", "000"):
+                return bad("UNREACHABLE", "curl exit %d, HTTP %r, contacting %s%s"
+                                          % (p.returncode, code, BASE, path))
+            # The sandbox policy refuses at the proxy, before NeuVector is
+            # reached, so this is a different fault from a 403 off the
+            # controller and has to read differently.
+            if "policy_denied" in text or "not permitted by policy" in text:
+                return bad("POLICY-DENIED", "%s %s: %s" % (method, path, text[:200]))
+            if code in ("401", "403"):
+                return bad("AUTH", "%s %s -> HTTP %s: %s" % (method, path, code, text[:200]))
+            if not code.startswith("2"):
+                return bad("HTTP-" + code, "%s %s: %s" % (method, path, text[:200]))
+            try:
+                return json.loads(text)
+            except ValueError:
+                return bad("NOT-JSON", "%s %s answered HTTP %s with a non-JSON body: %s"
+                                       % (method, path, code, text[:200]))
+
+        head = call("POST", "/v1/vulasset", {})
+        if "query_id" not in head:
+            fail("NO-QUERY-ID",
+                 "POST /v1/vulasset answered 2xx without a query_id: " + json.dumps(head)[:200])
+        total, token, rows, start = head.get("total_matched_records", 0), head["query_id"], [], 0
+        while start < total:
+            page = call("GET", "/v1/vulasset?token=%s&start=%d&row=200" % (token, start))
+            got = page.get("vulnerabilities") or []
+            if not got:
+                break
+            rows += got
+            start += len(got)
+
+        images = {}
+        for v in rows:
+            sev, name = (v.get("severity") or "").lower(), v.get("name") or "?"
+            # The description is already here and was being thrown away. It is
+            # kept for single-image mode only — see the print below — because
+            # that view lists at most twelve CVEs, where the ranked table lists
+            # six images and has no budget for prose.
+            desc = " ".join((v.get("description") or "").split())[:200]
+            fixes = set()
+            for pkg, entries in (v.get("packages") or {}).items():
+                for e in entries:
+                    if e.get("fixed_version"):
+                        fixes.add("%s %s->%s" % (pkg.split(":")[-1],
+                                                 e.get("package_version"), e["fixed_version"]))
+            for w in v.get("workloads") or []:
+                img = w.get("image") or "?"
+                e = images.setdefault(img, {"c": {"critical": 0, "high": 0, "medium": 0, "low": 0},
+                                            "cves": {}, "ns": set(), "fixes": set()})
+                if name in e["cves"]:
+                    continue
+                e["cves"][name] = (sev, sorted(fixes)[:2], desc)
+                if sev in e["c"]:
+                    e["c"][sev] += 1
+                e["ns"].add(w.get("domain") or "?")
+                e["fixes"] |= fixes
+
+        if WANT:
+            hits = [k for k in images if WANT in k]
+            if not hits:
+                # A real measurement with a real result: the scanner has no
+                # record for this image. Distinct from every ERROR above, and
+                # the consumers must render the two differently.
+                print("No scanner findings for an image matching %r." % WANT)
+                print("  status: NOT-SCANNED")
+                print("Images the scanner does have findings for:")
+                for k in sorted(images):
+                    print("  " + k)
+                sys.exit(0)
+            for img in hits:
+                e = images[img]
+                print(img)
+                print("  namespaces: " + ",".join(sorted(e["ns"])))
+                print("  status: SCANNED")
+                print("  counts: " + " ".join("%s=%d" % kv for kv in e["c"].items()))
+                for sev in ("critical", "high"):
+                    named = [(n, f, d) for n, (s, f, d) in e["cves"].items() if s == sev]
+                    for n, f, d in named[:12]:
+                        print("  [%s] %s%s" % (sev, n, "  fix: " + "; ".join(f) if f else ""))
+                        if d:
+                            print("        " + d)
+            sys.exit(0)
+
+        # WHICH CONTROLLER ANSWERED, AND IS IT SCANNING AT ALL. There are two
+        # NeuVector installs on this workstation, one per cluster, never
+        # federated — "the scanner found nothing" is not a measurement until it
+        # says which scanner. And auto-scan defaults to OFF, which yields a
+        # flawless-looking cluster with a 200 on every call.
+        cfg = call("GET", "/v1/scan/config", soft=True) or {}
+        auto = (cfg.get("config") or {}).get("auto_scan")
+        scanners = (call("GET", "/v1/scan/scanner", soft=True) or {}).get("scanners") or []
+        print("SUSE Security: " + BASE)
+        print("auto-scan (containers): " +
+              ("unknown - GET /v1/scan/config was not answered" if auto is None
+               else str(auto).lower()))
+        print("registered scanners: %d%s"
+              % (len(scanners),
+                 "  CVEDB " + str(scanners[0].get("cvedb_version")) if scanners else ""))
+        if auto is False:
+            print()
+            print("*** AUTO-SCAN IS OFF ON THIS CONTROLLER. Every count below is")
+            print("*** meaningless: an image nothing has scanned cannot be told")
+            print("*** apart from an image with nothing wrong with it. Report")
+            print("*** this and stop - it is the finding.")
+        print()
+
+        ranked = sorted(images.items(),
+                        key=lambda i: (-i[1]["c"]["critical"], -i[1]["c"]["high"], i[0]))
+        print("%d vulnerability records across %d images. Ranked most urgent first."
+              % (total, len(images)))
+        print("Refer to an image by its NUMBER.")
+        print()
+        for i, (img, e) in enumerate(ranked[:TOP], 1):
+            c = e["c"]
+            print("[%d] %s" % (i, img))
+            print("    critical=%d high=%d medium=%d low=%d   namespaces: %s"
+                  % (c["critical"], c["high"], c["medium"], c["low"],
+                     ",".join(sorted(e["ns"])[:3])))
+            if e["fixes"]:
+                print("    example fixes: " + "; ".join(sorted(e["fixes"])[:2]))
+            else:
+                print("    example fixes: none published")
+        if len(ranked) > TOP:
+            print()
+            print("(%d further images not shown.)" % (len(ranked) - TOP))
+      cluster-confirm: |
+        #!/bin/sh
+        # usage: cluster-confirm <merged-pull-request-number>
+        #
+        # The post-apply rescan, in one command taking one argument. Same shape
+        # as `cluster-canary` and for the same reason, plus a specific one: the
+        # first version of this step was four errands in a briefing — scan the
+        # old image, scan the new one, read the pull request, comment — and the
+        # model answered it by composing its own shell, which included `sudo`.
+        # There is no sudo in the sandbox image and there is no reason for one.
+        # A briefing that invites a model to write commands will get commands it
+        # was never shown.
+        #
+        # THE MEASUREMENT IT MAKES IS DIFFERENT FROM THE CANARY'S, and that is
+        # why the step exists at all rather than being a copy. Before the merge,
+        # both images were running: the comparison was between two live
+        # workloads. After it, only the replacement is running — so the
+        # scanner having NOTHING to say about the old image is not a gap in the
+        # data, it is the result. The image is gone from the cluster.
+        [ -n "$1" ] || { echo "usage: cluster-confirm <merged-pull-request-number>" >&2; exit 2; }
+        case "$1" in *[!0-9]*) echo "not a pull request number: $1" >&2; exit 2;; esac
+        pr="$1"
+        repo="/api/v1/repos/{{ .Values.forge.owner }}/{{ .Values.forge.repo }}"
+        esc() { printf '%s' "$1" | perl -0777 -pe 's/\\/\\\\/g; s/"/\\"/g; s/\n/\\n/g'; }
+        say() { printf '%s\n' "$1" >&2; }
+        comment() { /sandbox/bin/forge POST "${repo}/issues/${pr}/comments" "{\"body\":\"$1\"}" >/dev/null; }
+        # ONE CAPTURE PER IMAGE, both fields read out of it. `nv-survey` ends
+        # every single-image run in exactly one `status:` line — SCANNED,
+        # NOT-SCANNED or ERROR <kind> — so the outcomes are stated rather than
+        # inferred from an empty string. Note `2>&1` and not `2>/dev/null`:
+        # discarding stderr is what used to make a rejected API key look
+        # identical to an unscanned image.
+        survey() { /sandbox/bin/nv-survey "$1" 2>&1; }
+        field() { printf '%s\n' "$1" | sed -n "s/^  $2: //p" | head -1; }
+
+        out=$(/sandbox/bin/forge GET "${repo}/pulls/${pr}") || exit 1
+        pair=$(printf '%s' "$out" | perl -0777 -ne '
+          exit 1 unless /"body"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+          my $b = $1;
+          $b =~ s/\\n/\n/g; $b =~ s/\\t/\t/g; $b =~ s/\\"/"/g; $b =~ s/\\\\/\\/g;
+          for (split /\n/, $b) {
+            if (/^\s*Change:\s*(\S+)\s+->\s+(\S+)\s*$/) { print "$1 $2\n"; exit 0 }
+          }
+          exit 1;')
+        if [ -z "$pair" ]; then
+          say "pull request #${pr} has no parsable 'Change: <old> -> <new>' line."
+          say "There is nothing to confirm. Quote this and stop."
+          exit 1
+        fi
+        old=${pair%% *}; new=${pair##* }
+        echo "confirming: ${old} -> ${new}"
+
+        sold=$(survey "$old"); snew=$(survey "$new")
+        stold=$(field "$sold" status); stnew=$(field "$snew" status)
+        nowold=$(field "$sold" counts); nownew=$(field "$snew" counts)
+        echo "old ${old}: ${stold:-NO-STATUS} ${nowold}"
+        echo "new ${new}: ${stnew:-NO-STATUS} ${nownew}"
+
+        # A BROKEN SCANNER IS NOT A RESULT, in either direction. If the query
+        # for the OLD image errors, its empty counts would otherwise be read as
+        # "the old image is gone from the cluster" — a false pass on the very
+        # question this step exists to answer.
+        case "${stnew}${stold}" in
+          *ERROR*)
+            why=$(printf '%s\n' "$snew" "$sold" | sed -n 's/^  status: ERROR //p' | head -2)
+            comment "**Could not verify — SUSE Security did not answer.** This is not a finding about \`${new}\`; it is a failure of the rescan itself, and nothing below should be read as a measurement.\\n\\n\`\`\`\\n$(esc "$why")\\n\`\`\`\\n\\nThe merge has been applied regardless — see the deploy comment. What is missing is the confirmation that the image now serving is the one that was scanned."
+            say "SUSE Security did not answer. This is a broken rescan, not a clean"
+            say "image and not an unscanned one:"
+            printf '%s\n' "$why" >&2
+            say "It is on the pull request as unverified. Do not call it a pass."
+            exit 1;;
+        esac
+
+        if [ "$stnew" != "SCANNED" ]; then
+          # The one result that must never be rendered as a pass.
+          comment "**Unverified.** The merge has been applied, but SUSE Security reports no findings for \`${new}\`, so this rescan measured nothing. An image the scanner has not looked at is indistinguishable from a clean one from here.\\n\\nOld image \`${old}\`: ${nowold:-no longer reported, i.e. not running}."
+          say "the scanner reports nothing for ${new}. That is UNSCANNED, not clean."
+          say "It is on the pull request as unverified. Do not call it a pass."
+          exit 1
+        fi
+        if [ "$stold" = "SCANNED" ]; then
+          gone="No — \`${old}\` is still reported by the scanner (\`${nowold}\`), so something on this cluster is still running it. That may be another workload entirely; it is worth knowing which."
+        else
+          gone="Yes — the scanner no longer reports \`${old}\` at all, because nothing on this cluster runs it any more."
+        fi
+        # Reused from the capture above rather than re-queried: nv-survey pages
+        # the entire vulasset set on every invocation, and this is the same
+        # answer it already gave.
+        detail=$(printf '%s\n' "$snew" | head -c 1200)
+        body="**Post-apply rescan.** The replacement is serving; this is the measurement, not the prediction.\\n\\n| | image | findings |\\n|---|---|---|\\n| now serving | \`${new}\` | \`${nownew}\` |\\n| replaced | \`${old}\` | ${nowold:-no longer reported} |\\n\\nIs the old image gone from the cluster? ${gone}\\n\\nThe canary comment earlier on this pull request predicted the replacement's numbers from a pod that was running but taking no traffic. Compare it with the row above: if the two disagree, the prediction was wrong and that is the finding.\\n\\n<details><summary>scanner detail</summary>\\n\\n\`\`\`\\n$(esc "$detail")\\n\`\`\`\\n</details>"
+        comment "$body"
+        echo "CONFIRMED ${new} [${nownew}] IS SERVING; ${old} [${nowold:-gone}]. Your task is complete."
+    app-collection:
+      appco: |
+        #!/usr/bin/env python3
+        # usage: appco tags <name>     — the versions SUSE Application Collection
+        #                                publishes for a container
+        #        appco find <image>    — the same, guessing <name> from a full
+        #                                image reference
+        #
+        # This is the "is there a supported alternative" question, answered
+        # against SUSE's own catalogue rather than against the model's memory.
+        # A miss is a real answer: Application Collection does not publish
+        # everything, and saying so is more useful than inventing a version.
+        #
+        # The tag list is ~80% cosign attestation and signature artefacts
+        # (`sha256-…`, `.sig`, `.att`) — 315 tags for coredns, of which 65 are
+        # versions. Filtering them here is the difference between a readable
+        # answer and 40k tokens of noise.
+        #
+        # ${APPCO_BASIC} is a substitution handle. The real value is
+        # base64("user:token") and the boundary swaps it in.
+        import json, os, re, subprocess, sys
+
+        HOST = "{{ .Values.appCollection.host }}"
+        PREFIX = "{{ .Values.appCollection.namespace }}"
+        AUTH = "Authorization: Basic " + os.environ.get("APPCO_BASIC", "")
+        verb = sys.argv[1] if len(sys.argv) > 1 else ""
+        arg = sys.argv[2] if len(sys.argv) > 2 else ""
+        if verb not in ("tags", "find") or not arg:
+            sys.exit("usage: appco tags <name> | appco find <image>")
+
+        if verb == "find":
+            # registry.k8s.io/coredns/coredns:v1.11.1 -> coredns
+            arg = arg.split("@")[0].split(":")[0].rstrip("/").split("/")[-1]
+
+        url = "https://%s/v2/%s/%s/tags/list" % (HOST, PREFIX, arg)
+        out = subprocess.run(["curl", "-s", "-H", AUTH, url],
+                             capture_output=True, text=True, timeout=120).stdout
+        try:
+            tags = json.loads(out).get("tags") or []
+        except ValueError:
+            sys.exit("appco: %s did not return JSON: %s" % (url, out[:200]))
+
+        real = [t for t in tags
+                if not t.startswith("sha256-") and not t.endswith((".sig", ".att"))]
+        if not real:
+            print("SUSE Application Collection does not publish %s/%s." % (PREFIX, arg))
+            print("There is no supported image to move to; the fix has to be a "
+                  "package bump inside the image you already run.")
+            sys.exit(0)
+        real.sort(key=lambda s: [int(x) for x in re.findall(r"\d+", s)[:6]])
+        print("%s/%s in SUSE Application Collection: %d published versions."
+              % (PREFIX, arg, len(real)))
+        print("newest: " + ", ".join(real[-8:]))
+        print("pull as: %s/%s/%s:%s" % (HOST, PREFIX, arg, real[-1]))
+    rancher:
+      rancher: |
+        #!/bin/sh
+        # usage: rancher <METHOD> <path> [body] [content-type]
+        #   rancher GET   /k8s/clusters/c-xxxxx/apis/apps/v1/namespaces/ns/deployments/x
+        #   rancher PATCH <same path> '{"spec":…}' application/strategic-merge-patch+json
+        #
+        # ${RANCHER_TOKEN} is a handle, not a token — see `forge`. The real
+        # value is substituted by the OpenShell proxy at the egress boundary
+        # and is never in this sandbox, so an agent that dumps its environment
+        # gets the handle and nothing else.
+        #
+        # THERE IS NO `Host:` HEADER HERE, AND THERE MUST NOT BE. Rancher is
+        # behind an ingress that routes strictly on that header and the shim's
+        # Service name is not the vhost, so the first revision of this helper
+        # set it explicitly — and the first end-to-end deploy failed on it with
+        # a 404 page from nginx where a Deployment should have been. Measured
+        # afterwards: OpenShell's forward proxy rebuilds the upstream request
+        # from the absolute-form request URI and DISCARDS a client-supplied
+        # Host, so the header never left the sandbox. It is now set by the shim
+        # itself, on the far side of the proxy, from `REWRITE_HOST`. Putting it
+        # back here would be inert, not harmful — but it would also be a lie
+        # about where the vhost comes from.
+        method="$1"; path="$2"; body="$3"; ctype="${4:-application/json}"
+        [ -n "$method" ] && [ -n "$path" ] || { echo "usage: rancher <METHOD> <path> [body] [content-type]" >&2; exit 2; }
+        set -- -s -X "$method" \
+          -H "Authorization: Bearer ${RANCHER_TOKEN}"
+        [ -n "$body" ] && set -- "$@" -H "content-type: ${ctype}" -d "$body"
+        exec curl "$@" "{{ include "secops-cpu-agents.rancherScheme" . }}://{{ include "secops-cpu-agents.rancherHost" . }}:{{ include "secops-cpu-agents.rancherPort" . }}${path}"
+      cluster-canary: |
+        #!/bin/sh
+        # usage: cluster-canary <open-pull-request-number>
+        #
+        # The whole validation errand, in one command taking one argument —
+        # same shape and same reason as `cluster-apply` and `forge-remediate`.
+        #
+        # WHAT IT IS FOR. Until 0.3.1 the validation step ran `nv-survey` twice
+        # and compared the results, which could not work: SUSE Security indexes
+        # findings by running workload, so the replacement image — which nothing
+        # ran — had no findings to report, and a rescan of the old image against
+        # nothing is a rescan of the old image against itself. The run that
+        # showed this said so correctly and was ignored for 910 seconds, which
+        # is how long it took to reach its timeout.
+        #
+        # So this runs the replacement, for real, next to the thing it replaces,
+        # and measures it. The pod comes up in
+        # {{ .Values.deploy.canary.namespace }}/{{ .Values.deploy.canary.name }},
+        # takes no traffic, and is scaled back to zero by `cluster-apply` after
+        # the merge lands on the real workload.
+        #
+        # IT DOES NOT TOUCH THE WORKLOAD UNDER REVIEW and cannot: canary.yaml
+        # allows PATCH on the canary's literal name and on nothing else, so a
+        # `cluster-apply` run from this sandbox is refused at the boundary.
+        #
+        # WHAT IT WILL NOT DO:
+        #   * report a clean image it did not see scanned. An image the scanner
+        #     has no findings for is UNSCANNED here, never zero. A registry it
+        #     cannot pull from and auto-scan switched off both look identical to
+        #     a perfect image, and that is the one mistake worth designing out.
+        #   * recommend a merge for a canary that never became Ready. That is
+        #     the finding — it is how a pod-spec mismatch (a non-root image on a
+        #     port the spec binds as root) is caught before a human merges.
+        #   * merge anything. The policy denies it; this step ends at a comment.
+        [ -n "$1" ] || { echo "usage: cluster-canary <pull-request-number>" >&2; exit 2; }
+        case "$1" in *[!0-9]*) echo "not a pull request number: $1" >&2; exit 2;; esac
+        pr="$1"
+        repo="/api/v1/repos/{{ .Values.forge.owner }}/{{ .Values.forge.repo }}"
+        k8s="/k8s/clusters/{{ .Values.rancher.clusterId }}/apis/apps/v1"
+        cns="{{ .Values.deploy.canary.namespace }}"
+        cname="{{ .Values.deploy.canary.name }}"
+        cpath="${k8s}/namespaces/${cns}/deployments/${cname}"
+        # Same escaper, same reason, as cluster-apply: a failed canary reports
+        # its conditions inside a JSON comment body, and a raw newline there
+        # makes Gitea answer 400 on a fire-and-forget POST.
+        esc() { printf '%s' "$1" | perl -0777 -pe 's/\\/\\\\/g; s/"/\\"/g; s/\n/\\n/g'; }
+        say() { printf '%s\n' "$1" >&2; }
+        comment() { /sandbox/bin/forge POST "${repo}/issues/${pr}/comments" "{\"body\":\"$1\"}" >/dev/null; }
+        # `nv-survey` ends every single-image run in exactly one `status:` line
+        # — SCANNED, NOT-SCANNED or ERROR <kind> — and only prints `counts:`
+        # alongside SCANNED.
+        #
+        # IT USED TO BE INFERRED FROM SILENCE, and that was wrong. This read
+        # `nv-survey … 2>/dev/null | sed -n 's/^  counts: //p'` and treated an
+        # empty result as "unscanned", so a rejected API key, a dead TLS shim, a
+        # policy refusal and a genuinely unscanned image were one outcome with
+        # one wording. Fail-safe, in that none of them was ever called a pass —
+        # but undiagnosable, which cost a full live run on 2026-09-17. Note the
+        # `2>&1`: the ERROR line is printed on stdout precisely so it survives
+        # this pipe, and stderr is kept for the transcript.
+        survey() { /sandbox/bin/nv-survey "$1" 2>&1; }
+        field() { printf '%s\n' "$1" | sed -n "s/^  $2: //p" | head -1; }
+
+        # --- 1. the change under review, off the same contract line -----------
+        out=$(/sandbox/bin/forge GET "${repo}/pulls/${pr}") || exit 1
+        pair=$(printf '%s' "$out" | perl -0777 -ne '
+          exit 1 unless /"body"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+          my $b = $1;
+          $b =~ s/\\n/\n/g; $b =~ s/\\t/\t/g; $b =~ s/\\"/"/g; $b =~ s/\\\\/\\/g;
+          for (split /\n/, $b) {
+            if (/^\s*Change:\s*(\S+)\s+->\s+(\S+)\s*$/) { print "$1 $2\n"; exit 0 }
+          }
+          exit 1;')
+        if [ -z "$pair" ]; then
+          say "pull request #${pr} has no parsable 'Change: <old> -> <new>' line in its body."
+          say "Without it there is nothing to validate. Quote this and stop:"
+          printf '%s\n' "$out" | head -c 800 >&2
+          exit 1
+        fi
+        old=${pair%% *}; new=${pair##* }
+        echo "under review: ${old} -> ${new}"
+
+        # --- 2. the old image, as the scanner sees it RIGHT NOW ---------------
+        # Taken before the canary starts, so the two sides of the comparison are
+        # one scanner state apart and not one run apart.
+        sbefore=$(survey "$old")
+        stbefore=$(field "$sbefore" status)
+        before=$(field "$sbefore" counts)
+        case "$stbefore" in
+          ERROR\ *)
+            say "SUSE Security did not answer for ${old}:"
+            printf '%s\n' "$stbefore" >&2
+            say "That is a broken scanner, not a clean image and not an unscanned"
+            say "one. Nothing can be canaried against it. Quote the line above and stop."
+            exit 1;;
+          SCANNED) ;;
+          *)
+            say "the scanner reports nothing for ${old}, which is supposed to be running."
+            say "There is no 'before' to compare against, so nothing here would be a"
+            say "measurement. Say that and stop."
+            exit 1;;
+        esac
+        echo "before (${old}): ${before}"
+
+        # --- 3. start the replacement next to it ------------------------------
+        live=$(/sandbox/bin/rancher GET "${cpath}") || exit 1
+        case "$live" in
+          *policy_denied*|*not\ permitted\ by\ policy*)
+            say "the sandbox policy refuses ${cns}/${cname}."
+            say "Report the refusal verbatim and stop — there is no second route."
+            printf '%s\n' "$live" | head -c 600 >&2
+            exit 1;;
+        esac
+        container=$(printf '%s' "$live" | python3 -c '
+        import json, sys
+        d = json.load(sys.stdin)
+        if d.get("kind") == "Status":
+            sys.exit("STATUS " + str(d.get("message", "")))
+        cs = d.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        print(cs[0]["name"] if len(cs) == 1 else "")
+        ' 2>&1) || {
+          say "could not read the canary workload ${cns}/${cname}:"
+          printf '%s\n' "$container" | head -c 600 >&2
+          say "It is seeded by hand, once, from 40-canary-storefront.yaml. If it is"
+          say "missing, say so and stop."
+          exit 1; }
+        [ -n "$container" ] || {
+          say "${cns}/${cname} does not have exactly one container, so there is no"
+          say "unambiguous place to put ${new}. Say so and stop."
+          exit 1; }
+        patch="{\"spec\":{\"replicas\":1,\"template\":{\"spec\":{\"containers\":[{\"name\":\"$(esc "$container")\",\"image\":\"$(esc "$new")\"}]}}}}"
+        resp=$(/sandbox/bin/rancher PATCH "${cpath}" "$patch" \
+                 "application/strategic-merge-patch+json") || exit 1
+        if printf '%s' "$resp" | grep -q '"kind"[ ]*:[ ]*"Status"' \
+           || printf '%s' "$resp" | grep -q 'policy_denied'; then
+          say "the canary patch was refused. Quote this reply verbatim and stop:"
+          printf '%s\n' "$resp" | head -c 800 >&2
+          exit 1
+        fi
+        echo "canary ${cns}/${cname} starting on ${new}"
+
+        # --- 4. did the replacement actually come up? -------------------------
+        # This is the question no registry lookup can answer and the reason the
+        # canary is a twin of the real pod spec rather than a bare pod.
+        deadline={{ .Values.deploy.rolloutTimeoutSeconds }}
+        waited=0
+        ready=no
+        while [ "$waited" -lt "$deadline" ]; do
+          sleep 5
+          waited=$((waited + 5))
+          live=$(/sandbox/bin/rancher GET "${cpath}") || break
+          set -- $(printf '%s' "$live" | python3 -c '
+        import json, sys
+        d = json.load(sys.stdin)
+        m = d.get("metadata", {})
+        s = d.get("status", {})
+        print(m.get("generation", 0), s.get("observedGeneration", 0),
+              s.get("replicas", 0), s.get("updatedReplicas", 0),
+              s.get("availableReplicas", 0))
+        ' 2>/dev/null)
+          gen=$1; obs=$2; rep=$3; upd=$4; avl=$5
+          echo "  canary ${waited}s: generation ${gen}/observed ${obs}, ${avl}/${rep} available, ${upd} updated"
+          if [ "${obs:-0}" -ge "${gen:-1}" ] && [ "${rep:-0}" -gt 0 ] \
+             && [ "${upd:-0}" -eq "${rep:-0}" ] && [ "${avl:-0}" -eq "${rep:-0}" ]; then
+            ready=yes
+            break
+          fi
+        done
+        if [ "$ready" != "yes" ]; then
+          conds=$(printf '%s' "$live" | python3 -c '
+        import json, sys
+        for c in json.load(sys.stdin).get("status", {}).get("conditions", []):
+            print("%s=%s %s: %s" % (c.get("type"), c.get("status"),
+                                    c.get("reason", ""), c.get("message", "")))
+        ' 2>/dev/null | head -c 900)
+          comment "**Do not merge this yet.** \`${new}\` was started as a canary in \`${cns}/${cname}\` — a copy of the storefront pod spec with a different name and no Service — and **it did not become available within ${deadline}s**.\\n\\nThe running workload was never touched and is still serving \`${old}\`.\\n\\n\`\`\`\\n$(esc "$conds")\\n\`\`\`\\n\\nThis is what the canary is for: the image reference may be right and the pod spec still wrong. Nothing was scanned, because there is nothing running to scan."
+          say "THE CANARY DID NOT BECOME AVAILABLE within ${deadline}s. Conditions:"
+          printf '%s\n' "$conds" >&2
+          say "This is reported on pull request #${pr}. The live workload is untouched."
+          /sandbox/bin/rancher PATCH "${cpath}" '{"spec":{"replicas":0}}' \
+            "application/strategic-merge-patch+json" >/dev/null 2>&1
+          exit 1
+        fi
+        echo "canary Ready after ${waited}s on ${new}"
+
+        # --- 5. wait for the scanner to catch up ------------------------------
+        # A new pod is not a scanned pod. NeuVector queues the image behind
+        # whatever else it is doing, and on this hardware that is minutes.
+        scandeadline={{ .Values.deploy.canary.scanTimeoutSeconds }}
+        scanwaited=0
+        after=""
+        stafter=""
+        safter=""
+        while [ "$scanwaited" -lt "$scandeadline" ]; do
+          safter=$(survey "$new")
+          stafter=$(field "$safter" status)
+          after=$(field "$safter" counts)
+          [ "$stafter" = "SCANNED" ] && break
+          # AN ERROR IS NOT SOMETHING THAT FINISHES IF YOU WAIT. NOT-SCANNED is
+          # worth polling — the scanner queues a new image behind whatever else
+          # it is doing. A 403 is not; polling it burns the whole scan budget to
+          # arrive at the answer already in hand.
+          case "$stafter" in ERROR\ *) break;; esac
+          sleep 20
+          scanwaited=$((scanwaited + 20))
+          echo "  waiting for the scanner to report on ${new}: ${scanwaited}s"
+        done
+        case "$stafter" in
+          ERROR\ *)
+            comment "**Could not verify — SUSE Security did not answer.** \`${new}\` is running as a canary in \`${cns}/${cname}\` and became available, but the scanner query itself failed after ${scanwaited}s. This says nothing at all about the image.\\n\\n\`\`\`\\n$(esc "$stafter")\\n\`\`\`\\n\\nThis is a different problem from an unscanned image: the pipeline could not reach or authenticate to SUSE Security. Fix that, then re-run the canary. For reference, \`${old}\` measured \`${before}\` before this started.\\n\\nThe workload under review has not been changed."
+            say "SUSE Security did not answer for ${new}:"
+            printf '%s\n' "$stafter" >&2
+            say "That is a broken query, NOT an unscanned image and NOT a clean one."
+            say "It is on pull request #${pr}. The live workload is untouched."
+            exit 1;;
+        esac
+        if [ "$stafter" != "SCANNED" ]; then
+          comment "**Unverified — do not read this as a pass.** \`${new}\` has been running as a canary in \`${cns}/${cname}\` for ${scanwaited}s and SUSE Security has still reported no findings for it, so the replacement is **UNSCANNED**, not clean.\\n\\nFor reference, \`${old}\` right now: \`${before}\`.\\n\\nAn image the scanner cannot pull and an image with nothing wrong with it are indistinguishable from here, and so is a scanner with auto-scan switched off. A human should find out which before merging."
+          say "the canary is Ready but SUSE Security has reported nothing for ${new}"
+          say "after ${scanwaited}s. That is UNSCANNED, not clean, and it is on the"
+          say "pull request as unverified. Do not describe it as a pass."
+          exit 1
+        fi
+        echo "after (${new}): ${after}"
+
+        # --- 6. the comparison, where the reviewer is looking -----------------
+        # Both sides measured on this cluster, within seconds of each other,
+        # from workloads that are both running as this is written. That sentence
+        # is the whole point of the step and it goes in the comment verbatim.
+        # Reused from the poll above rather than re-queried: nv-survey pages the
+        # whole vulasset set on every invocation, and this is the same answer.
+        detail=$(printf '%s\n' "$safter" | head -c 1200)
+        body="**Both images are running on this cluster right now, and both numbers below were measured.**\\n\\n| | image | findings |\\n|---|---|---|\\n| serving | \`${old}\` | \`${before}\` |\\n| canary | \`${new}\` | \`${after}\` |\\n\\nThe replacement was started as \`${cns}/${cname}\`, a copy of the storefront pod spec with a different name and no Service, and became available after ${waited}s. It takes no traffic. The workload under review has not been changed by anything in this pipeline.\\n\\nSo this is a measurement and not a claim about a registry: the new image really starts under the pod spec it will inherit, and the scanner really sees what is in it.\\n\\n**Merging this pull request is the authorisation to promote it.** On merge, the deploy agent replaces the image on the running workload and scales the canary back to zero.\\n\\n<details><summary>scanner detail for the canary</summary>\\n\\n\`\`\`\\n$(esc "$detail")\\n\`\`\`\\n</details>"
+        comment "$body"
+        # The last line, and the only one worth repeating. No "next step"
+        # trailer — see the note in forge-swap.
+        echo "VALIDATED ${old} [${before}] -> ${new} [${after}] ON A RUNNING CANARY. Your task is complete."
+      cluster-apply: |
+        #!/bin/sh
+        # usage: cluster-apply <merged-pull-request-number>
+        #
+        # The whole deploy errand, end to end, in one command taking one
+        # argument. Read the header of `forge-remediate` before changing this:
+        # the four-errand briefing that produced a narrated pull request nobody
+        # had opened is the same failure this shape exists to prevent. A 4B
+        # model executes the first command in a briefing and prose-describes
+        # the second, so there is exactly one.
+        #
+        # WHAT IT WILL NOT DO, and why each refusal is here rather than in the
+        # briefing — a refusal in a prompt is a suggestion:
+        #
+        #   * apply an unmerged pull request. The merge IS the authorisation;
+        #     there is no other signal and no override.
+        #   * apply one the bot merged. Then the merge was not a human act and
+        #     the gate did not hold; that is a finding, not a green light.
+        #   * guess the images. They come off the pull request's `Change:` line,
+        #     which `forge-remediate` writes as a contract for this helper.
+        #   * guess the workload. Namespace, kind and name come from the
+        #     manifest the merge landed; the container name comes from the live
+        #     object, which is the only authority on what is actually running.
+        #   * patch a workload whose current image is not the one that was
+        #     reviewed. That is drift, and applying over it silently would make
+        #     the pull request a fiction.
+        #   * roll back. The old ReplicaSet keeps serving a failed rollout, and
+        #     a human should see why it failed rather than a tidied-up cluster.
+        #
+        # WHERE it may apply is not decided here at all — it is `deploy.targets`
+        # in values.yaml, rendered into the policy. A refusal from the proxy is
+        # the fence working, and this script reports it as such.
+        [ -n "$1" ] || { echo "usage: cluster-apply <merged-pull-request-number>" >&2; exit 2; }
+        case "$1" in *[!0-9]*) echo "not a pull request number: $1" >&2; exit 2;; esac
+        pr="$1"
+        repo="/api/v1/repos/{{ .Values.forge.owner }}/{{ .Values.forge.repo }}"
+        k8s="/k8s/clusters/{{ .Values.rancher.clusterId }}/apis/apps/v1"
+        # Escapes a string for embedding in a JSON string literal. The newline
+        # case is not theoretical: on a failed rollout this wraps the workload's
+        # conditions, and a Deployment in trouble reports several. A literal
+        # newline inside a JSON string is invalid, Gitea answers 400, and
+        # because the comment POST is fire-and-forget the failure report would
+        # vanish silently — losing exactly the output the step exists to
+        # produce. Order matters: backslashes first, or the \n added last gets
+        # doubled.
+        esc() { printf '%s' "$1" | perl -0777 -pe 's/\\/\\\\/g; s/"/\\"/g; s/\n/\\n/g'; }
+        say() { printf '%s\n' "$1" >&2; }
+
+        # --- 1. the merge is the authorisation --------------------------------
+        out=$(/sandbox/bin/forge GET "${repo}/pulls/${pr}") || exit 1
+        printf '%s' "$out" | grep -q '"merged"[ ]*:[ ]*true' || {
+          say "pull request #${pr} is NOT merged."
+          say "Nothing was applied, and nothing should be: the merge is the"
+          say "authorisation. Report that it is still open and stop."
+          exit 1; }
+        who=$(printf '%s' "$out" | perl -0777 -ne 'print $1 if /"merged_by"\s*:\s*\{.*?"login"\s*:\s*"([^"]*)"/s')
+        [ -n "$who" ] || who="(unknown)"
+        if [ "$who" = "{{ .Values.forge.botUser }}" ]; then
+          say "pull request #${pr} was merged by {{ .Values.forge.botUser }}, the bot account."
+          say "The merge is supposed to BE the human approval, so a bot merge means"
+          say "the gate did not hold. Refusing to apply. Quote this and stop."
+          exit 1
+        fi
+        echo "pull request #${pr} was merged by ${who}."
+
+        # --- 2. the approved change, off the contract line --------------------
+        pair=$(printf '%s' "$out" | perl -0777 -ne '
+          exit 1 unless /"body"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+          my $b = $1;
+          $b =~ s/\\n/\n/g; $b =~ s/\\t/\t/g; $b =~ s/\\"/"/g; $b =~ s/\\\\/\\/g;
+          for (split /\n/, $b) {
+            if (/^\s*Change:\s*(\S+)\s+->\s+(\S+)\s*$/) { print "$1 $2\n"; exit 0 }
+          }
+          exit 1;')
+        if [ -z "$pair" ]; then
+          say "pull request #${pr} has no parsable 'Change: <old> -> <new>' line in its body."
+          say "Without it there is no way to know what was approved. Quote this and stop:"
+          printf '%s\n' "$out" | head -c 1000 >&2
+          exit 1
+        fi
+        old=${pair%% *}; new=${pair##* }
+        for ref in "$old" "$new"; do
+          case "$ref" in
+            */*:*) ;;
+            *) say "the Change line names '$ref', which is not a full image reference."
+               say "The merge cannot be applied as written. Say so and stop."
+               exit 1;;
+          esac
+        done
+        echo "approved change: ${old} -> ${new}"
+
+        # --- 3. which workload did the merge land on? -------------------------
+        # The pull request tells us the file; the file tells us the object. Not
+        # values, not the briefing, not this script.
+        fl=$(/sandbox/bin/forge GET "${repo}/pulls/${pr}/files") || exit 1
+        paths=$(printf '%s' "$fl" | perl -0777 -ne '
+          while (/"filename"\s*:\s*"((?:[^"\\]|\\.)*)"/g) {
+            my $p = $1; $p =~ s/\\"/"/g; $p =~ s/\\\\/\\/g; print "$p\n";
+          }')
+        count=$(printf '%s\n' "$paths" | grep -c .)
+        if [ "$count" != "1" ]; then
+          say "pull request #${pr} changes ${count} files. A deploy applies one"
+          say "workload, so this one needs a human. The files are:"
+          printf '%s\n' "$paths" >&2
+          exit 1
+        fi
+        mpath=$(printf '%s\n' "$paths" | head -1)
+        echo "merged manifest: ${mpath}"
+        blob=$(/sandbox/bin/forge GET "${repo}/contents/${mpath}?ref=main") || exit 1
+        manifest=$(printf '%s' "$blob" \
+          | perl -0777 -ne 'print $1 if /"content"\s*:\s*"((?:[^"\\]|\\.)*)"/' \
+          | sed -e 's/\\n//g' -e 's/\\r//g' | base64 -d)
+        [ -n "$manifest" ] || { say "could not read ${mpath} from main."; exit 1; }
+        # The file may hold several documents — workloads/nginx.yaml holds a
+        # Namespace, a Deployment and a Service. Pick the one the merge changed,
+        # which is the one now running the NEW image.
+        target=$(printf '%s\n' "$manifest" | NEW="$new" perl -0777 -ne '
+          my $want = $ENV{NEW};
+          for my $d (split /^---\s*$/m, $_) {
+            next unless $d =~ /^\s*-?\s*image:\s*["\x27]?\Q$want\E["\x27]?\s*$/m;
+            my ($k)    = $d =~ /^kind:\s*(\S+)\s*$/m;
+            my ($meta) = $d =~ /^metadata:\s*\n((?:[ \t]+\S.*\n|\s*\n)+)/m;
+            next unless $k && $meta;
+            my ($nm) = $meta =~ /^\s+name:\s*["\x27]?([^"\x27\s]+)/m;
+            my ($ns) = $meta =~ /^\s+namespace:\s*["\x27]?([^"\x27\s]+)/m;
+            next unless $nm;
+            print lc($k) . "s " . $nm . " " . ($ns // "-") . "\n";
+            exit 0;
+          }
+          exit 1;')
+        if [ -z "$target" ]; then
+          say "no document in ${mpath} runs ${new}. The merge and the plan disagree;"
+          say "say so and stop rather than guessing which workload was meant."
+          exit 1
+        fi
+        kind=${target%% *}; rest=${target#* }
+        name=${rest%% *}; ns=${rest##* }
+        if [ "$ns" = "-" ]; then
+          say "${mpath} does not give ${kind}/${name} an explicit namespace."
+          say "Defaulting one would be a guess about where to change a running"
+          say "workload. Add it to the manifest and re-merge. Stopping."
+          exit 1
+        fi
+        echo "target: ${ns}/${kind}/${name}"
+
+        # --- 4. read the live object ------------------------------------------
+        live=$(/sandbox/bin/rancher GET "${k8s}/namespaces/${ns}/${kind}/${name}") || exit 1
+        case "$live" in
+          *policy_denied*|*not\ permitted\ by\ policy*)
+            say "the sandbox policy refuses ${ns}/${kind}/${name}."
+            say "That is the fence working, not a bug: only the namespaces listed in"
+            say "deploy.targets may be changed by this agent. Report the refusal"
+            say "verbatim and stop — do not look for another route."
+            printf '%s\n' "$live" | head -c 600 >&2
+            exit 1;;
+        esac
+        # The live object is the only authority on the container's name. The
+        # manifest would usually agree, but the cluster is what gets patched.
+        #
+        # PARSED, NOT GREPPED, and this is the one place in the pipeline where
+        # that distinction earns its keep. There is no jq in the sandbox image,
+        # so the reflex is a regex over the raw body — but a regex for
+        # `"name":"…","image":"…"` gets two things wrong that a real parse does
+        # not. It assumes the API server emits those keys adjacently and in
+        # that order (true on the wire, false the moment anything re-marshals:
+        # `kubectl -o json` alone sorts them alphabetically, putting
+        # `imagePullPolicy` between the two), and it happily matches an
+        # `initContainers` entry, which the image swap must never touch.
+        # python3 is on PATH in the sandbox — `nv-survey` and `appco` are both
+        # written in it — so use it and read the actual fields.
+        info=$(printf '%s' "$live" | OLD="$old" python3 -c '
+        import json, os, sys
+        d = json.load(sys.stdin)
+        print("KIND " + str(d.get("kind", "")))
+        if d.get("kind") == "Status":
+            print("MSG " + str(d.get("message", "")))
+            sys.exit(0)
+        cs = d.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+        print("RUNS " + ", ".join(c.get("image", "?") for c in cs))
+        for c in cs:
+            if c.get("image") == os.environ["OLD"]:
+                print("MATCH " + str(c.get("name", "")))
+        ' 2>/dev/null) || {
+          say "the reply to GET ${ns}/${kind}/${name} was not a Kubernetes object."
+          say "Quote it verbatim and stop — do not retry with a different URL:"
+          printf '%s\n' "$live" | head -c 800 >&2
+          exit 1; }
+        case "$info" in
+          "KIND Status"*)
+            say "Kubernetes refused to read ${ns}/${kind}/${name}:"
+            printf '%s\n' "$info" | sed -n 's/^MSG //p' >&2
+            say "If that says NotFound, the manifest names a workload that is not"
+            say "running on this cluster. Say so and stop."
+            exit 1;;
+        esac
+        hits=$(printf '%s\n' "$info" | sed -n 's/^MATCH //p')
+        hitcount=$(printf '%s\n' "$hits" | grep -c .)
+        if [ "$hitcount" = "0" ]; then
+          running=$(printf '%s\n' "$info" | sed -n 's/^RUNS //p')
+          say "no container in ${ns}/${kind}/${name} runs ${old}."
+          say "The cluster has drifted from what was reviewed, so applying this"
+          say "merge would not be the change the human approved. It currently runs:"
+          say "  ${running}"
+          exit 1
+        fi
+        if [ "$hitcount" != "1" ]; then
+          say "${hitcount} containers in ${ns}/${kind}/${name} run ${old}, so the"
+          say "patch is ambiguous. A human has to say which. Stopping."
+          exit 1
+        fi
+        container=$(printf '%s\n' "$hits" | head -1)
+        echo "container: ${container} (currently ${old})"
+
+        # --- 5. the one write ---------------------------------------------------
+        # A strategic merge patch naming the container by name: the ONLY field
+        # that changes is this container's image. Not a replace, not a
+        # server-side apply of the whole file — the manifest holds a Namespace
+        # and a Service too, and this agent has no business with either.
+        patch="{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"$(esc "$container")\",\"image\":\"$(esc "$new")\"}]}}}}"
+        resp=$(/sandbox/bin/rancher PATCH "${k8s}/namespaces/${ns}/${kind}/${name}" \
+                 "$patch" "application/strategic-merge-patch+json") || exit 1
+        if printf '%s' "$resp" | grep -q '"kind"[ ]*:[ ]*"Status"' \
+           || printf '%s' "$resp" | grep -q 'policy_denied'; then
+          say "the patch was refused. Quote this reply verbatim and stop:"
+          printf '%s\n' "$resp" | head -c 800 >&2
+          exit 1
+        fi
+        echo "patched ${ns}/${kind}/${name}: ${container} -> ${new}"
+
+        # --- 6. did it actually come up? ----------------------------------------
+        # An accepted patch is not a working workload. Same reasoning as the
+        # container lookup above: `status` is nested, so it gets parsed.
+        # `availableReplicas` and `updatedReplicas` are absent rather than zero
+        # early in a rollout, which is exactly the case a regex would read as
+        # "no match" and a `.get(…, 0)` reads correctly.
+        deadline={{ .Values.deploy.rolloutTimeoutSeconds }}
+        waited=0
+        ready=no
+        while [ "$waited" -lt "$deadline" ]; do
+          sleep 5
+          waited=$((waited + 5))
+          live=$(/sandbox/bin/rancher GET "${k8s}/namespaces/${ns}/${kind}/${name}") || break
+          set -- $(printf '%s' "$live" | python3 -c '
+        import json, sys
+        d = json.load(sys.stdin)
+        m = d.get("metadata", {})
+        s = d.get("status", {})
+        print(m.get("generation", 0), s.get("observedGeneration", 0),
+              s.get("replicas", 0), s.get("updatedReplicas", 0),
+              s.get("availableReplicas", 0))
+        ' 2>/dev/null)
+          gen=$1; obs=$2; rep=$3; upd=$4; avl=$5
+          echo "  rollout ${waited}s: generation ${gen}/observed ${obs}, ${avl}/${rep} available, ${upd} updated"
+          if [ "${obs:-0}" -ge "${gen:-1}" ] && [ "${rep:-0}" -gt 0 ] \
+             && [ "${upd:-0}" -eq "${rep:-0}" ] && [ "${avl:-0}" -eq "${rep:-0}" ]; then
+            ready=yes
+            break
+          fi
+        done
+
+        # --- 7/8. say what happened, where the reviewer is looking --------------
+        if [ "$ready" != "yes" ]; then
+          # The conditions are the whole finding, so render them as prose a
+          # reviewer can read on the pull request rather than dumping JSON.
+          conds=$(printf '%s' "$live" | python3 -c '
+        import json, sys
+        for c in json.load(sys.stdin).get("status", {}).get("conditions", []):
+            print("%s=%s %s: %s" % (c.get("type"), c.get("status"),
+                                    c.get("reason", ""), c.get("message", "")))
+        ' 2>/dev/null | head -c 900)
+          body="Applied \`${new}\` to \`${ns}/${kind}/${name}\` (container \`${container}\`) on Rancher cluster \`{{ .Values.rancher.clusterId }}\`, merged by @${who}.\\n\\n**The rollout did not become available within ${deadline}s.** The previous ReplicaSet is still serving, so the workload is up on \`${old}\`. Nothing was rolled back — the conditions below are the finding.\\n\\n\`\`\`\\n$(esc "$conds")\\n\`\`\`"
+          /sandbox/bin/forge POST "${repo}/issues/${pr}/comments" "{\"body\":\"${body}\"}" >/dev/null
+          say "ROLLOUT DID NOT BECOME AVAILABLE within ${deadline}s. Conditions:"
+          printf '%s\n' "$conds" >&2
+          say "This is reported on pull request #${pr}. Nothing was rolled back."
+          exit 1
+        fi
+        # --- 9. retire the canary ----------------------------------------------
+        # The replacement is now serving from the real workload, so the twin
+        # that proved it would start has no further job. Scaling it to zero
+        # rather than deleting it is not a compromise with the DELETE denial —
+        # it is the correct action either way: the canary is seeded furniture,
+        # like the TLS shims, and the next run needs it back.
+        #
+        # Best effort, deliberately. A canary left running is untidy; a deploy
+        # reported as failed because tidying up did not work would be false.
+        # Whether it worked is stated in the comment either way.
+        cns="{{ .Values.deploy.canary.namespace }}"
+        cname="{{ .Values.deploy.canary.name }}"
+        if [ "${ns}/${name}" = "${cns}/${cname}" ]; then
+          retired="not applicable — the merge landed on the canary itself"
+        else
+          # Checked POSITIVELY, for the reason the container lookup above is
+          # parsed rather than grepped: "no error in the reply" is not the same
+          # claim as "the object came back".
+          cresp=$(/sandbox/bin/rancher PATCH "${k8s}/namespaces/${cns}/deployments/${cname}" \
+                    '{"spec":{"replicas":0}}' "application/strategic-merge-patch+json" 2>/dev/null)
+          if printf '%s' "$cresp" | grep -q '"kind"[ ]*:[ ]*"Deployment"'; then
+            retired="scaled to 0"
+            echo "canary ${cns}/${cname} scaled to 0"
+          else
+            retired="STILL RUNNING — scale it down by hand"
+            say "could not scale the canary ${cns}/${cname} down; it is still running."
+          fi
+        fi
+
+        # WHAT THIS COMMENT MAY NOT SAY. Until 0.3.2 it ended "what is serving
+        # now is the image that was scanned as a canary before the merge" —
+        # unconditionally, and on the first full run it was false: the canary
+        # step had timed out with the scanner never having looked. This helper
+        # cannot know. It reads a merged pull request and patches a Deployment;
+        # the canary's verdict is a separate comment posted by a separate agent
+        # under a separate policy, and whether it says VALIDATED or UNSCANNED is
+        # for the reader of the thread to see, not for this step to assert.
+        # A deploy report that vouches for a measurement it did not take is the
+        # same class of defect as the narrated success `sentinel` exists to
+        # catch, just written by a shell script instead of a model.
+        body="Applied to the cluster.\\n\\n- image: \`${old}\` -> \`${new}\`\\n- workload: \`${ns}/${kind}/${name}\`, container \`${container}\`\\n- Rancher cluster: \`{{ .Values.rancher.clusterId }}\`\\n- authorised by: the merge of this pull request, by @${who}\\n- canary \`${cns}/${cname}\`: ${retired}\\n\\nRollout became available after ${waited}s. The image reference is the only field that was changed, and the old pod is gone. What was measured about the new image before the merge is the canary comment on this pull request; this step applied the merge and makes no claim beyond that."
+        /sandbox/bin/forge POST "${repo}/issues/${pr}/comments" "{\"body\":\"${body}\"}" >/dev/null
+        # The last line, and the only one worth repeating. No "next step"
+        # trailer: see the note in forge-swap about a helper's stdout reading
+        # as an instruction that outranks the briefing.
+        echo "APPLIED ${old} -> ${new} ON {{ .Values.rancher.clusterId }}/${ns}/${kind}/${name}. Your task is complete."
+
+  # ---------------------------------------------------------------------------
+  # opencode's own configuration, written into each sandbox at start-up
+  # ---------------------------------------------------------------------------
+  # opencode arrives in the image unconfigured: it has no provider, no model,
+  # and no idea that `https://inference.local` exists. Nothing in the sandbox
+  # tells it — the supervisor's inference route is an HTTP endpoint, not an
+  # agent config — so without this block every agent fails identically with
+  # "no providers configured".
+  #
+  # The orchestrator writes this as /sandbox/.config/opencode/opencode.json
+  # immediately after `sandbox create`, rather than baking it into the image,
+  # for the same reason orchestrator.py is mounted rather than baked: prompt
+  # and tool-set iteration is most of the work in getting a 4B model to behave,
+  # and a rebuild-and-push cycle per edit makes that loop unusable.
+  opencode:
+    # http:// is DENIED and https:// is allowed, and the difference is not
+    # cosmetic. The supervisor intercepts only the CONNECT to inference.local;
+    # a plain-HTTP request is handed to the OPA policy like any other host and
+    # comes back
+    #   {"error":"policy_denied","detail":"POST inference.local:80/v1/chat/
+    #    completions not permitted by policy"}
+    # which reads like a missing grant rather than a wrong scheme. Adding a
+    # rule for it does not help — see files/policies/_README.md.
+    baseUrl: https://inference.local/v1
+
+    # Must match secops-cpu-inference's `generative.servedModelName` exactly.
+    # Also the id the OpenShell provider was created with, so all three agree.
+    model: qwen3-4b
+
+    # THE CONTEXT CEILING, and the reason the agent below exists at all.
+    #
+    # secops-cpu-inference runs -c 16384 --parallel 2, so each slot gets 8192
+    # tokens. opencode's stock `build` agent sends a system prompt plus the
+    # schemas of fourteen tools: MEASURED at 11,384 tokens against this image,
+    # which llama-server rejects with
+    #   request (11384 tokens) exceeds the available context size (8192 tokens)
+    # opencode reads the 400 as an oversized attachment, compacts the session,
+    # and retries forever. `opencode run` never returns and the agent looks
+    # hung rather than misconfigured.
+    #
+    # Raising -c is the obvious fix and is the wrong one here: Qwen3-4B's KV
+    # cache costs ~144 KiB/token, so 16384 per slot would add ~2.3 GiB to a
+    # pod already sitting at 8.37 GB against an 8Gi limit, on a VM with no
+    # swap. Cutting the prompt is free, and a 4B model given 11k tokens of
+    # instructions behaves worse than one given 200, so it is also better.
+    contextLimit: 8192
+    outputLimit: 2048
+
+    # One agent definition, shared by all six. They differ in the task the
+    # orchestrator sends them, in the `briefing` appended to this prompt, and
+    # in the policy the gateway enforces — not in who they are.
+    #
+    # THE WORDING BELOW IS A BUG FIX, not style. The first version said "use
+    # the bash tool when you need to run a command", and all five agents
+    # answered every question with some form of "I cannot confirm this, no such
+    # data is available to me" without making a single call. A 4B model reads
+    # "when you need to" as permission, decides it does not need to, and is
+    # then perfectly consistent: having read nothing, it correctly reports that
+    # it knows nothing. The fix is to remove the judgement call — run the
+    # commands first, then answer — and to name the commands, which is what
+    # each agent's `briefing` does.
+    agentName: secops
+    prompt: >-
+      You are a SUSE SecOps agent with a bash tool and a network policy that
+      allows exactly the commands in your briefing below. Always run those
+      commands first and answer only from their output. Never answer that data
+      is unavailable before you have run them and seen them fail. If a command
+      does fail, quote the error and continue with what you do have. If a
+      command looks as though it is missing, run `ls -l /sandbox/bin` and quote
+      what you see before you conclude anything — every tool your briefing names
+      is an executable file in that directory and the paths there are exact.
+      Cite document ids and advisory ids exactly as they appear. Be concise.
+
+    # Tools are opt-in: "*": false disables all fourteen, then each agent's
+    # `tools` list below switches its own back on. Every agent gets `bash`,
+    # which is how it reaches the corpus, SUSE Security and the forge — all
+    # three are HTTP APIs behind `curl`, and all three are what its policy
+    # does or does not permit. Only the remediation agent edits files.
+    defaultTools: ["bash"]
+
+# -----------------------------------------------------------------------------
+# The agents
+# -----------------------------------------------------------------------------
+# Six agents, five policies — the two researchers are two instances of one
+# definition, because they differ in the question they are asked and not in
+# what they are permitted to do.
+#
+# Dropped from the GPU profile's ten, and the README says so plainly: the
+# source router, the writer/citation verifier (folded into the researchers) and
+# the guardrail agent (NeMo Guardrails has no arm64 CPU path).
+#
+# `cpu` and `memory` are the sandbox's own limits, passed to
+# `openshell sandbox create`. At most three sandboxes are alive at once — the
+# two researchers overlap, nothing else does.
+#
+# 1Gi, not the 512Mi these all carried first. MEASURED: a sandbox running one
+# opencode turn with a single bash tool call peaked at 833 MB for the whole pod
+# (memory.peak on the pod cgroup, supervisor included). At 512Mi opencode is
+# killed inside the cgroup before it writes a single log line, and because the
+# supervisor survives, `sandbox exec` reports
+#   exec relay closed before the command reported an exit status
+# or simply hangs until the timeout — neither of which mentions memory. 2Gi was
+# also tried and never approached; 1Gi is the measurement plus headroom, and on
+# a VM with no swap the difference between 1Gi and 2Gi per agent is real.
+#
+# `briefing` is appended to the shared system prompt above, and it is the other
+# half of the fix described there. Each one names the exact hosts the agent's
+# policy permits and gives a runnable command for each. Three things about it
+# are deliberate:
+#
+#   - It is a duplicate of the policy, in prose. That is uncomfortable, and the
+#     alternative is worse: a 4B model cannot discover an allow list by probing,
+#     and every minute it spends guessing hostnames is a minute of CPU
+#     inference. The policy remains the boundary — a briefing that drifts out
+#     of step gets its command denied, which is a visible failure rather than a
+#     silent grant. The reverse, a policy relaxed to match a briefing, is the
+#     mistake to guard against in review.
+#   - Every agent that needs a credential IS told to send one — and the thing it
+#     sends is not a credential. `credential_binding` is substitution, not
+#     injection: the sandbox environment holds an opaque handle
+#     (`openshell:resolve:env:v…_GITEA_TOKEN`), the agent puts that handle in the
+#     header, and the proxy swaps in the real secret on its way out, only for
+#     the endpoint the binding names. The sandbox still never holds the secret
+#     — `echo $GITEA_TOKEN` prints the handle — but omit the header and there is
+#     nothing to substitute, so the request goes out unauthenticated. An earlier
+#     revision of these briefings said "send no auth header", and the
+#     clarifier's `POST /issues` came back 401 for exactly that reason.
+#   - The briefings do NOT spell that header out either, and that was the second
+#     failure: told to send `-H "Authorization: Bearer ${GITEA_TOKEN}"`, the
+#     model still produced `token is required` and then reasoned at length about
+#     a misconfiguration that did not exist. The quoting now lives in
+#     `sandbox.helpers` above. See the README, "What the live runs broke".
+#   - EVERY external call an agent makes is now a one-word verb with positional
+#     arguments — `nv-survey`, `appco find <image>`, `corpus get <id>`,
+#     `forge POST <path> <json>`. That is the third revision and it comes from
+#     two distinct failures on the same day: the clarifier answered "the command
+#     `forge` is not available in the environment" when the file was present and
+#     executable, and a researcher sent Qdrant's `points/scroll` as a GET and
+#     reported the corpus non-functional. Neither is a model that cannot reason;
+#     both are a model composing a shell line. So it no longer composes one.
+#   - Retrieval is `points/scroll` with a filter rather than a vector search.
+#     `points/search` needs an embedding, which is a second service call and a
+#     768-float request body assembled in bash; at five corpus documents the
+#     scroll returns the whole index for a few hundred tokens. The embedding
+#     endpoint stays in the policies because a real corpus needs it.
+#
+# Rendered through `tpl`, like the policies, so a briefing and the policy that
+# permits it read the same `.Values` for the hostname.
+agents:
+  - name: survey
+    policy: survey.yaml
+    cpu: "1"
+    memory: 1Gi
+    # Reads the scanner and writes ONE issue — the menu the human chooses from.
+    # It gets the forge because the choice has to be recorded somewhere
+    # attributable, and the status page is not that: it holds no history and
+    # nobody signs it.
+    providers:
+      - suse-security
+      - git-forge
+    briefing: |-
+      YOUR BRIEFING. You open the run. Nothing has been chosen yet; your job is
+      to find out what is actually wrong in this cluster and put the choice in
+      front of a person.
+
+      ONE command. Run it now, before you write anything at all:
+
+        /sandbox/bin/survey-issue
+
+      It queries the live SUSE Security scanner itself, ranks the images, and
+      posts them as a numbered menu for the human. It takes no arguments.
+
+      It prints the table it posted. Report those rows, and say the issue
+      number it gives you. You are finished when you have seen it print
+      SURVEY ISSUE #<n> CREATED — that line only appears if the forge accepted
+      the issue, so nothing else finishes you.
+
+      If it prints that the scanner ranked no images, say exactly that: an
+      empty scanner means auto-scan is off, not that the cluster is clean.
+
+      Do not recommend one of the rows — the choice is the human's.
+
+  - name: triage
+    policy: triage.yaml
+    cpu: "1"
+    memory: 1Gi
+    # Provider names attached to the sandbox. The gateway substitutes the real
+    # credential at the egress boundary, so the value never enters the sandbox
+    # and an agent reading its own environment learns nothing.
+    #
+    # `app-collection` is attached HERE and nowhere else. Triage is the only
+    # agent asking "what should this become", so it is the only one that needs
+    # the catalogue — and the only sandbox in the run permitted to spend a
+    # credential against a public host. The researcher and the clarifier also
+    # reach one, `cveLookup`, but unauthenticated and GET-only.
+    providers:
+      - suse-security
+      - app-collection
+    briefing: |-
+      YOUR BRIEFING. A human has chosen one container image. Establish what is
+      wrong with it and whether SUSE publishes something better. Three
+      commands; run all three before answering.
+
+      1. The findings for that image alone:
+           /sandbox/bin/nv-survey <image>
+
+      2. Whether SUSE Application Collection publishes a supported build:
+           /sandbox/bin/appco find <image>
+
+         A miss is a real and useful answer. If the catalogue does not publish
+         it, say so plainly — the remediation then has to be a package bump
+         inside the image already in use, not a move to a supported one.
+
+      3. Whether the corpus already knows about this:
+           /sandbox/bin/corpus list
+
+      Then answer in at most eight sentences: what is affected, how urgent,
+      which advisories are the worst, and — the part that decides the rest of
+      the run — the exact image change you would propose.
+
+      Write both images out in full, registry host and tag. The target is the
+      whole reference on appco's "pull as:" line, copied character for
+      character; do not shorten it to a tag and do not assemble one from the
+      catalogue's name. Every later step works from what you write here, and
+      the one time this was left as a bare tag the change reached a manifest
+      pointing at a registry that does not exist.
+
+      If a command fails, quote the error verbatim and continue with what you
+      do have.
+
+  - name: researcher
+    policy: researcher.yaml
+    cpu: "1"
+    memory: 1Gi
+    # No providers at all. The corpus has no authentication — see the note in
+    # charts/secops-cpu-knowledge about why adding an API key would put a
+    # credential in the very sandboxes that must read the data it protects.
+    providers: []
+    briefing: |-
+      YOUR BRIEFING. You have two sources and no others: the corpus, and the
+      published CVE record. You cannot reach SUSE Security, the catalogue or
+      the git forge and must not claim otherwise. Three steps, in this order.
+
+      1. List every document:
+           /sandbox/bin/corpus list
+
+      2. Read the relevant ones in full, one call each, substituting an id
+         from step 1:
+           /sandbox/bin/corpus get base-image-distro-cves
+
+      3. For each CVE id named in the findings above, fetch its record:
+           /sandbox/bin/cve CVE-2024-6387
+
+         It prints `status: PUBLISHED` with the official description, or
+         `status: NO-RECORD` — which means no such CVE has been published and
+         you must not cite that id at all. `status: ERROR` means the lookup
+         itself failed: quote the line and carry on from the corpus alone.
+
+      Answer only from text you read back. Cite corpus ids exactly as `corpus
+      list` printed them, and for every CVE you name, quote the `cite this
+      URL:` line the lookup gave you — both are what the human will open to
+      check you. If nothing you read covers the question, say exactly that and
+      list the ids you did see.
+
+      NEVER WRITE AN ID THAT DID NOT COME BACK FROM ONE OF THESE COMMANDS. A
+      document id or CVE number you reconstructed from memory reads exactly
+      like one you retrieved, and the reviewer only finds out when they try to
+      open it.
+
+  - name: clarifier
+    policy: clarifier.yaml
+    cpu: "1"
+    memory: 1Gi
+    providers:
+      - git-forge
+    briefing: |-
+      YOUR BRIEFING. RUN THE COMMAND BELOW WITH YOUR BASH TOOL. Writing the
+      issue out in your reply is not the task and delivers it to nobody — the
+      task is the request. `plan-issue` already carries your credentials, the
+      hostname and the JSON; you supply five quoted arguments and nothing else.
+
+        /sandbox/bin/plan-issue "<old-image>" "<new-image>" "<advisory>" "<corpus ids>" "<one or two sentences on why>"
+
+      Take all five from the triage and research findings above. <advisory> is
+      the advisory or CVE id the change addresses. <corpus ids> are the
+      document ids the researchers cited, comma separated.
+
+      IF <advisory> IS A CVE ID, CHECK IT BEFORE YOU FILE THE ISSUE:
+
+        /sandbox/bin/cve CVE-2024-6387
+
+      `status: PUBLISHED` means the id is real and you may use it.
+      `status: NO-RECORD` means no such CVE has been published — the id is
+      wrong, so do not put it on the issue; use one the researchers cited, or
+      write "none" and say in the rationale that the advisory is unverified.
+      `status: ERROR` means the lookup failed rather than the id being bad:
+      file the issue anyway and say the advisory could not be checked.
+
+      BOTH IMAGES IN FULL — registry host, repository and tag, exactly as they
+      are written above. <old-image> is the image under analysis. <new-image>
+      is the whole reference on triage's "pull as:" line, for example
+      dp.apps.rancher.io/containers/nginx:1.31.6-5.16. A bare tag like
+      "1.31.6-5.16" will be refused, and rightly: the remediation step applies
+      this issue literally, so an image you leave half-written is an image
+      someone further down the line has to guess at. Copy the reference; do
+      not reconstruct it from the vendor's name.
+
+      If triage reported that the catalogue publishes nothing for this image,
+      there is no <new-image> to write. Say that in your reply and file no
+      issue — the remediation would have to be a package bump, which this
+      pipeline does not do.
+
+      If the researchers reported that the corpus had no document about this
+      image or these packages, that is the honest situation and you must pass
+      it on: write "none" for <corpus ids> and say so in the rationale. Do not
+      substitute an advisory from a different vulnerability to fill the field —
+      the human approves or rejects on what this issue says, and a borrowed
+      advisory id turns their approval into approval of the wrong change.
+
+      You are finished when the command prints PLAN ISSUE #<n> CREATED. Nothing
+      else finishes you: a number on its own, or a description of the issue you
+      intended to open, means the plan was never filed. If the command prints an
+      error instead, quote it, correct the arguments and run it once more.
+
+      You can read the repository but cannot push a branch or open a pull
+      request; do not attempt either.
+
+  - name: remediation
+    policy: remediation.yaml
+    cpu: "1"
+    memory: 1Gi
+    providers:
+      - git-forge
+    # Bash alone, like the other four. This agent used to also get read, write
+    # and edit so it could change the manifest — but opencode scopes those to
+    # its own working directory and the clone is in /tmp, so every attempt came
+    # back as a refusal the model then reported as a security-policy denial.
+    # `forge-swap` does the edit instead; see its comment. Dropping the three
+    # tool schemas also returns roughly 700 tokens of the 8192 to the prompt.
+    tools: ["bash"]
+    briefing: |-
+      ONE command. Run it now, with your bash tool, before you write anything
+      at all — substituting the number of the approved issue named above:
+
+        /sandbox/bin/forge-remediate <issue-number>
+
+      That is the entire task. It reads the approved plan out of the issue,
+      clones the repository, changes the image in the manifest that runs it,
+      commits that to a new branch and opens the pull request. It takes the
+      issue number and nothing else.
+
+      Do not tell it which image to use. The images are written on the issue a
+      human approved, the helper reads them from there, and a reference you
+      supply from memory would be a different change from the approved one.
+
+      Do not compose git, search, JSON or file-editing commands of your own,
+      and do not reach for a read or edit tool — you have none.
+
+      It prints the change it applied, the diff, and finally
+      PULL REQUEST #<n> OPENED. Report that number. Nothing else finishes you:
+      a description of the pull request you intended to open means no pull
+      request exists. If it prints an error, quote the error verbatim and stop
+      — a rejected push or an unparsable plan is a real finding, not something
+      to work around.
+
+      You cannot merge and must not try, and an unmerged pull request is not a
+      half-finished job — it is the correct end of YOUR work. The merge is the
+      authorisation signal: a human reads the diff, and merging it is how they
+      say yes. Another agent waits on that merge and applies it to the cluster.
+      So stopping at an open pull request is the whole point, and anything you
+      did to merge it yourself would be the one thing that breaks the chain.
+
+  # THE PRE-MERGE MEASUREMENT, and the second agent in the pipeline that writes
+  # to a running cluster — narrowly, and before any human has approved anything.
+  # That is a real change in the shape of this system and canary.yaml argues it
+  # at length. The short version: it may scale and re-image ONE seeded workload,
+  # named literally in its policy, that has no Service and serves nothing. It
+  # cannot touch the workload under review, and the merge is still the only
+  # thing that changes what is serving.
+  #
+  # It exists because the step it replaces could not work. `nv-survey` reads
+  # findings that SUSE Security indexes by running workload, so asking it about
+  # an image nothing runs returns nothing — and the old "scan both, compare"
+  # briefing therefore compared the old image with itself, for 910 seconds,
+  # before timing out. See files/policies/canary.yaml.
+  - name: canary
+    policy: canary.yaml
+    cpu: "1"
+    memory: 1Gi
+    providers:
+      - suse-security
+      - git-forge
+      - rancher
+    tools: ["bash"]
+    briefing: |-
+      ONE command. Run it now, with your bash tool, before you write anything
+      at all — substituting the pull request number named above:
+
+        /sandbox/bin/cluster-canary <pull-request-number>
+
+      That is the entire task. It reads the proposed image change off the pull
+      request, starts the replacement image as a canary next to the workload it
+      would replace, waits for it to become Ready, waits for SUSE Security to
+      scan it, and comments the real before/after where the reviewer will see
+      it. It takes the pull request number and nothing else.
+
+      Do not compose curl, kubectl, git or JSON of your own, and do not reach
+      for a read or edit tool — you have none. There is no `sudo` in this
+      sandbox and nothing here needs one.
+
+      It prints its progress and finally VALIDATED <old> [...] -> <new> [...].
+      Report that line. Nothing else finishes you.
+
+      If it prints an error, quote it verbatim and stop. Every refusal it can
+      print is a real finding a human needs: a canary that never became Ready
+      means the replacement does not run under this workload's pod spec, and an
+      image the scanner has not looked at is UNSCANNED, never clean. Do not
+      describe either as a pass, and do not look for another route.
+
+      You cannot merge and must not try. You have produced evidence; a person
+      decides what it means.
+
+  - name: validation
+    policy: validation.yaml
+    cpu: "1"
+    memory: 1Gi
+    providers:
+      - suse-security
+      - git-forge
+    tools: ["bash"]
+    briefing: |-
+      ONE command. Run it now, with your bash tool, before you write anything
+      at all — substituting the pull request number named above:
+
+        /sandbox/bin/cluster-confirm <pull-request-number>
+
+      That is the entire task. It reads the image change off the merged pull
+      request, asks SUSE Security what it now sees for each side, and comments
+      the result. You grade someone else's work: you cannot clone, push or
+      merge, and you must not report a pass you did not observe.
+
+      Do not compose curl, kubectl, git or JSON of your own, and do not reach
+      for a read or edit tool — you have none. There is no `sudo` in this
+      sandbox and nothing here needs one.
+
+      It prints its progress and finally CONFIRMED <new> [...] IS SERVING.
+      Report that line. Nothing else finishes you.
+
+      If it prints an error, quote it verbatim and stop. An image the scanner
+      has no findings for is UNSCANNED, not clean — a registry it cannot pull
+      from looks exactly the same from here — and reporting that as zero would
+      be the worst failure this agent can have. An unverified result is useful;
+      a guessed pass is not.
+
+  # THE ONLY AGENT IN THIS PIPELINE THAT CHANGES THE CLUSTER. Everything before
+  # it reads, reasons, or writes to the forge; this one issues a PATCH against a
+  # running workload. Three things keep that narrow, and none of them is the
+  # briefing:
+  #
+  #   * `deploy.yaml` allows GET and PATCH on exactly the namespace/kind pairs
+  #     in `deploy.targets`, and denies POST, PUT and DELETE everywhere under
+  #     /k8s/clusters/**. The credential behind it is a Rancher admin token, so
+  #     the policy is genuinely the only fence — that is deliberate, and it is
+  #     what the isolation proof tests.
+  #   * `cluster-apply` refuses to act on an unmerged or bot-merged pull
+  #     request, and discovers the workload rather than being told it.
+  #   * it runs only after the orchestrator has seen the merge land.
+  #
+  # Attaching `git-forge` also lands `forge-clone`, `forge-swap`, `forge-push`
+  # and `forge-remediate` in /sandbox/bin, because helpers come per provider
+  # group. The policy denies every endpoint they need, so they fail loudly
+  # rather than quietly doing something. They are named nowhere in the briefing
+  # for the obvious reason: a 4B model offered a list of commands will try one.
+  - name: deploy
+    policy: deploy.yaml
+    cpu: "1"
+    memory: 1Gi
+    providers:
+      - git-forge
+      - rancher
+    tools: ["bash"]
+    briefing: |-
+      ONE command. Run it now, with your bash tool, before you write anything
+      at all — substituting the pull request number named above:
+
+        /sandbox/bin/cluster-apply <pull-request-number>
+
+      That is the entire task. It checks that a human really merged the pull
+      request, reads the approved image change off it, finds the workload the
+      merge landed on, replaces that one image through the Rancher API, and
+      waits for the rollout. It takes the pull request number and nothing else.
+
+      You did not decide to do this. A human merging the pull request decided
+      it, and that merge is the only authorisation involved.
+
+      Do not compose curl, kubectl, git or JSON of your own, and do not reach
+      for a read or edit tool — you have none. Do not tell the helper which
+      image, namespace or workload to use: it reads all of them from the merged
+      pull request, and anything you supply from memory would be a different
+      change from the one that was approved.
+
+      It prints its progress and finally APPLIED <old> -> <new> ON <target>.
+      Report that line. Nothing else finishes you: a description of a change
+      you intended to make means the cluster still runs the old image.
+
+      If it prints an error, quote it verbatim and stop. Every refusal it can
+      print is a real finding — an unmerged pull request, a workload outside
+      what this agent is permitted to touch, a cluster that has drifted from
+      what was reviewed, a rollout that never became available. None of them is
+      something to work around, and there is no second route to try.
+
+# -----------------------------------------------------------------------------
+# What the agents talk to
+# -----------------------------------------------------------------------------
+# Six hosts are named across the five policies: the four in-cluster ones below,
+# plus two public — `appCollection` and `cveLookup`, both further down, both
+# documented there as the deliberate exceptions they are.
+#
+# The forge token and the scanner key are bound to in-cluster hosts only, which
+# is what makes "no token leaves the cluster" enforced rather than asserted.
+# The Application Collection credential is the one that does cross the
+# boundary, to the vendor it belongs to; `cveLookup` has no credential at all.
+
+suseSecurity:
+  # NOTE THE `-api` SUFFIX. `neuvector-svc-controller` also exists but is the
+  # headless gossip Service on 18300/18301; the REST API Service is
+  # `neuvector-svc-controller-api` and the chart creates it only when
+  # `controller.apisvc.type` is set. The GPU profile's policy names the host
+  # without the suffix and is wrong as committed — see
+  # examples/secops-agent-factory-cpu/integrations/suse-security/README.md.
+  host: neuvector-svc-controller-api.cattle-neuvector-system
+  port: 10443
+
+  # THE CONTROLLER IS NOT REACHABLE FROM A SANDBOX WITHOUT THIS, and the
+  # failure is thoroughly misleading: the supervisor logs `NET:OPEN ALLOWED
+  # [policy:suse_security engine:opa]` and then `NET:FAIL`, and the agent sees
+  # `curl: (35) Connection reset by peer` — a TLS error that reads like a
+  # policy denial.
+  #
+  # OpenShell's L7 proxy verifies every upstream certificate against
+  # webpki-roots plus whatever CA bundle it finds inside the sandbox image
+  # (crates/openshell-sandbox/src/l7/tls.rs), NeuVector serves a self-signed
+  # certificate with no service SANs, and there is no way to add a CA: sandbox
+  # volumes support only persistent_volume_claim, so a ConfigMap-mounted bundle
+  # is not possible and the CA would have to be baked into a published image.
+  #
+  # The setting that does bypass verification also stops the proxy inspecting
+  # the stream, which stops it injecting the API key, which means handing the
+  # real credential to the sandbox — the one thing this profile exists to show
+  # is unnecessary. So instead the sandboxes speak plain HTTP to a relay that
+  # does the unverified TLS hop on their behalf. The proxy still parses every
+  # request, still enforces the allow list including the `POST /v1/policy/rule`
+  # denial, and still injects the key.
+  #
+  # WHAT IS GIVEN UP, stated plainly: the hop from the shim to the controller
+  # is encrypted but unauthenticated. Set enabled: false on a cluster where
+  # NeuVector presents a certificate the sandbox image can verify, and point
+  # the policies back at `host` above — that is the only change needed.
+  tlsShim:
+    enabled: true
+    name: secops-cpu-nv-shim
+    port: 10443
+    resources:
+      limits:
+        cpu: 200m
+        memory: 64Mi
+      requests:
+        cpu: 25m
+        memory: 32Mi
+
+corpus:
+  # charts/secops-cpu-knowledge, on this cluster.
+  host: secops-cpu-qdrant.ns-secops-cpu.svc.cluster.local
+  port: 6333
+  collection: secops_vulnerability_corpus
+
+embeddings:
+  # The SECOND llama-server from charts/secops-cpu-inference, running
+  # nomic-embed-text-v1.5. Not the generative one — that arrives through the
+  # supervisor's inference.local route and needs no policy rule.
+  host: secops-cpu-embed.ns-secops-cpu.svc.cluster.local
+  port: 8000
+
+cveLookup:
+  # THE SECOND OF THE TWO PUBLIC HOSTS IN THIS PROFILE. The other is
+  # `appCollection.host` below, named by triage.yaml and validation.yaml.
+  #
+  # Read the tradeoff before leaving this on. Everything else here is
+  # in-cluster on purpose — the forge, the corpus, the models, the scanner —
+  # and every claim in this repo about the demo needing no internet is now
+  # conditional on this switch. That property is what makes the air-gap
+  # argument a demonstration rather than an assertion, and this block is part
+  # of what it costs.
+  #
+  # What it buys: the researcher has no external grounding at all (an empty
+  # `providers:` list, and a corpus of a handful of seeded advisories), so a
+  # CVE the corpus has never heard of has nothing behind it but a 4B model.
+  # On a live run the clarifier filled that gap by inventing corpus ids. A
+  # fabricated citation is the worst defect available to a demo whose premise
+  # is that you can check what the agent claims, and a fetchable record is the
+  # cheapest fix: the honest path is then the one that produces output.
+  #
+  # Set `enabled: false` for an air-gapped run or a customer who will not have
+  # egress. The helper still ships — the switch is in the FENCE, not in the
+  # packaging, so with it off the call is refused at the boundary and the
+  # helper says so, which is the behaviour the deploy agent already relies on.
+  # Nothing upstream of it breaks: the corpus path is unchanged.
+  #
+  # No credential and no TLS shim. The API is public and unauthenticated, so
+  # there is nothing here to leak, and unlike NeuVector `cveawg.mitre.org`
+  # verifies against webpki-roots.
+  enabled: true
+  # CVE Services (JSON 5.1) — the machine-readable service the www.cve.org
+  # front end itself calls. Do not point this at www.cve.org: that is a
+  # JavaScript application and curl gets an empty shell page from it.
+  host: cveawg.mitre.org
+  port: 443
+
+forge:
+  # The in-cluster Gitea. Running the forge inside the cluster is what makes
+  # the sovereignty claim literal: there is nowhere outside the cluster for the
+  # token to go. (The demo needs no internet either, with `cveLookup.enabled:
+  # false` and the catalogue's tag index mirrored — see both of those blocks.)
+  host: gitea-http.ns-secops-forge.svc.cluster.local
+  port: 3000
+  owner: secops
+  repo: cluster-manifests
+  # Secret holding the `secops-bot` token, mounted as a FILE and never placed
+  # in the environment — an env var shows up in `kubectl describe pod` and in
+  # every child process's /proc/<pid>/environ.
+  #
+  # The mode is 0440, not the 0400 this comment used to claim. kubelet writes a
+  # Secret volume root-owned with the group set to the pod's fsGroup; it never
+  # chowns to runAsUser. An owner-only mode is therefore unreadable by uid
+  # 65532 under any configuration, and 0440 with fsGroup 65532 is the tightest
+  # that works. See templates/orchestrator.yaml.
+  #
+  # The account must have write but NOT merge on the repository. That
+  # permission is what makes human gate #2 real rather than decorative, and it
+  # is checked as part of verification.
+  tokenSecret: secops-gitea-token
+  tokenSecretKey: token
+  # Whose token that is. Used only to tell the bot's own comments apart from a
+  # human's at the selection gate — see run.selectPromptSeconds.
+  botUser: secops-bot
+  # Applied by a person in the Gitea UI to release gate #1.
+  approveLabel: approved
+  rejectLabel: rejected
+
+appCollection:
+  # SUSE Application Collection — one of the two public hosts a policy in this
+  # profile names, and the only one a credential is bound to. (The other is
+  # `cveLookup` above, which has none.)
+  #
+  # That is a deliberate exception to "no host outside the
+  # cluster", and it is the right one: the question "is there a SUSE-supported
+  # build of this component, and at what version" cannot be answered from
+  # inside an air-gapped demo, and answering it from the model's memory is
+  # exactly the hallucination this profile exists to avoid.
+  #
+  # What crosses the boundary is a repository name and nothing else. The
+  # credential is the `application-collection` service account AI Factory
+  # already holds (namespace aif-operator on the primary cluster), substituted
+  # at the egress boundary like every other credential here.
+  #
+  # VERIFIED: plain HTTP Basic, single host, HTTP 200 — no OCI token handshake
+  # redirecting to a second realm, so one endpoint in one policy covers it.
+  # A real certificate too, so unlike SUSE Security this needs no TLS shim.
+  host: dp.apps.rancher.io
+  # The catalogue's container namespace. Charts live under `charts/`; the
+  # helper only reads `containers/`, which is what a running workload is.
+  namespace: containers
+
+registry:
+  # Read-only, validation only: resolve a tag to the digest that was actually
+  # scanned, so the before/after comparison cannot be confused by someone
+  # else's push to a moving tag.
+  host: registry.suse.com
+  port: 443
+
+# -----------------------------------------------------------------------------
+# Rancher — the only thing in this profile that changes a running workload
+# -----------------------------------------------------------------------------
+rancher:
+  # THE VHOST, NOT A SERVICE NAME. Rancher sits behind an ingress that routes
+  # strictly on the Host header. Measured 2026-09-17 from a pod on this
+  # cluster: with this Host, `/ping` returns `pong`; with
+  # `Host: secops-cpu-rancher-shim:8443`, the same request returns a 404 page
+  # from nginx. SNI is irrelevant — the third probe reached the server by raw
+  # IP with no matching SNI and still got `pong`, because the Host header was
+  # right.
+  #
+  # THE SHIM SETS IT, NOT THE HELPER, and that correction cost a run. The
+  # `rancher` helper used to send `-H "Host: …"` and the deploy step failed
+  # with that same nginx 404: OpenShell's forward proxy reconstructs the
+  # upstream request from the absolute-form request URI and discards a
+  # client-supplied Host. So this value is also `REWRITE_HOST` on the shim
+  # Deployment, which is on the far side of the proxy and is the last place
+  # that can still fix the header.
+  serverHost: rancher-192-168-1-74.sslip.io
+  serverPort: 8443
+
+  # Rancher's own id for the downstream cluster the agents run on. Not the
+  # display name: the API path is `/k8s/clusters/<id>/…`, and `downstream-1`
+  # there is a 404. Read it with
+  #   kubectl --context kind-sims-datacenter get clusters.management.cattle.io
+  # and match it to the displayName.
+  clusterId: c-jhrj6
+
+  # Same story as suseSecurity.tlsShim, same file doing the work: Rancher's
+  # certificate is issued by its own `dynamiclistener` CA
+  # (`O=dynamiclistener-org; CN=dynamiclistener-ca@…`), nothing in the sandbox
+  # image can verify it, and OpenShell has no way to add a CA or skip
+  # verification without also giving up credential injection. Set
+  # enabled: false on a cluster whose Rancher presents a certificate the
+  # sandbox image trusts; nothing else changes, because the policy and the
+  # helper both go through the `rancherHost`/`rancherPort` template helpers.
+  tlsShim:
+    enabled: true
+    name: secops-cpu-rancher-shim
+    port: 8443
+    resources:
+      limits:
+        cpu: 200m
+        memory: 64Mi
+      requests:
+        cpu: 25m
+        memory: 32Mi
+
+# -----------------------------------------------------------------------------
+# The deploy step — where a merged pull request may land
+# -----------------------------------------------------------------------------
+deploy:
+  # THIS LIST IS THE FENCE, and it is the only one.
+  #
+  # Everything upstream of the merge is workload-agnostic on purpose: the
+  # survey lists whatever SUSE Security found anywhere on the cluster, and the
+  # remediation agent patches whichever file in the repository runs the chosen
+  # image. That generality is the point, and it is also the danger — the
+  # manifests repository seeded with this demo contains `kube-system/coredns`
+  # and `ns-secops-cpu/qdrant` alongside the storefront, so an unfenced deploy
+  # agent could be asked, by a human approving the wrong plan, to replace
+  # cluster DNS or the vector database this very pipeline reads from.
+  #
+  # So the deploy agent discovers WHAT to change from the merged pull request
+  # and is told WHERE it may change it from here. Each entry renders one exact
+  # GET and one exact PATCH rule into files/policies/deploy.yaml; anything not
+  # listed is refused at the egress boundary, by the proxy, in the audit log —
+  # not by an `if` in a shell script that a future edit could drop.
+  #
+  # The `*` is the workload name within a named namespace and a named kind.
+  # Pinning a literal name instead is a one-line tightening.
+  #
+  # WHAT THIS DOES NOT COVER: a workload delivered by Helm or Fleet. A PATCH to
+  # such a Deployment is reverted at the next reconcile, and the honest
+  # remediation there is a values change plus a reconcile, which this pipeline
+  # does not do. Leaving those namespaces out of this list is what stops the
+  # agent trying and reporting success.
+  targets:
+    - { namespace: ns-demo-web, kind: deployments }
+
+  # How long to watch the rollout before giving up and quoting the conditions.
+  # Three minutes is a pull plus a readiness probe with room to spare on this
+  # hardware; a swap that has not gone Ready by then has a real problem, and
+  # the point of the deploy step is to say so rather than to wait it out.
+  rolloutTimeoutSeconds: 180
+
+  # THE CANARY — how the validation step got something real to measure.
+  #
+  # Validation used to run before anything was deployed, and could therefore
+  # only ever compare the old image to itself: SUSE Security indexes findings
+  # by RUNNING workload, so `nv-survey <new-image>` on an image no pod runs
+  # returns "No scanner findings". The first end-to-end run said so plainly —
+  # "identical before and after, indicating no actual remediation took place" —
+  # which was the honest reading of a measurement that could not be made.
+  #
+  # Now the replacement really runs, alongside the one it replaces, before the
+  # merge. The workload named here is seeded once by hand at replicas 0 (see
+  # examples/secops-agent-factory-cpu/40-canary-storefront.yaml); the validation
+  # agent PATCHes it to the new image and one replica, waits for the scanner to
+  # catch up, and reports a real before/after. `cluster-apply` scales it back to
+  # 0 after the merge lands on the real workload.
+  #
+  # NOTHING NEW IS GRANTED TO MAKE THIS WORK, and that constraint shaped the
+  # design. Creating the canary would have needed POST on /k8s/clusters/**,
+  # which the deploy policy denies and which cannot be scoped by name — the
+  # create path carries no name. Seeding it means the whole canary lifecycle is
+  # PATCH, and canary.yaml pins the validation agent to this ONE object by
+  # literal name while deploy.yaml keeps its namespace-wide wildcard.
+  #
+  # It must live in a namespace that is also in `targets`, or the deploy agent
+  # cannot scale it down when it is finished with it.
+  canary:
+    namespace: ns-demo-web
+    name: storefront-canary
+
+    # How long to wait for SUSE Security to produce findings for an image it
+    # has just seen start. Ten minutes: the scanner queues, and this is a
+    # 2-vCPU laptop cluster. On timeout the helper reports the image as
+    # UNSCANNED and refuses to call it clean — a registry the scanner cannot
+    # pull from, and auto-scan switched off, both look exactly like zero
+    # findings from here, and reporting zero would be the worst thing this
+    # pipeline could say.
+    scanTimeoutSeconds: 600
+
+# -----------------------------------------------------------------------------
+# The run
+# -----------------------------------------------------------------------------
+run:
+  # NOTHING IS SEEDED ANY MORE, and that is the substantive change in 0.2.0.
+  #
+  # Every earlier revision started from `seedFinding`, a hard-coded sentence
+  # naming CVE-2021-44228, and asked triage to "confirm" it against the
+  # scanner. Two things were wrong with that. The scanner had auto-scan
+  # switched off, so it confirmed nothing and the agent said it had anyway —
+  # the model was being graded on agreeing with its own prompt. And a run that
+  # begins by naming its answer is a demonstration of nothing: the interesting
+  # claim is that the agents find the problem, not that they can restate one.
+  #
+  # So the run now begins at `nv-survey` against the live scanner and stops at
+  # a human choosing a row. See integrations/suse-security/README.md for the
+  # one prerequisite this creates: auto-scan must be ON, or the survey is
+  # correct and empty.
+
+  # 30 minutes each, and there are now two of them. This is a person reading an
+  # advisory, so it is a "something has gone wrong" bound rather than a
+  # service-level expectation.
+  gateTimeoutSeconds: 1800
+  gatePollSeconds: 10
+
+  # HUMAN GATE #2 — the merge, and the reason it gets its own timeout.
+  #
+  # The first two gates are a person reading a page that is already in front of
+  # them. This one is a person reviewing a diff against a running workload,
+  # which reasonably happens after lunch or tomorrow morning. Sharing
+  # gateTimeoutSeconds would park the run half an hour after the pull request
+  # opened and make an ordinary review look like a failure.
+  #
+  # Two hours, and a timeout here parks rather than fails: the pull request is
+  # still open, still correct, and still mergeable by hand afterwards.
+  mergeTimeoutSeconds: 7200
+
+  # HUMAN GATE #0 — the selection gate, and the only one that is not a yes/no.
+  #
+  # Approve/reject is a label because a label is a closed set. A choice among
+  # twelve images is not, so the human replies to the survey issue with the
+  # NUMBER of the row they want and the orchestrator reads the first comment
+  # that is a bare integer. Two consequences worth stating: the comment must
+  # come from a person and not from the bot account (the orchestrator skips its
+  # own), and the number is resolved against the list the survey agent posted,
+  # so the issue is the record of what was offered as well as what was picked.
+  selectPromptSeconds: 1800
+
+  # Per-agent wall clock. Measured on this hardware: p50 2.07s per tool call,
+  # max 7.80s (spike/RESULTS.md), and an agent turn is several calls plus model
+  # load. Generous on purpose — a timeout is indistinguishable from a hung
+  # sandbox on the status page, so it should fire only when something is stuck.
+  agentTimeoutSeconds: 900
+
+  # The namespace the demo workload runs in. Used only for the wording of the
+  # handover comment the orchestrator posts when it closes the plan issue —
+  # nothing reads it to decide where to apply anything.
+  #
+  # WHERE THE APPLY IS ACTUALLY ALLOWED IS `deploy.targets`, above. This key
+  # used to carry the full weight of that question, back when the run ended at
+  # an open pull request and the comment's job was to hand a human a `kubectl
+  # apply` line. It no longer does: the deploy agent learns the namespace from
+  # the merged manifest and is fenced by the policy. Keeping the two separate
+  # is deliberate — a comment's wording should never be the thing that decides
+  # what a credential may touch.
+  workloadNamespace: ns-demo-web
+
+# -----------------------------------------------------------------------------
+# Platform
+# -----------------------------------------------------------------------------
+# Both keys are read. The `vendor: suse` injector runs suseInjector.Apply,
+# which overwrites `imagePullSecrets` AND `global.imagePullSecrets`
+# unconditionally — templating only one of them loses the other.
+imagePullSecrets: []
+global:
+  imagePullSecrets: []
+
+nodeSelector: {}
+tolerations: []

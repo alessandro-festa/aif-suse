@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""Offline stub harness for the `cluster-confirm` helper.
+
+Same shape as the two harnesses next to it — render the helper out of
+values.yaml as Helm would, point it at stubs, assert on every arm. Read
+cluster-apply-stub-test.py first; only what differs is explained here.
+
+What differs is that this step runs LAST, after the merge, and its only
+product is a sentence on the pull request. Nothing it does can be undone by
+noticing later that it was wrong, so the sentence has to be true. There are
+four ways for it to be wrong and this suite holds all four apart:
+
+  * the new image is scanned and clean            -> CONFIRMED
+  * the new image is not scanned                  -> Unverified
+  * the scanner would not answer about the new one -> Could not verify
+  * the scanner would not answer about the OLD one -> Could not verify
+
+The last is the one worth a harness. This step reads the absence of findings
+for the old image as "the old image is gone from the cluster" — which is the
+correct reading after a merge, and a false pass if the reason there are no
+findings is that the query failed. Before the `status:` contract the two were
+the same empty string. Scenario six is that regression, pinned.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+import yaml
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+CHART = os.path.join(REPO_ROOT, "charts", "secops-cpu-agents")
+OWNER, REPO = "secops", "cluster-manifests"
+OLD = "docker.io/library/nginx:1.31.6"
+NEW = "dp.apps.rancher.io/containers/nginx:1.31.6-5.16"
+BEFORE = "critical=27 high=107 medium=94 low=31"
+AFTER = "critical=0 high=0 medium=0 low=2"
+
+TMP = tempfile.mkdtemp(prefix="cluster-confirm-test-")
+BIN = os.path.join(TMP, "bin")
+NV_STATE = os.path.join(TMP, "nv.json")
+
+STATE = {}
+
+
+class Stub(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):  # noqa: A002 - stdlib signature
+        pass
+
+    def _send(self, code, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _route(self):
+        p = self.path.split("?")[0]
+        n = int(self.headers.get("content-length") or 0)
+        raw = self.rfile.read(n).decode() if n else ""
+        base = f"/api/v1/repos/{OWNER}/{REPO}"
+
+        if p == f"{base}/pulls/1":
+            return self._send(200, STATE["pr"])
+        if p.startswith(f"{base}/issues/1/comments"):
+            # Strict, as in the sibling harnesses: every comment here
+            # interpolates scanner text into a JSON body, and the real forge
+            # answers 400 and drops the comment on a malformed one.
+            try:
+                STATE.setdefault("comments", []).append(json.loads(raw)["body"])
+            except Exception as exc:
+                STATE["bad_json"] = f"{exc}: {raw[:400]}"
+                return self._send(400, {"message": "invalid JSON"})
+            return self._send(201, {"id": 1})
+        return self._send(404, {"message": "no stub route for " + p})
+
+    def do_GET(self):
+        self._route()
+
+    def do_POST(self):
+        self._route()
+
+
+def render_helper():
+    v = yaml.safe_load(open(os.path.join(CHART, "values.yaml")))
+    body = v["sandbox"]["helpers"]["suse-security"]["cluster-confirm"]
+    sub = {".Values.forge.owner": OWNER, ".Values.forge.repo": REPO}
+
+    def r(m):
+        b = m.group(1).strip()
+        for k in sub:
+            if k in b:
+                return sub[k]
+        raise SystemExit("unmapped template expression: " + b)
+
+    return re.sub(r"\{\{(.*?)\}\}", r, body).replace("/sandbox/bin", BIN)
+
+
+def write_shims(port):
+    os.makedirs(BIN, exist_ok=True)
+    p = os.path.join(BIN, "forge")
+    with open(p, "w") as fh:
+        fh.write(
+            "#!/bin/sh\n"
+            'method="$1"; path="$2"; body="$3"\n'
+            'set -- -s -X "$method"\n'
+            '[ -n "$body" ] && set -- "$@" -H "content-type: application/json" -d "$body"\n'
+            f'exec curl "$@" "http://127.0.0.1:{port}${{path}}"\n'
+        )
+    os.chmod(p, 0o755)
+
+    # nv-survey, reduced to the three outcomes this helper branches on. It
+    # ends every single-image run in exactly one `  status: ` line — SCANNED
+    # (with `  counts: `), NOT-SCANNED, or ERROR <kind>. `_error` fails every
+    # call; `_error_for` narrows it to one image, which is how the old-image
+    # regression is reproduced without also breaking the new-image query.
+    p = os.path.join(BIN, "nv-survey")
+    with open(p, "w") as fh:
+        fh.write(f'''#!/usr/bin/env python3
+import json, sys
+state = json.load(open({NV_STATE!r}))
+want = sys.argv[1] if len(sys.argv) > 1 else None
+err, only = state.get("_error"), state.get("_error_for")
+if err and (only is None or (want and only in want)):
+    print("  status: ERROR %s - %s" % (err, "stub failure for " + str(want)))
+    sys.stderr.write("nv-survey:  status: ERROR %s\\n" % err)
+    sys.exit(3)
+hits = [k for k in state if not k.startswith("_") and want and want in k]
+if not hits:
+    print("No scanner findings for an image matching %r." % want)
+    print("  status: NOT-SCANNED")
+    sys.exit(0)
+for img in hits:
+    print(img)
+    print("  namespaces: ns-demo-web")
+    print("  status: SCANNED")
+    print("  counts: " + state[img])
+    print("  [critical] CVE-2025-0001  fix: libfoo 1.0->1.1")
+''')
+    os.chmod(p, 0o755)
+
+
+MERGED_PR = {"state": "closed", "merged": True,
+             "body": f"Closes #9.\nChange: {OLD} -> {NEW}\n\nMERGE IS THE AUTHORISATION."}
+
+SCENARIOS = [
+    ("a PR body with no Change: line leaves nothing to confirm",
+     dict(pr={**MERGED_PR, "body": "Closes #9. Bumps the image."}),
+     "nothing to confirm", 1),
+    ("the happy path: the new image is scanned and the old one is gone",
+     dict(nv={NEW: AFTER}), "CONFIRMED", 0),
+    ("the old image still being reported is said so, not hidden",
+     dict(nv={OLD: BEFORE, NEW: AFTER}), "CONFIRMED", 0),
+    ("a new image the scanner has nothing on is UNSCANNED, not clean",
+     dict(nv={}), "UNSCANNED, not clean", 1),
+    ("a scanner that will not answer about the NEW image is a broken rescan",
+     dict(nv={NEW: AFTER, "_error": "AUTH", "_error_for": NEW}), "broken rescan", 1),
+    # THE REGRESSION. Both these scenarios leave the old image with no counts;
+    # only one of them means the image is gone.
+    ("a scanner that will not answer about the OLD image is not 'the old image is gone'",
+     dict(nv={NEW: AFTER, "_error": "POLICY-DENIED", "_error_for": OLD}),
+     "broken rescan", 1),
+]
+
+SEEN = {}
+
+
+def run():
+    port = 18802
+    srv = HTTPServer(("127.0.0.1", port), Stub)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    write_shims(port)
+    script = render_helper()
+    path = os.path.join(TMP, "cluster-confirm")
+    with open(path, "w") as fh:
+        fh.write(script)
+    os.chmod(path, 0o755)
+
+    failures = 0
+    for title, over, expect, want_rc in SCENARIOS:
+        STATE.clear()
+        STATE.update(pr=MERGED_PR, nv={NEW: AFTER}, comments=[])
+        STATE.update(over)
+        with open(NV_STATE, "w") as fh:
+            json.dump(STATE["nv"], fh)
+
+        p = subprocess.run([path, "1"], capture_output=True, text=True, timeout=120)
+        out = p.stdout + p.stderr
+        ok = (p.returncode == want_rc) and (expect in out)
+        print(("  PASS  " if ok else "  FAIL  ") + title)
+        if not ok:
+            failures += 1
+            print(f"        wanted rc={want_rc} and {expect!r}; got rc={p.returncode}")
+            print("        " + out.strip().replace("\n", "\n        ")[:1500])
+            continue
+        if STATE.get("bad_json"):
+            failures += 1
+            print("  FAIL  ^ the comment body was not valid JSON")
+            print("        " + STATE["bad_json"])
+            continue
+
+        if want_rc == 0:
+            c = STATE["comments"][0]
+            assert AFTER in c, c
+            # The step's own question, answered either way but never skipped.
+            if OLD in STATE["nv"]:
+                assert "No — " in c and "still reported" in c, c
+                assert BEFORE in c, c
+                print("        old image still present, and the comment says so")
+            else:
+                assert "Yes — " in c and "no longer reports" in c, c
+                print("        old image gone, on a measurement and not an absence")
+
+        if expect == "UNSCANNED, not clean":
+            c = STATE["comments"][0]
+            SEEN["unscanned"] = c
+            assert "**Unverified.**" in c, c
+            assert "indistinguishable from a clean one" in c, c
+            print("        reported as unverified, not as zero findings")
+
+        if expect == "broken rescan":
+            c = STATE["comments"][0]
+            # THE DELIVERABLE, same as in the canary suite: an unanswered
+            # query and an unscanned image must not read alike, because the
+            # reviewer has a different thing to go and fix.
+            assert "Could not verify" in c, c
+            assert "**Unverified.**" not in c, c
+            assert SEEN["unscanned"] != c
+            assert "nothing below should be read as a measurement" in c, c
+            # And in neither direction does it reach the "old image gone"
+            # sentence, which is what an empty counts string used to buy.
+            assert "no longer reports" not in c, c
+            assert "CONFIRMED" not in out, out
+            print("        no verdict claimed in either direction")
+
+    srv.shutdown()
+    print()
+    print("all scenarios passed" if not failures else f"{failures} FAILED")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    shutil.rmtree(BIN, ignore_errors=True)
+    sys.exit(run())

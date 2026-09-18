@@ -1,0 +1,135 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: secops-cpu-workflow
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-agents.labels" . | nindent 4 }}
+data:
+  # The orchestrator and its status page are mounted, not baked into the image.
+  # Prompt iteration is most of the work in getting a 4B model to behave, and a
+  # rebuild-and-push cycle per prompt edit would make that loop unusable. The
+  # image supplies the one thing a ConfigMap cannot: the `openshell` CLI binary.
+  orchestrator.py: |
+    {{- .Files.Get "files/orchestrator.py" | nindent 4 }}
+  status.html: |
+    {{- .Files.Get "files/status.html" | nindent 4 }}
+  # Mounted by the TLS shim Deployment, for the same reason: it is a second
+  # stdlib-only script on the same image, and a change to it should roll the
+  # pod through the checksum annotation rather than need a rebuild.
+  tls-shim.py: |
+    {{- .Files.Get "files/tls-shim.py" | nindent 4 }}
+  # The agent roster, rendered from .Values.agents so that adding an agent is a
+  # values edit rather than a code edit. The orchestrator reads it at start-up
+  # and fails loudly if a named policy file is missing.
+  #
+  # Each entry also carries `opencodeConfig`: the complete opencode.json that
+  # the orchestrator writes into that agent's sandbox before running it. It is
+  # assembled here rather than in Python so that the model id, the base URL and
+  # the context ceiling come from the same values as everything else, and so a
+  # reviewer can read the rendered JSON with `helm template`.
+  agents.json: |
+    {{- $oc := .Values.sandbox.opencode -}}
+    {{- $agents := list -}}
+    {{- range .Values.agents -}}
+    {{- /*
+        Tools are opt-in. "*": false turns off all fourteen of opencode's
+        built-ins — together they cost more context than this server has —
+        and each name in `tools` switches exactly one back on.
+    */ -}}
+    {{- $tools := dict "*" false -}}
+    {{- range (.tools | default $oc.defaultTools) -}}
+    {{- $_ := set $tools . true -}}
+    {{- end -}}
+    {{- /*
+        The system prompt is the shared one plus this agent's briefing, through
+        `tpl` so a briefing can name the same `.Values` hostname its policy
+        does. Six prompts from one template: what differs between agents is the
+        list of commands they are permitted to run, which is the only thing
+        that differs between their policies either.
+    */ -}}
+    {{- $prompt := $oc.prompt -}}
+    {{- if .briefing -}}
+    {{- $prompt = printf "%s\n\n%s" $oc.prompt (tpl .briefing $) -}}
+    {{- end -}}
+    {{- $config := dict
+          "$schema" "https://opencode.ai/config.json"
+          "provider" (dict "llamacpp" (dict
+            "npm" "@ai-sdk/openai-compatible"
+            "name" "llama.cpp"
+            "options" (dict "baseURL" $oc.baseUrl "apiKey" "unused")
+            "models" (dict $oc.model (dict
+              "name" $oc.model
+              "limit" (dict "context" (int $oc.contextLimit) "output" (int $oc.outputLimit))))))
+          "model" (printf "llamacpp/%s" $oc.model)
+          "small_model" (printf "llamacpp/%s" $oc.model)
+          "instructions" (list)
+          "agent" (dict $oc.agentName (dict
+            "mode" "primary"
+            "model" (printf "llamacpp/%s" $oc.model)
+            "prompt" $prompt
+            "tools" $tools)) -}}
+    {{- /*
+        The helpers this agent gets. The CREDENTIALED ones are derived from the
+        providers it attaches rather than listed per agent, so there is no
+        second place to forget to update and an agent cannot be handed a tool
+        for a credential it was never given. `common` is added to everyone and
+        holds only the corpus reader, which needs no credential at all.
+
+        Through `tpl`, like the briefings, because each helper hard-codes the
+        host its credential is bound to.
+    */ -}}
+    {{- $helpers := dict -}}
+    {{- range $file, $body := (index $.Values.sandbox.helpers "common" | default dict) -}}
+    {{- $_ := set $helpers $file (tpl $body $) -}}
+    {{- end -}}
+    {{- range .providers | default list -}}
+    {{- range $file, $body := (index $.Values.sandbox.helpers . | default dict) -}}
+    {{- $_ := set $helpers $file (tpl $body $) -}}
+    {{- end -}}
+    {{- end -}}
+    {{- $agents = append $agents (dict
+          "name" .name
+          "policy" .policy
+          "cpu" (.cpu | toString)
+          "memory" .memory
+          "providers" (.providers | default list)
+          "helpers" $helpers
+          "command" (concat $.Values.sandbox.command (list "--agent" $oc.agentName))
+          "opencodeConfig" $config) -}}
+    {{- end }}
+    {{- $agents | toPrettyJson | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: secops-cpu-agent-policies
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secops-cpu-agents.labels" . | nindent 4 }}
+  annotations:
+    ai-factory.suse.com/description: >-
+      The security boundary of the zero-GPU profile. One OpenShell sandbox
+      policy per agent; everything not granted here is denied.
+data:
+  # Rendered through `tpl` because two hostnames — the SUSE Security controller
+  # API and the in-cluster forge — depend on the namespaces this chart and its
+  # siblings are installed into. Everything else in these files is literal.
+  #
+  # Review the RENDERED policy, not the source:
+  #   helm template . | yq 'select(.metadata.name == "secops-cpu-agent-policies") | .data'
+  #
+  {{- range $path, $_ := .Files.Glob "files/policies/*.yaml" }}
+  {{ base $path }}: |
+    {{- tpl ($.Files.Get $path) $ | nindent 4 }}
+  {{- end }}
+  # `_README.md` ships alongside them: it is the map of what the five files are
+  # for and which capability each one withholds, and a reviewer who execs in to
+  # read a policy should find it next to them rather than have to go back to
+  # the chart source.
+  #
+  # NOT through `tpl`, unlike the policies. It documents the templating by
+  # quoting `{{ "{{ .Values.… }}" }}`, and tpl would try to execute the
+  # example — which fails, because prose is not a Go template.
+  _README.md: |
+    {{- .Files.Get "files/policies/_README.md" | nindent 4 }}

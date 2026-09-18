@@ -214,7 +214,15 @@ network_policies:
   suse_security:
     name: suse-security
     endpoints:
-      - host: neuvector-svc-controller.cattle-neuvector-system
+      # NOTE THE `-api` SUFFIX. `neuvector-svc-controller` also exists and is
+      # the obvious guess, but it is the HEADLESS gossip Service on
+      # 18300/18301; the REST API lives on `neuvector-svc-controller-api`. The
+      # chart creates that Service only when `controller.apisvc.type` is set,
+      # which it is not by default — so a cluster can have NeuVector running
+      # and still have no host for this rule to resolve. Found by installing it
+      # for real; see examples/secops-agent-factory-cpu/integrations/
+      # suse-security/README.md.
+      - host: neuvector-svc-controller-api.cattle-neuvector-system
         port: 10443
         protocol: rest
         enforcement: enforce

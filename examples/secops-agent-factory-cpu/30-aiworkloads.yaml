@@ -1,0 +1,127 @@
+# The install set — what the Rancher install wizard would produce for each
+# Blueprint, in dependency order.
+#
+# DO NOT APPLY THIS FILE AS ONE UNIT. `kubectl apply -f` submits all three at
+# once and they have hard ordering constraints: the gateway must exist before a
+# workspace grants it authority over a namespace, and the agent plane's gateway
+# configuration is validated at first use rather than at startup — install it
+# first and you get a system that looks healthy and fails on the first sandbox.
+# Apply one document, wait for it to be Ready, apply the next.
+#
+# APPLY ALL OF THIS TO sims-datacenter, the Rancher local cluster. These are
+# operator CRs, and the operator runs on local; downstream-1 has no Blueprint
+# or AIWorkload CRD at all. What sends the workload downstream is
+# targetClusters, not where the YAML is applied.
+#
+# TARGET IS downstream-1, NOT `local`. Every other committed AIWorkload in this
+# repository uses targetClusters: ["local"]; this profile is the exception,
+# because downstream-1 is the cluster with the memory rather than the cluster
+# with Rancher on it. Two consequences follow, and both bite silently:
+#
+#   - the HelmOp lands in **fleet-default**, not fleet-local
+#   - the operator appends the Fleet cluster ID to the instance name
+#
+#   kubectl get clusters.management.cattle.io   # confirm c-jhrj6 is downstream-1
+#
+# WORKLOAD NAMES ARE GLOBAL WITHIN A FLEET WORKSPACE. The HelmOp is named
+# "<aiworkload-name>-<chartName>", so the AIWorkload's own namespace is NOT
+# part of the name and two AIWorkloads sharing a name collide on one HelmOp
+# regardless of where they live. Hence the "secops-cpu-" prefix on all three.
+#
+# THERE IS NO WORKSPACE BLUEPRINT IN THIS DIRECTORY, deliberately. Document 2
+# below installs examples/openshell/20-blueprint-openshell-workspace.yaml
+# unchanged: that blueprint pins nothing namespace-specific — the tenant
+# namespace comes from the AIWorkload's targetNamespace — so a copy here would
+# be byte-identical, and the copy that drifts is the one somebody reads. Apply
+# it from there:
+#
+#   kubectl --context=kind-sims-datacenter apply -f ../openshell/20-blueprint-openshell-workspace.yaml
+#
+# The gateway blueprint IS copied, at 10-blueprint-openshell-gateway.yaml,
+# because it has one genuine delta: sandboxImagePullPolicy. See its header.
+#
+# BEFORE ANY OF THIS — see README.md. The namespaces, the workspace label, the
+# agent-sandbox CRDs, the SUSE Security federation and two Secrets must all be
+# in place, and each omission fails in its own unhelpful way.
+#
+# spec.componentValues is NOT read on the Blueprint path; the operator takes
+# values from the Blueprint CR only. To change a value, author a new Blueprint
+# version rather than adding overrides here.
+#
+# STATUS: UNAPPLIED. Nothing in this file has been installed on a cluster yet.
+# ---------------------------------------------------------------------------
+
+# 1. The gateway. Once per cluster, pinned to the `openshell` namespace by the
+#    Blueprint regardless of what is set here.
+#
+#    IF A GATEWAY IS ALREADY INSTALLED on downstream-1 from
+#    examples/openshell/, do not apply this — upgrade that AIWorkload's
+#    blueprint version to 0.2.3 instead. Both versions pin the same release
+#    name in the same namespace, so two AIWorkloads would fight over one Helm
+#    release.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: AIWorkload
+metadata:
+  name: secops-cpu-openshell-gateway
+  namespace: openshell
+spec:
+  displayName: SecOps CPU OpenShell Gateway
+  source:
+    sourceType: Blueprint
+    blueprint:
+      name: openshell-gateway
+      version: 0.2.3
+  targetNamespace: openshell
+  targetClusters: ["c-jhrj6"]
+  deployStrategy: FleetBundle
+---
+# 2. The workspace, from examples/openshell/20-blueprint-openshell-workspace.yaml
+#    (apply that Blueprint first — see the header).
+#
+#    The namespace name BECOMES the OpenShell workspace name, and it must match
+#    orchestrator.gateway.workspace in blueprint 20. It must also already carry
+#    the label the gateway watches:
+#
+#      kubectl label namespace ns-secops-sandboxes \
+#        ai-factory.suse.com/openshell-workspace=true
+#
+#    A missing label is the single most common cause of `sandbox create`
+#    failing with an error that never mentions labels.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: AIWorkload
+metadata:
+  name: secops-cpu-openshell-ws
+  namespace: ns-secops-sandboxes
+spec:
+  displayName: SecOps CPU OpenShell Workspace
+  source:
+    sourceType: Blueprint
+    blueprint:
+      name: openshell-workspace
+      version: 0.2.0
+  targetNamespace: ns-secops-sandboxes
+  targetClusters: ["c-jhrj6"]
+  deployStrategy: FleetBundle
+---
+# 3. The stack. targetNamespace is ns-secops-cpu, but the Gitea component
+#    overrides it to ns-secops-forge — both namespaces must exist first.
+#
+#    The orchestrator will CrashLoopBackOff until the two Secrets it mounts
+#    exist (openshell-client-tls, copied from the gateway's namespace, and
+#    secops-gitea-token, which cannot be made until Gitea is up and seeded).
+#    That is expected and is not a symptom of anything else.
+apiVersion: ai-factory.suse.com/v1alpha1
+kind: AIWorkload
+metadata:
+  name: secops-cpu-agent-factory
+  namespace: ns-secops-cpu
+spec:
+  displayName: SecOps Agent Factory CPU
+  source:
+    sourceType: Blueprint
+    blueprint:
+      name: secops-agent-factory-cpu
+      version: 0.1.0
+  targetNamespace: ns-secops-cpu
+  targetClusters: ["c-jhrj6"]
+  deployStrategy: FleetBundle
