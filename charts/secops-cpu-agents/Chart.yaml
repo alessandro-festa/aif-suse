@@ -5,7 +5,7 @@ annotations:
       name: orchestrator
 apiVersion: v2
 name: secops-cpu-agents
-version: 0.3.3
+version: 0.3.5
 description: |
   Agent plane for the Sovereign Agentic SecOps zero-GPU profile: an orchestrator
   that drives one OpenShell sandbox per specialist agent, the seven per-agent

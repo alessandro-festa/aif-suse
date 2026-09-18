@@ -198,6 +198,21 @@ sandbox:
           printf '%s\n' "$out" | perl -pe '
             s/"id":"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}",//g;
             s/,"id":"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}"//g;'
+          # THE CITATION LINE, AND WHY IT SAYS WHAT IT SAYS.
+          #
+          # `cve` ends every record with `cite this URL: https://www.cve.org/…`,
+          # and a run watched that idiom generalise: the plan issue came out
+          # carrying `Cite this URL: https://corpus.suse.com/corpus/base-image-
+          # distro-cves` for a corpus document. That host does not exist. The
+          # model was not hallucinating a fact, it was copying a format from the
+          # one helper that prints URLs onto the one source that has none.
+          #
+          # So the corpus prints its own citation form, and prints it as loudly
+          # as `cve` prints the other. The UUID fix above is the same move made
+          # once before: you do not resolve an ambiguity at 4B by explaining it
+          # in the briefing, you make the honest form the one on screen.
+          printf '%s\n' "  cite this document as: corpus document $2"
+          printf '%s\n' "  it has no URL. Only /sandbox/bin/cve prints a URL; never write one for a corpus document."
           exit 0
         fi
         printf '%s' "$out" | perl -ne '
@@ -220,6 +235,7 @@ sandbox:
             print "    ", join(", ", @e), "\n" if @e;
           }
           print "\n$n documents. The id is the first line of an entry; read one with: corpus get <id>\n";
+          print "Cite a document as: corpus document <id>. The corpus has no URL; never write one for it.\n";
         '
       cve: |
         #!/usr/bin/env python3
@@ -418,24 +434,56 @@ sandbox:
         # falls out, and it is the more useful half of the lesson above: do not
         # give this model a second errand. Where two calls are unavoidable, put
         # the one that must not be skipped first.
+        esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+        pre=""
         if [ "$#" -eq 0 ]; then
+          raw=/tmp/.survey-raw
           rows=/tmp/.survey-rows
+          # Captured to a file and read twice, rather than piped. nv-survey
+          # pages the whole vulasset set and is the slowest call in the step, so
+          # it runs once; and its provenance header is printed once, at the top,
+          # where piping straight into perl threw it away.
+          /sandbox/bin/nv-survey > "$raw" || { rm -f "$raw"; exit 1; }
           # nv-survey prints an entry as two lines — `[N] <image>` then an
           # indented `critical=.. high=.. medium=.. low=..   namespaces: ..`.
           # Pair them, and keep the counts but not the namespaces, which is the
           # row text the menu wants.
-          /sandbox/bin/nv-survey | perl -ne '
+          perl -ne '
             if (/^\[\d+\]\s+(\S+)/) { $img = $1; next }
             if ($img && /^\s+(critical=\d+\s+high=\d+\s+medium=\d+\s+low=\d+)/) {
               print "$img - $1\n"; $img = "";
             }
-          ' > "$rows" || { rm -f "$rows"; exit 1; }
+          ' < "$raw" > "$rows"
           [ -s "$rows" ] || {
-            rm -f "$rows"
+            rm -f "$raw" "$rows"
             echo "nv-survey ranked no images, so there is no menu to post." >&2
             echo "Report that verbatim: an empty scanner means auto-scan is" >&2
             echo "off, not that the cluster is clean." >&2
             exit 1; }
+          # WHICH SCANNER SAID SO. There are two NeuVector installs here, one
+          # per cluster, never federated, and a count is not a measurement until
+          # it names the controller it came from and says whether that
+          # controller is scanning at all. nv-survey prints those three lines
+          # and, until now, nothing carried them anywhere a human looks: this
+          # agent is stopped the moment the helper reports, so its stdout is
+          # discarded and replaced by a placeholder, and the issue is the only
+          # surface left.
+          #
+          # A bullet list, not a code fence — a backtick inside this
+          # double-quoted string would be command substitution, and a list is
+          # the cheapest thing that keeps one fact per line through markdown.
+          # No line here begins with a number, so `_survey_options` still parses
+          # exactly the menu and nothing else.
+          pre=$(grep -E '^(SUSE Security|auto-scan \(containers\)|registered scanners):' "$raw" \
+                | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/- /' \
+                | awk '{ printf "%s\\n", $0 }')
+          if [ -n "$pre" ]; then
+            pre="Scanned by:\\n\\n${pre}\\n"
+          fi
+          if grep -q '^auto-scan (containers): false' "$raw"; then
+            pre="${pre}**AUTO-SCAN IS OFF ON THIS CONTROLLER**, so every count below it is meaningless: an image nothing has scanned cannot be told apart from an image with nothing wrong with it. That is the finding - do not pick a target from this menu until it is back on.\\n\\n"
+          fi
+          rm -f "$raw"
           # Split on newlines only, so a row keeps its spaces and becomes one
           # argument; -f because an image reference must never be globbed.
           # IFS is built with printf rather than written as a quoted literal
@@ -446,8 +494,7 @@ sandbox:
           IFS=$OLDIFS; set +f
           rm -f "$rows"
         fi
-        esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
-        n=0; body=""
+        n=0; body="$pre"
         for row in "$@"; do
           n=$((n + 1))
           body="${body}${n}. $(esc "$row")\\n"
@@ -836,7 +883,25 @@ sandbox:
         # invisible to the human reading this pull request, so the artefact has
         # to say what merging MEANS. Before this text existed the pipeline
         # stopped at an open PR and simply looked finished.
-        json="{\"title\":\"Bump ${eold} to ${enew}\",\"head\":\"${branch}\",\"base\":\"main\",\"body\":\"Closes #${issue}.\\nChange: ${eold} -> ${enew}\\n\\nApplies the change approved on that issue: \`${eold}\` -> \`${enew}\`.\\nThe image reference is the only edit; no other field is touched.\\n\\n**MERGING THIS IS THE AUTHORISATION.** Nothing in the cluster has changed. On merge, the deploy agent replaces this one image on the workload this file describes, through the Rancher API, and does nothing else. If you do not want that, close this pull request instead.\\n\\nThe bot cannot merge it: \`main\` is protected and the sandbox policy denies the merge endpoint.\"}"
+        # AND THE HOLD, WHICH IS THE THIRD THING THIS BODY HAS TO CARRY.
+        #
+        # The pull request opens BEFORE the canary runs. For the minutes in
+        # between, the artefact a reviewer is looking at is complete, plausible
+        # and unmeasured — every argument for the change is on it and no
+        # evidence is. A reviewer who merges in that window has approved a
+        # rebase on the strength of a 4B model's prose, which is the one
+        # decision this whole pipeline exists to avoid asking them to make.
+        #
+        # Branch protection cannot express "not yet": it knows who may merge,
+        # not when. So the hold is written where the reviewer is looking, at
+        # the top, and `cluster-canary` lifts it by appending its comparison as
+        # a comment. The evidence and the permission arrive together.
+        #
+        # ASCII ONLY, and this is not style. See the base64 note above: a
+        # request body with non-ASCII bytes does not survive the proxy, and the
+        # failure is a push that works while a POST does not. No arrows, no
+        # symbols, no smart quotes.
+        json="{\"title\":\"Bump ${eold} to ${enew}\",\"head\":\"${branch}\",\"base\":\"main\",\"body\":\"Closes #${issue}.\\nChange: ${eold} -> ${enew}\\n\\n**DO NOT MERGE YET.** No scan has been run against \`${enew}\` at the time this was opened, so nothing here is evidence yet -- it is a proposal with a rationale.\\n\\nThe canary step runs next, on its own: it starts \`${enew}\` beside the running workload, has SUSE Security scan both, and appends the before-and-after comparison to this pull request as a comment. **Merge only once that comment is here and you have read it.** If it never arrives, or it reports ERROR or UNSCANNED, the change is unverified and merging it is a guess.\\n\\nApplies the change approved on that issue: \`${eold}\` -> \`${enew}\`.\\nThe image reference is the only edit; no other field is touched.\\n\\n**MERGING THIS IS THE AUTHORISATION.** Nothing in the cluster has changed. On merge, the deploy agent replaces this one image on the workload this file describes, through the Rancher API, and does nothing else. If you do not want that, close this pull request instead.\\n\\nThe bot cannot merge it: \`main\` is protected and the sandbox policy denies the merge endpoint.\"}"
         pr=$(/sandbox/bin/forge POST "${repo}/pulls" "$json") || exit 1
         num=$(printf '%s' "$pr" | sed -n 's/.*"number"[ ]*:[ ]*\([0-9]\{1,\}\).*/\1/p' | head -1)
         if [ -z "$num" ]; then
@@ -1466,7 +1531,7 @@ sandbox:
         # Reused from the poll above rather than re-queried: nv-survey pages the
         # whole vulasset set on every invocation, and this is the same answer.
         detail=$(printf '%s\n' "$safter" | head -c 1200)
-        body="**Both images are running on this cluster right now, and both numbers below were measured.**\\n\\n| | image | findings |\\n|---|---|---|\\n| serving | \`${old}\` | \`${before}\` |\\n| canary | \`${new}\` | \`${after}\` |\\n\\nThe replacement was started as \`${cns}/${cname}\`, a copy of the storefront pod spec with a different name and no Service, and became available after ${waited}s. It takes no traffic. The workload under review has not been changed by anything in this pipeline.\\n\\nSo this is a measurement and not a claim about a registry: the new image really starts under the pod spec it will inherit, and the scanner really sees what is in it.\\n\\n**Merging this pull request is the authorisation to promote it.** On merge, the deploy agent replaces the image on the running workload and scales the canary back to zero.\\n\\n<details><summary>scanner detail for the canary</summary>\\n\\n\`\`\`\\n$(esc "$detail")\\n\`\`\`\\n</details>"
+        body="**Both images are running on this cluster right now, and both numbers below were measured.**\\n\\n| | image | findings |\\n|---|---|---|\\n| serving | \`${old}\` | \`${before}\` |\\n| canary | \`${new}\` | \`${after}\` |\\n\\nThe replacement was started as \`${cns}/${cname}\`, a copy of the storefront pod spec with a different name and no Service, and became available after ${waited}s. It takes no traffic. The workload under review has not been changed by anything in this pipeline.\\n\\nSo this is a measurement and not a claim about a registry: the new image really starts under the pod spec it will inherit, and the scanner really sees what is in it.\\n\\n**This is the comment the pull request told you to wait for, so the hold is lifted.** \`forge-remediate\` opens every pull request saying DO NOT MERGE YET, because at that moment nothing has been measured; the table above is the measurement, and it is now here.\\n\\n**Merging this pull request is the authorisation to promote it.** On merge, the deploy agent replaces the image on the running workload and scales the canary back to zero.\\n\\n<details><summary>scanner detail for the canary</summary>\\n\\n\`\`\`\\n$(esc "$detail")\\n\`\`\`\\n</details>"
         comment "$body"
         # The last line, and the only one worth repeating. No "next step"
         # trailer — see the note in forge-swap.
@@ -2064,6 +2129,13 @@ agents:
       like one you retrieved, and the reviewer only finds out when they try to
       open it.
 
+      THE SAME RULE FOR URLS, AND IT IS THE ONE THAT HAS ALREADY BEEN BROKEN.
+      `cve` is the only command here that prints a URL. A corpus document has
+      none — cite it as `corpus document <id>` and stop there. A previous run
+      wrote `https://corpus.suse.com/corpus/base-image-distro-cves` into a plan
+      issue by copying the CVE format onto a corpus id; no such host exists,
+      and a link that 404s is worse than no link, because it looks checked.
+
   - name: clarifier
     policy: clarifier.yaml
     cpu: "1"
@@ -2080,7 +2152,12 @@ agents:
 
       Take all five from the triage and research findings above. <advisory> is
       the advisory or CVE id the change addresses. <corpus ids> are the
-      document ids the researchers cited, comma separated.
+      document ids the researchers cited, comma separated — bare ids, never
+      URLs. If the research above carries a link to a corpus document, it is
+      invented: the corpus has no web address, and one run put
+      `https://corpus.suse.com/...` on an issue this way. Drop it. The only
+      URL that belongs in the rationale is a `https://www.cve.org/CVERecord`
+      one that `/sandbox/bin/cve` printed.
 
       IF <advisory> IS A CVE ID, CHECK IT BEFORE YOU FILE THE ISSUE:
 

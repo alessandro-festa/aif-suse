@@ -54,6 +54,13 @@ rather than a described one.
 | **remediation** | Worker | forge write, corpus read | `git-forge` |
 | **validation** | Service | SUSE Security `POST /v1/scan/repository`, registry read, forge comment | `suse-security`, `git-forge` |
 
+Six sandboxes and six policies, but since 0.3.4 only **five of them run a model**. Remediation,
+canary, deploy and post-apply rescan run their helper directly in the sandbox instead — same image,
+same policy, same injected credential, just `bash -lc` where `opencode` used to be. The first three
+of those changed for a mechanical reason (opencode's bash tool kills any command at 120s and the
+setting is not exposed); remediation changed because it was caught lying. See
+[the note on step 7](#step-7-runs-the-helper-not-the-model) below.
+
 Dropped from §3, and worth saying plainly: the **source router**, the **writer / citation
 verifier** (folded into the researchers) and the **guardrail agent**.
 
@@ -138,12 +145,55 @@ where that is executable rather than described, because the forge runs **in the 
    citations, then stops. The orchestrator polls for the label `approved` or `rejected` and creates
    **no remediation sandbox** until a person applies one. Timeout 30 minutes — a "something is
    wrong" bound, not a service level.
-2. **Change gate.** The remediation agent opens a **pull request**; validation comments the pre/post
+2. **Change gate.** The remediation step opens a **pull request**; the canary comments the pre/post
    scan diff. A person merges or closes. **The agent cannot merge its own PR** — enforced by a
    branch-protection rule created during the seed, not by anything of ours.
 
+   **The pull request opens before the canary runs, and says so.** For the minutes in between, the
+   artefact in front of the reviewer is complete, plausible and entirely unmeasured — every argument
+   for the change is on it and no evidence is. So `forge-remediate` writes **DO NOT MERGE YET** at the
+   top of every pull request it opens, and `cluster-canary` lifts it by name when it appends the
+   comparison. Branch protection cannot express "not yet" — it knows *who* may merge, not *when* — so
+   the hold lives where the reviewer is actually looking. If the canary reports `ERROR` or
+   `UNSCANNED`, or never comments at all, the hold simply stands.
+
 Running the forge in-cluster is also what makes the sovereignty claim literal: there is nowhere
 outside the cluster for the token to go, and the whole demo runs with no internet.
+
+### Step 7 runs the helper, not the model
+
+Remediation is the one step that was demoted from an agent to a command, and the reason is worth
+keeping because it is the failure this whole profile is built to make impossible.
+
+The step's task had already been reduced as far as a task goes: four commands — clone, find, swap,
+open the PR — collapsed into `forge-remediate <issue>`, a single helper taking a single integer. The
+orchestrator already knows that integer. The model's entire contribution was to retype it.
+
+On 2026-09-18 it did not do that either. It returned `PULL REQUEST #41 OPENED` — the exact line
+`forge-remediate` prints on success — for a pull request that had never existed. Index 41 was never
+allocated; no branch was ever pushed. The `sentinel` mechanism exists precisely to catch a model that
+reports work it did not do, and it cannot catch this one: the string the sentinel checks for is the
+string that was invented.
+
+What caught it was the forge. The orchestrator asks the repository for a pull request opened since the
+step began, got nothing, and parked. That was always correct — the gap was that the park message did
+not say *what the agent had claimed*, leaving an operator to reconcile "PULL REQUEST #41 OPENED" on the
+status page against "no pull request" in the log on their own.
+
+Since 0.3.4 the step runs `bash -lc /sandbox/bin/forge-remediate <issue>` in the same sandbox, under the
+same policy, with the same credential injected at the same egress boundary. stdout becomes the helper's
+own stdout with nothing in between that could paraphrase or invent it, so the success line can only
+appear if the helper reached its last line — and it only reaches its last line after the forge has
+answered the POST. **Fabrication stops being something to detect and becomes something that cannot
+happen.** The cost is one fewer model-driven agent on screen; the isolation claim is untouched, because
+the fence was always on the sandbox rather than on opencode.
+
+The same run produced the smaller version of the same defect: the plan issue cited
+`https://corpus.suse.com/corpus/base-image-distro-cves`, a host that does not exist. Nothing in the
+chart contains that string — the model had copied the `cve` helper's `cite this URL:` format onto the
+one source that has no URL. `corpus` now prints its own citation form, and says in as many words that
+the corpus has none. Making the honest form the one on screen beats explaining the distinction in a
+briefing, which is the third time that lesson has been learned here.
 
 | Question the human is asking | Surface |
 |---|---|
@@ -439,6 +489,17 @@ If `auto-scan (containers)` reads `false`, the helper says so in a banner and ev
 it is meaningless. If the first line names a controller you did not expect, that is the answer
 to a different question you were about to waste an afternoon on.
 
+**Since 0.3.5 you read those three lines on the survey issue itself, above the menu** — and this
+is the part that was broken for two releases. The survey agent is stopped the instant the issue
+appears in the forge, so its stdout is thrown away and the status page shows a placeholder in
+its place; the header was being printed into a transcript nobody reads. `survey-issue` now
+copies it into the issue body as a short bullet list, so the provenance arrives on the same
+screen as the choice it qualifies, at the moment a human is being asked to trust the counts. The
+auto-scan-off banner comes with it, in bold, above the menu.
+
+The menu parse is unaffected: `_survey_options` only accepts a line whose number is followed by
+something carrying a `/` or a `:`, and no line in that header begins with a number.
+
 That header is also why a **rescan that fails no longer looks like a clean image.** Every
 single-image call ends in exactly one `status:` line — `SCANNED`, `NOT-SCANNED`, or
 `ERROR <kind>` where kind is one of `AUTH`, `POLICY-DENIED`, `UNREACHABLE`, `NOT-JSON`,
@@ -702,11 +763,53 @@ curl -s -o /dev/null -w '%{http_code}\n' \
 
 ---
 
+## Resetting between runs
+
+A successful run consumes its own starting state. The storefront ends up on the remediated image,
+the manifest repository has the merged change, and the forge carries the issues and the pull request
+the run produced — so a second run has nothing to find, and the twenty-seven-criticals-to-zero story
+does not reproduce. [`reset-demo.sh`](reset-demo.sh) undoes all of it and leaves the two UIs
+forwarded:
+
+```sh
+GITEA_AUTH='<user>:<password>' sh reset-demo.sh        # prompts before deleting
+GITEA_AUTH='<user>:<password>' sh reset-demo.sh -y     # no prompt, for a recording take
+```
+
+It restores `workloads/*.yaml` in the forge from the seed files in this directory, deletes every
+issue, pull request and non-`main` branch, re-applies `workloads/nginx.yaml` and
+`40-canary-storefront.yaml`, and reopens the Gitea (3000) and orchestrator (8088) port-forwards after
+killing any stale ones. It ends by printing the starting state, which is the thing to read before
+you hit record.
+
+**It needs a human credential, and that is not an oversight.** `secops-bot` is refused by branch
+protection on `main`, which is human gate #2 — the reason the pipeline cannot merge its own change.
+A reset script that could authenticate as the bot would be a reset script that had quietly removed
+the gate. Note that protection applies to admins too unless the account is on main's push whitelist
+(see step 4 above); the script says so if the write is refused.
+
+**What it deliberately leaves alone.** It does not delete `storefront-canary` — the canary is seeded
+by hand at `replicas: 0` because the validation agent may only `PATCH` it, so deleting it would leave
+the next run unable to recreate it; re-applying the manifest resets the image and the replica count
+instead. It does not touch SUSE Security, which has no PVC here and loses its key, its EULA
+acceptance and its entire scan history on a restart. And it refuses to run at all while a sandbox is
+up, because a live sandbox means a run is still in progress.
+
+One cosmetic thing it cannot undo: deleting issues does not reset Gitea's index counter, so the next
+run opens `#41` rather than `#1`. Recreating the repository would fix the numbering and drop the
+branch protection and push whitelist with it, which is a worse trade than a large number on screen.
+
+---
+
 ## Reaching the UIs
 
 The podman network `10.89.0.0/24` lives inside the VM and is not routable from macOS, and
 `downstream-1` has no ingress controller. Everything on downstream-1 is reached with
 `kubectl port-forward`, exactly as `docs/openshell-demo.md` already does for Rancher.
+
+The two you need in front of an audience — Gitea and the orchestrator status page — are opened for
+you by [`reset-demo.sh`](#resetting-between-runs), which also stops any stale forwards first. The
+table below is the manual form, and the rest of the surfaces.
 
 | Surface | Command | Then open |
 |---|---|---|

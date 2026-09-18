@@ -1526,27 +1526,72 @@ def main() -> None:
     #    the egress boundary and is scoped to write-but-not-merge on this repo,
     #    so human gate #2 is enforced by the forge itself rather than by this
     #    code choosing not to call the merge endpoint.
+    # RUN THE HELPER, NOT THE MODEL — and here for a different reason than the
+    # three steps below, which run their helper because opencode's bash tool
+    # kills any command at 120s.
+    #
+    # This step ran a model until 0.3.4. The task had already been reduced as
+    # far as a task can be reduced: four commands collapsed into one helper
+    # taking one argument, and that argument an integer this function already
+    # holds. The model's entire contribution was to retype `RUN.issue`.
+    #
+    # On 2026-09-18 it did not even do that. It returned `PULL REQUEST #41
+    # OPENED` — the exact line `forge-remediate` prints on success — for a pull
+    # request that had never existed. Index 41 was never allocated and no branch
+    # was ever pushed. That is the failure the `sentinel` docstring calls rare,
+    # and it is the one failure a sentinel cannot catch: the string it checks
+    # for is the string that was invented.
+    #
+    # `shell` closes it structurally rather than catching it. stdout becomes the
+    # helper's own stdout with nothing in between, so the success line can only
+    # appear if the helper reached its last line, and the helper only reaches
+    # its last line after the forge has answered the pull request POST. The
+    # sentinel below is then checking a string that cannot be forged, which is
+    # what it was always meant to be checking.
+    #
+    # What is given up: the demo shows five model-driven agents here, not six.
+    # What is not: the sandbox, the policy, and the credential injected at the
+    # egress boundary are identical — the fence is on the sandbox, not on
+    # opencode. Human gate #2 is still enforced by the forge, which refuses the
+    # merge endpoint to this credential.
     opened_at = time.time()
-    phase(
+    said = phase(
         steps["remediate"],
         agents["remediation"],
-        # The task names the issue number and stops. It used to spell out the
-        # four things that have to happen — clone, find, change, open a pull
-        # request — and the agent duly did the first two and narrated the rest.
-        # Those four steps are now one helper, and a task that still lists them
-        # is an invitation to do them separately. The only value the agent has
-        # to carry is this number; everything else it needs is on the issue.
-        f"Issue #{RUN.issue} has been approved by a reviewer. It concerns the image "
-        f"{target} and proposes:\n{citations}\n\n"
-        f"Carry out that approved plan by running `/sandbox/bin/forge-remediate "
-        f"{RUN.issue}`. The issue number is {RUN.issue}. Do not attempt to merge.",
-        watch=lambda: _newest_open("pulls", opened_at) is not None,
+        # Status-page text only now — nothing reads this but a human.
+        f"Issue #{RUN.issue} has been approved by a reviewer. It concerns the "
+        f"image {target} and proposes:\n{citations}\n\n"
+        f"Carrying it out with `/sandbox/bin/forge-remediate {RUN.issue}`, "
+        f"which clones, finds the manifest, swaps the image, pushes a branch "
+        f"and opens the pull request. It cannot merge.",
+        shell=f"/sandbox/bin/forge-remediate {RUN.issue}",
+        sentinel="PULL REQUEST #",
     )
     RUN.pull = _newest_open("pulls", opened_at)
     steps["remediate"].detail = f"PR #{RUN.pull}" if RUN.pull else "no PR appeared"
 
     if not RUN.pull:
-        _park("the run finished without a pull request; the plan issue stays open")
+        # REACHING HERE NOW MEANS SOMETHING NARROW, so say which thing it is.
+        #
+        # The sentinel above has already passed, and under `shell` that line
+        # came from the helper rather than from a model — so the pull request
+        # was opened and this lookup is what failed, not the remediation. The
+        # previous wording, "the run finished without a pull request", covered
+        # both that and a model inventing the line, and told an operator
+        # staring at `PULL REQUEST #41 OPENED` on the status page nothing about
+        # which they were looking at.
+        claim = next(
+            (l.strip() for l in reversed(said.splitlines()) if "PULL REQUEST #" in l),
+            "",
+        )
+        _park(
+            "forge-remediate reported "
+            + (repr(claim) if claim else "success")
+            + ", but no pull request opened after this step began could be found"
+            " on the repository. The remediation ran; the lookup disagrees."
+            " Check the forge directly before re-running — the branch and the"
+            " pull request may both be there."
+        )
 
     # 8. Canary validation. The replacement image is started for real, beside
     #    the workload it would replace, and both are scanned. Until 0.3.1 this
