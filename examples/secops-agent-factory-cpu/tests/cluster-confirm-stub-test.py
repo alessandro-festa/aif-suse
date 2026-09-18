@@ -172,8 +172,25 @@ if err and (only is None or (want and only in want)):
 hits = [k for k in state if not k.startswith("_") and want and want in k
         and (k not in on_scan or k in scanned)]
 if not hits:
-    print("No scanner findings for an image matching %r." % want)
-    print("  status: NOT-SCANNED")
+    # WHICH OF THE TWO EMPTY ANSWERS THIS IS, the distinction 0.3.8 added.
+    # After the merge nothing on the cluster runs the old image, so an empty
+    # answer about it is an absence — NO-WORKLOAD. The new image IS serving,
+    # so an empty answer about that one is an unfinished scan — NOT-SCANNED.
+    # The helper's "is the old image gone" sentence branches on exactly this,
+    # and before the distinction existed it read an unfinished scan as gone.
+    if want in state.get("_running_unscanned", []):
+        kind = "NOT-SCANNED"
+    elif state.get("_no_workload") or want == {OLD!r}:
+        kind = "NO-WORKLOAD"
+    else:
+        kind = "NOT-SCANNED"
+    if kind == "NO-WORKLOAD":
+        print("No running container on this cluster uses %r." % want)
+        print("  status: NO-WORKLOAD")
+    else:
+        print("%r is running, and the scanner has not finished with it." % want)
+        print("  status: NOT-SCANNED")
+        print("  scan_summary: status=scanning result=none")
     sys.exit(0)
 for img in hits:
     print(img)
@@ -213,6 +230,18 @@ SCENARIOS = [
      dict(nv={NEW: AFTER, "_reveal_on_scan": [NEW]}), "CONFIRMED", 0),
     ("a workload the scanner cannot see is reported as NO-WORKLOAD, not as clean",
      dict(nv={"_no_workload": True}), "UNSCANNED, not clean", 1),
+    # THE THIRD ARM, added with the 0.3.8 status contract. "Not SCANNED" used
+    # to mean "gone", and here the old image is still running with a scan that
+    # has not completed — the one case where calling it gone would be this
+    # step's own false pass.
+    # `expect` is matched against the transcript; the "Unclear" wording this
+    # scenario is really about is asserted on the comment body further down.
+    ("an old image still running with an unfinished scan is not called gone",
+     dict(nv={NEW: AFTER, "_running_unscanned": [OLD]}), "CONFIRMED", 0),
+    # The result the whole profile exists to produce, pinned at the consumer:
+    # a finished scan that finds nothing is a pass, not an unverified run.
+    ("a finished scan that finds nothing is CONFIRMED, not UNSCANNED",
+     dict(nv={NEW: "critical=0 high=0 medium=0 low=0"}), "CONFIRMED", 0),
 ]
 
 SEEN = {}
@@ -256,14 +285,18 @@ def run():
 
         if want_rc == 0:
             c = STATE["comments"][0]
-            assert AFTER in c, c
-            # The step's own question, answered either way but never skipped.
+            assert STATE["nv"].get(NEW, AFTER) in c, c
+            # The step's own question, answered three ways since 0.3.8 and
+            # never skipped. "Not SCANNED" is no longer a synonym for gone.
             if OLD in STATE["nv"]:
                 assert "No — " in c and "still reported" in c, c
                 assert BEFORE in c, c
                 print("        old image still present, and the comment says so")
+            elif OLD in STATE["nv"].get("_running_unscanned", []):
+                assert "Unclear — " in c and "has not completed" in c, c
+                print("        old image running but unscanned, and not called gone")
             else:
-                assert "Yes — " in c and "no longer reports" in c, c
+                assert "Yes — " in c and "no running container" in c, c
                 print("        old image gone, on a measurement and not an absence")
 
         if expect == "UNSCANNED, not clean":
@@ -272,7 +305,9 @@ def run():
             # verdict, and the error arms compare against the FIRST one.
             SEEN.setdefault("unscanned", c)
             assert "**Unverified.**" in c, c
-            assert "indistinguishable from a clean one" in c, c
+            # The wording that keeps an unfinished scan apart from a clean
+            # one, now that the second is a reportable pass and not a silence.
+            assert "not the same thing as a clean image" in c, c
             # The rescan was requested outright. A timeout now means the
             # scanner was asked and did not deliver, which is a fault, rather
             # than that nobody ever asked, which is what shipped until 0.3.5.

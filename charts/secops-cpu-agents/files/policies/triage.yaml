@@ -104,6 +104,15 @@ network_policies:
           - allow: { method: GET, path: "/v1/scan/config" }
           - allow: { method: GET, path: "/v1/scan/repository/**" }
           - allow: { method: GET, path: "/v1/workload/**" }
+          # THE BARE PATH AS WELL, and it is a different rule: `**` matches
+          # path segments, so `/v1/workload/**` does not cover the collection
+          # itself. `nv-survey` calls `GET /v1/workload?brief=true` on every
+          # invocation from 0.3.8 on — that response carries each container's
+          # `scan_summary`, which is the only field that tells a scanned, clean
+          # image apart from one nobody has scanned. The other three policies
+          # that talk to SUSE Security already allowed it; this one did not,
+          # and triage runs the same helper.
+          - allow: { method: GET, path: "/v1/workload" }
           # `/v1/vulasset` is a POST that reads, and it takes TWO CALLS. The
           # POST registers a server-side query and returns ONLY a `query_id`
           # and the totals — zero rows. The rows come from a second call,

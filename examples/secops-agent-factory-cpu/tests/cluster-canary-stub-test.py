@@ -249,8 +249,18 @@ if err and (only is None or (want and only in want)):
     refuse(want)
 hits = [k for k in images if want and want in k]
 if not hits:
-    print("No scanner findings for an image matching %r." % want)
-    print("  status: NOT-SCANNED")
+    # NOT-SCANNED, NOT NO-WORKLOAD, unless the scenario says the scanner is
+    # blind to the image. Both sides of this comparison are running by
+    # construction — the storefront and the canary — so an empty answer here
+    # is an unfinished scan. The 0.3.8 contract keeps the two apart, and the
+    # consumer's wording differs between them.
+    if state.get("_no_workload"):
+        print("No running container on this cluster uses %r." % want)
+        print("  status: NO-WORKLOAD")
+    else:
+        print("%r is running, and the scanner has not finished with it." % want)
+        print("  status: NOT-SCANNED")
+        print("  scan_summary: status=scanning result=none")
     sys.exit(0)
 for img in hits:
     print(img)
@@ -336,6 +346,15 @@ SCENARIOS = [
     ("a canary the scanner cannot see is reported as NO-WORKLOAD, not as clean",
      dict(nv={OLD: BEFORE, "_no_workload": True}, scandeadline=3, scansleep=1),
      "UNSCANNED", 1),
+    # THE 2026-09-18 RUN'S SECOND LESSON, and the one that was a contract bug
+    # rather than a cluster one: a scan that finishes and finds NOTHING is the
+    # result this whole profile is built to produce, and it was unreachable.
+    # Scan state was inferred from whether the CVE view returned rows, so
+    # `critical=0` and "nobody scanned it" were one answer, and the canary
+    # posted UNSCANNED over a perfectly good measurement. `nv-survey` reads
+    # `scan_summary` now; this pins the consumer side of that.
+    ("a canary scanned and found clean is VALIDATED, not UNSCANNED",
+     dict(nv={OLD: BEFORE, NEW: "critical=0 high=0 medium=0 low=0"}), "VALIDATED", 0),
     ("the happy path starts the canary, measures both sides and reports",
      dict(), "VALIDATED", 0),
 ]
@@ -412,7 +431,8 @@ def run():
             # Both numbers on the pull request, and the word that says they are
             # numbers rather than a prediction.
             c = STATE["comments"][0]
-            assert BEFORE in c and AFTER in c, c
+            assert STATE["nv"].get(OLD, BEFORE) in c, c
+            assert STATE["nv"].get(NEW, AFTER) in c, c
             assert "were measured" in c, c
             print(f"        patch: {STATE['patches'][0]}")
             print(f"        final line: {out.strip().splitlines()[-1]}")

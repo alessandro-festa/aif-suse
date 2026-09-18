@@ -2,13 +2,16 @@
 
 Tests that run on a laptop with no cluster, no gateway and no credentials.
 
-Three harnesses, one per helper that writes to a running cluster or reports a
-verdict on one. Run all three:
+Four harnesses — one per helper that writes to a running cluster or reports a
+verdict on one, plus one for the helper all three of those depend on — and a
+contract test that renders nothing. Run them all:
 
 ```
 python3 cluster-apply-stub-test.py \
   && python3 cluster-canary-stub-test.py \
-  && python3 cluster-confirm-stub-test.py
+  && python3 cluster-confirm-stub-test.py \
+  && python3 nv-survey-stub-test.py \
+  && python3 change-line-contract-test.py
 ```
 
 ## `cluster-apply-stub-test.py`
@@ -122,3 +125,57 @@ real reason is that the query failed. Scenario six pins exactly that: the new
 image scans fine, the old one's query is refused, and the run must not reach
 its verdict. Under the pre-0.3.3 contract it exited 0 with `CONFIRMED` and told
 the reviewer the old image was gone.
+
+Since 0.3.8 there is a third reading of an empty answer about the old image,
+and the harness holds all three apart: `NO-WORKLOAD` (nothing runs it — gone),
+`NOT-SCANNED` (something runs it and the scan has not finished — emphatically
+not gone), `ERROR` (the query failed — no verdict either way).
+
+## `nv-survey-stub-test.py`
+
+Exercises `nv-survey` against a fake NeuVector controller. About a second.
+
+```
+python3 nv-survey-stub-test.py
+```
+
+**Why this file exists.** The three harnesses above all stub `nv-survey`, so
+when the bug was in `nv-survey` they were three green suites with nothing to
+say. That happened on 2026-09-18: the canary came up Ready on the replacement,
+SUSE Security scanned it, found nothing wrong with it, and the pipeline
+reported `UNSCANNED` — because scan state was inferred from whether the CVE
+view returned rows, and a clean image returns none. **The one result this
+profile exists to produce could not be produced.**
+
+The fix reads `scan_summary` off `GET /v1/workload?brief=true`, which carries
+the scanner's own `status` and `result` per container alongside its counts. So
+the fixtures here have a filthy image, a **clean scanned** image and a running
+image whose scan has not finished, and the suite asserts those are three
+different answers.
+
+It also pins two things that are easy to get wrong and invisible when you do:
+
+- **The two count systems.** The scan summary counts findings per package; the
+  CVE view counts distinct CVEs. On the demo's own nginx that is 27 critical
+  against 17, and for two revisions the documentation quoted one while the
+  issues quoted the other. `critical`/`high`/`medium` come from the summary
+  and `low` from the CVE view, because the summary has no `low` field. The
+  fixture says 27 in one place and 3 in the other, so a regression to either
+  single source fails.
+- **Image matching is not a substring match.** `nginx:1.31.6` is a prefix of
+  `nginx:1.31.6-6.1`, and those two are the before and after of this entire
+  demo. The fallback for a runtime that drops the registry compares the
+  `repository:tag` tail for equality; a loose match would measure the
+  replacement and report it as the thing it replaced.
+
+## `change-line-contract-test.py`
+
+Renders nothing and runs no helper. The `Change: <old> -> <new>` line has five
+parsers — four perl one-liners in `values.yaml` and one Python regex in
+`orchestrator.py` — and this runs all five against the same bodies and fails if
+any of them disagrees. The corpus ends with the literal bodies of the two
+issues that each cost a live run.
+
+```
+python3 change-line-contract-test.py
+```

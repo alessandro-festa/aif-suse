@@ -559,11 +559,46 @@ The menu parse is unaffected: `_survey_options` only accepts a line whose number
 something carrying a `/` or a `:`, and no line in that header begins with a number.
 
 That header is also why a **rescan that fails no longer looks like a clean image.** Every
-single-image call ends in exactly one `status:` line — `SCANNED`, `NOT-SCANNED`, or
+single-image call ends in exactly one `status:` line — `SCANNED`, `NOT-SCANNED`, `NO-WORKLOAD`, or
 `ERROR <kind>` where kind is one of `AUTH`, `POLICY-DENIED`, `UNREACHABLE`, `NOT-JSON`,
 `HTTP-<code>` or `NO-QUERY-ID`. Before that contract existed all six collapsed into one empty
 string, and the canary and post-apply steps rendered every one of them as "unscanned". That is
 fail-safe in outcome and undiagnosable in practice, and it cost a full live run on 2026-09-17.
+
+**And one thing was still hiding in that empty string until 0.3.8: a scan that succeeded and found
+nothing.** Scan state was inferred from whether the CVE view returned rows, and a clean image
+returns none — so `critical=0`, the single result this entire profile is built to demonstrate, was
+indistinguishable from a failure and was reported as `UNSCANNED`. The refusal was working
+perfectly; it was refusing the right answer. On the 2026-09-18 run the canary was Ready on the
+AppCo image, the scanner had been asked and answered `TRIGGERED 1`, and the pull request still
+said unverified.
+
+Scan state is now read rather than inferred. `GET /v1/workload?brief=true` carries a
+`scan_summary` per container:
+
+```json
+{"status": "finished", "result": "succeeded", "scanned_at": "…",
+ "scanner_version": "4.280", "critical": 27, "high": 107, "medium": 94}
+```
+
+`finished` + `succeeded` is `SCANNED`, with whatever counts came back including none. A running
+container without it is `NOT-SCANNED` and worth waiting for; no container at all is `NO-WORKLOAD`
+and waiting will not help. Those were one verdict before, and `cluster-confirm` in particular
+needed them apart — it reads an absence of findings for the *old* image as "the old image is gone
+from the cluster", which is true for `NO-WORKLOAD` and a false pass for `NOT-SCANNED`.
+
+**The counts come from two places, and they disagree.** The scan summary counts a finding per
+affected *package*; the `/v1/vulasset` CVE view counts *distinct CVEs*, deduplicated. For
+`docker.io/library/nginx:1.31.6` on this cluster that is **27 critical / 107 high / 94 medium**
+against **17 / 51 / 62**, for the same image at the same moment — one CVE in three packages is
+three findings in the first and one row in the second. Neither is wrong, and for two revisions
+this README quoted the first while the pipeline's own issues quoted the second.
+
+`critical`/`high`/`medium` are now the scan summary's, because that is the number SUSE Security
+shows a human in its own UI and it arrives in the same response as the scan state, so the count
+and the provenance of the count cannot drift apart. `low` stays the CVE view's, because
+`scan_summary` has no `low` field at all. It is one column of a four-column row with a different
+origin; the survey issue carries a line saying so, next to the line naming the controller.
 
 To set auto-scan, if it is off, use the NeuVector UI on `downstream-1` (reach it through
 Rancher) or `PATCH /v1/scan/config` **from your own workstation** — not from a sandbox. Give it
@@ -607,6 +642,12 @@ Two verbs were added to `canary.yaml` and `validation.yaml` for it, `GET /v1/wor
 `POST /v1/scan/workload/**`. Both are additive and neither is a write to the scanner's
 configuration: an agent may ask for a scan and may not change what scanning means.
 `PATCH /v1/scan/config` stays denied.
+
+0.3.8 added `GET /v1/workload` to `triage.yaml` as well, and it is a *different rule* from the
+`/v1/workload/**` already there: `**` matches path segments, so it does not cover the collection
+itself. Triage runs the same helper, and from 0.3.8 every invocation of `nv-survey` reads the
+collection to get at `scan_summary`. The three other policies that talk to SUSE Security already
+allowed it.
 
 ### On sims-datacenter
 

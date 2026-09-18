@@ -463,7 +463,9 @@ sandbox:
           # WHICH SCANNER SAID SO. There are two NeuVector installs here, one
           # per cluster, never federated, and a count is not a measurement until
           # it names the controller it came from and says whether that
-          # controller is scanning at all. nv-survey prints those three lines
+          # controller is scanning at all — and, since 0.3.8, which of the
+          # controller's two disagreeing count systems the row came from.
+          # nv-survey prints those four lines
           # and, until now, nothing carried them anywhere a human looks: this
           # agent is stopped the moment the helper reports, so its stdout is
           # discarded and replaced by a placeholder, and the issue is the only
@@ -483,7 +485,7 @@ sandbox:
           # line needs for the JSON body, in the same pass as the escaping and
           # after it, and `tr` removes the real newlines. Both are in the
           # measured toolchain at :673.
-          pre=$(grep -E '^(SUSE Security|auto-scan \(containers\)|registered scanners):' "$raw" \
+          pre=$(grep -E '^(SUSE Security|auto-scan \(containers\)|registered scanners|counts):' "$raw" \
                 | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/^/- /' -e 's/$/\\n/' \
                 | tr -d '\n')
           if [ -n "$pre" ]; then
@@ -985,13 +987,21 @@ sandbox:
         # ${NEUVECTOR_API_KEY} is a substitution handle, not the key.
         #
         # EVERY SINGLE-IMAGE CALL ENDS IN EXACTLY ONE `  status:` LINE, one of
-        # SCANNED / NOT-SCANNED / ERROR <kind>. Before that contract existed the
-        # only signal was the presence of a `counts:` line, so an empty result
-        # meant all of: the image is genuinely unscanned, the API key was
-        # rejected, the shim was down, the sandbox policy refused the call, or
-        # curl timed out. Both consumers read this through `2>/dev/null` and
-        # rendered every one of those as UNSCANNED. That is fail-safe in outcome
-        # and undiagnosable in practice, and it cost a whole live run.
+        # SCANNED / NOT-SCANNED / NO-WORKLOAD / ERROR <kind>. Before that
+        # contract existed the only signal was the presence of a `counts:`
+        # line, so an empty result meant all of: the image is genuinely
+        # unscanned, the API key was rejected, the shim was down, the sandbox
+        # policy refused the call, or curl timed out. Both consumers read this
+        # through `2>/dev/null` and rendered every one of those as UNSCANNED.
+        # That is fail-safe in outcome and undiagnosable in practice, and it
+        # cost a whole live run.
+        #
+        # AND ONE MORE THING WAS HIDING IN THERE UNTIL 0.3.8: an image that was
+        # scanned and found clean. Scan state was inferred from whether the CVE
+        # view returned rows, and a clean image returns none — so the single
+        # result this entire profile is built to produce, `critical=0`, was
+        # indistinguishable from a failure and reported as UNSCANNED. It is
+        # read from `scan_summary` now; see `finished()`.
         import json, os, subprocess, sys
 
         BASE = "{{ include "secops-cpu-agents.nvScheme" . }}://{{ include "secops-cpu-agents.nvHost" . }}:{{ include "secops-cpu-agents.nvPort" . }}"
@@ -1064,6 +1074,57 @@ sandbox:
                 return bad("NOT-JSON", "%s %s answered HTTP %s with a non-JSON body: %s"
                                        % (method, path, code, text[:200]))
 
+        def tail(img):
+            # `docker.io/library/nginx:1.31.6` -> `nginx:1.31.6`. The registry
+            # is the part the runtime drops; the repository and tag are not.
+            return (img or "").rsplit("/", 1)[-1]
+
+        def live_containers():
+            # Every running container the controller can see, pods and their
+            # children flattened into one list. `/v1/workload` returns pods,
+            # and it is the children that carry an image and a scan_summary.
+            live = call("GET", "/v1/workload?brief=true")
+            flat = []
+            for w in live.get("workloads") or []:
+                flat.append(w)
+                flat += w.get("children") or []
+            return [w for w in flat if w.get("id") and w.get("running") is not False]
+
+        def matching(running, want):
+            # ONE MATCHER FOR EVERY MODE, because `--scan <image>` and
+            # `<image>` have to agree about which containers are that image or
+            # the trigger and the read are about different things.
+            #
+            # Exact tail equality on the fallback, NOT a substring: the runtime
+            # sometimes reports an image without its registry, so the full
+            # reference misses a container that is plainly the right one — but
+            # `nginx:1.31.6` is a substring of `nginx:1.31.6-6.1`, and those
+            # two are the before and after of this entire demo. A loose match
+            # there silently measures the replacement as the thing it replaced.
+            hits = [w for w in running if want in (w.get("image") or "")]
+            if not hits:
+                t = tail(want)
+                hits = [w for w in running if t and t == tail(w.get("image") or "")]
+            return hits
+
+        def finished(w):
+            # THE FIELD THAT MAKES "SCANNED AND CLEAN" SAYABLE. Every container
+            # carries the scanner's own verdict about its image, separately
+            # from whether that verdict contained any findings:
+            #
+            #   "scan_summary": {"status": "finished", "result": "succeeded",
+            #                    "scanned_at": ..., "critical": 27, ...}
+            #
+            # Until 0.3.8 nothing read it, and scan state was inferred from
+            # whether the CVE view returned rows — so an image with nothing
+            # wrong with it and an image nobody had scanned were one answer.
+            # The whole premise of this profile is that the replacement comes
+            # back 0/0/0, and that result was unreachable by construction.
+            s = w.get("scan_summary") or {}
+            if s.get("status") == "finished" and s.get("result") == "succeeded":
+                return s
+            return None
+
         if WANT == "--scan":
             # ASK, DO NOT WAIT. This is the fix for the failure that ended the
             # 2026-09-18 run: the canary came up Ready on
@@ -1090,20 +1151,8 @@ sandbox:
             if not want:
                 sys.stderr.write("usage: nv-survey --scan <image>\n")
                 sys.exit(2)
-            live = call("GET", "/v1/workload?brief=true")
-            flat = []
-            for w in live.get("workloads") or []:
-                flat.append(w)
-                flat += w.get("children") or []
-            running = [w for w in flat if w.get("id") and w.get("running") is not False]
-            hits = [w for w in running if want in (w.get("image") or "")]
-            if not hits:
-                # The runtime sometimes reports an image without its registry,
-                # and a substring match on the full reference then misses a
-                # container that is plainly the right one. Fall back to the
-                # repository:tag tail before giving up.
-                tail = want.rsplit("/", 1)[-1]
-                hits = [w for w in running if tail and tail in (w.get("image") or "")]
+            running = live_containers()
+            hits = matching(running, want)
             if not hits:
                 print("  status: NO-WORKLOAD")
                 print("  no running container on this cluster is using %s, so there" % want)
@@ -1166,17 +1215,67 @@ sandbox:
                 e["ns"].add(w.get("domain") or "?")
                 e["fixes"] |= fixes
 
+        # TWO SOURCES, DELIBERATELY, AND THEY DISAGREE. The loop above counts
+        # the CVE view: one row per CVE, deduplicated, joined to the workloads
+        # it was found in. The loop below reads the scanner's own per-image
+        # summary, which counts findings per PACKAGE — one CVE in three
+        # packages is 1 there and 3 here. On the demo's own nginx that is 17
+        # critical against 27. Neither is wrong; they answer different
+        # questions, and for two revisions this profile quoted one in its
+        # documentation and the other on its issues.
+        #
+        # The summary wins for critical/high/medium: it is the number SUSE
+        # Security shows a human in its own UI, it is what the narrative
+        # around this demo was written from, and it arrives in the same
+        # response as the scan state below, so the count and the provenance of
+        # the count cannot drift apart. It has NO `low` field at all, so `low`
+        # stays as the CVE view reported it — one column of a four-column row
+        # with a different origin, which is ugly and is recorded here rather
+        # than hidden.
+        running = live_containers()
+        by_tail = {}
+        for k in images:
+            by_tail.setdefault(tail(k), k)
+        for w in running:
+            s = finished(w)
+            if not s:
+                continue
+            img = w.get("image") or "?"
+            # Merged onto the CVE view's key when they are the same image under
+            # two spellings, so one image is not two rows in the ranked table.
+            key = img if img in images else by_tail.get(tail(img), img)
+            e = images.setdefault(key, {"c": {"critical": 0, "high": 0, "medium": 0, "low": 0},
+                                        "cves": {}, "ns": set(), "fixes": set()})
+            for sev in ("critical", "high", "medium"):
+                e["c"][sev] = s.get(sev) or 0
+            e["scanned_at"] = s.get("scanned_at") or "?"
+            e["ns"].add(w.get("domain") or "?")
+            by_tail.setdefault(tail(key), key)
+
         if WANT:
             hits = [k for k in images if WANT in k]
             if not hits:
-                # A real measurement with a real result: the scanner has no
-                # record for this image. Distinct from every ERROR above, and
-                # the consumers must render the two differently.
-                print("No scanner findings for an image matching %r." % WANT)
+                hits = [k for k in images if tail(WANT) == tail(k)]
+            if not hits:
+                # NEITHER SOURCE HAS THIS IMAGE, so the honest answer depends
+                # on whether anything is running it. A container with an
+                # unfinished scan is NOT-SCANNED and worth waiting for; no
+                # container at all is NO-WORKLOAD, and waiting will not help.
+                # Before 0.3.8 both of these — and a scanned, clean image —
+                # were the same NOT-SCANNED.
+                here = matching(running, WANT)
+                if not here:
+                    print("No running container on this cluster uses %r." % WANT)
+                    print("  status: NO-WORKLOAD")
+                    print("A workload scan needs a running container.")
+                    print("This is not a statement about the image.")
+                    sys.exit(0)
+                s = here[0].get("scan_summary") or {}
+                print("%r is running, and the scanner has not finished with it." % WANT)
                 print("  status: NOT-SCANNED")
-                print("Images the scanner does have findings for:")
-                for k in sorted(images):
-                    print("  " + k)
+                print("  scan_summary: status=%s result=%s"
+                      % (s.get("status") or "none", s.get("result") or "none"))
+                print("  containers running this image: %d" % len(here))
                 sys.exit(0)
             for img in hits:
                 e = images[img]
@@ -1184,6 +1283,12 @@ sandbox:
                 print("  namespaces: " + ",".join(sorted(e["ns"])))
                 print("  status: SCANNED")
                 print("  counts: " + " ".join("%s=%d" % kv for kv in e["c"].items()))
+                # WHERE THE ZERO CAME FROM. `counts: critical=0 …` is the
+                # result this demo exists to produce, and it is worth nothing
+                # unless the line under it names the scan that produced it.
+                if e.get("scanned_at"):
+                    print("  scanned: %s  (critical/high/medium from the scanner's "
+                          "per-image summary; low from the CVE view)" % e["scanned_at"])
                 for sev in ("critical", "high"):
                     named = [(n, f, d) for n, (s, f, d) in e["cves"].items() if s == sev]
                     for n, f, d in named[:12]:
@@ -1226,10 +1331,19 @@ sandbox:
             print("*** this and stop - it is the finding.")
         print()
 
-        ranked = sorted(images.items(),
+        # Images with a finished, clean scan are in `images` — that is the
+        # point of 0.3.8 — but they are not a menu of things to fix, so they
+        # are not in the table. `nv-survey <image>` still reports them.
+        ranked = sorted([i for i in images.items() if sum(i[1]["c"].values())],
                         key=lambda i: (-i[1]["c"]["critical"], -i[1]["c"]["high"], i[0]))
         print("%d vulnerability records across %d images. Ranked most urgent first."
-              % (total, len(images)))
+              % (total, len(ranked)))
+        # Prefixed `counts:` so `survey-issue` can lift it onto the issue with
+        # the other provenance lines — a reader who sees 27 critical here and
+        # 17 somewhere else is owed the reason, which is that one counts
+        # packages and the other counts CVEs.
+        print("counts: critical/high/medium are the scanner's own per-image totals, "
+              "one per affected package; low counts distinct CVEs.")
         print("Refer to an image by its NUMBER.")
         print()
         for i, (img, e) in enumerate(ranked[:TOP], 1):
@@ -1273,8 +1387,10 @@ sandbox:
         comment() { /sandbox/bin/forge POST "${repo}/issues/${pr}/comments" "{\"body\":\"$1\"}" >/dev/null; }
         # ONE CAPTURE PER IMAGE, both fields read out of it. `nv-survey` ends
         # every single-image run in exactly one `status:` line — SCANNED,
-        # NOT-SCANNED or ERROR <kind> — so the outcomes are stated rather than
-        # inferred from an empty string. Note `2>&1` and not `2>/dev/null`:
+        # NOT-SCANNED, NO-WORKLOAD or ERROR <kind> — so the outcomes are stated
+        # rather than inferred from an empty string. SCANNED means the scan
+        # finished, not that it found something; `counts: critical=0 …` is a
+        # real answer. Note `2>&1` and not `2>/dev/null`:
         # discarding stderr is what used to make a rejected API key look
         # identical to an unscanned image.
         survey() { /sandbox/bin/nv-survey "$1" 2>&1; }
@@ -1353,23 +1469,33 @@ sandbox:
 
         if [ "$stnew" != "SCANNED" ]; then
           # The one result that must never be rendered as a pass.
-          comment "**Unverified.** The merge has been applied, but SUSE Security reports no findings for \`${new}\` after ${scanwaited}s, so this rescan measured nothing. An image the scanner has not looked at is indistinguishable from a clean one from here.\\n\\nThe scan was requested outright rather than left to auto-scan, and the last request returned \`${sttrig:-no status}\`: \`NO-WORKLOAD\` means the scanner sees no running container for this image, \`TRIGGERED\` means it accepted the request and did not finish in time.\\n\\nOld image \`${old}\`: ${nowold:-no longer reported, i.e. not running}."
+          sumline=$(field "$snew" scan_summary)
+          [ -n "$sumline" ] && sumline=" with \`${sumline}\`"
+          comment "**Unverified.** The merge has been applied, but SUSE Security has not finished scanning \`${new}\` after ${scanwaited}s, so this rescan measured nothing. The query returned \`${stnew:-no status}\`${sumline}.\\n\\nThis is not the same thing as a clean image: a scan that finishes and finds nothing is reported as a pass with \`critical=0\`, read from the scanner's own \`scan_summary\`. What is missing here is the scan, not the findings.\\n\\nThe scan was requested outright rather than left to auto-scan, and the last request returned \`${sttrig:-no status}\`: \`NO-WORKLOAD\` means the scanner sees no running container for this image, \`TRIGGERED\` means it accepted the request and did not finish in time.\\n\\nOld image \`${old}\`: ${nowold:-no longer reported, i.e. not running}."
           say "the scanner reports nothing for ${new}. That is UNSCANNED, not clean."
           say "It is on the pull request as unverified. Do not call it a pass."
           exit 1
         fi
-        if [ "$stold" = "SCANNED" ]; then
-          gone="No — \`${old}\` is still reported by the scanner (\`${nowold}\`), so something on this cluster is still running it. That may be another workload entirely; it is worth knowing which."
-        else
-          gone="Yes — the scanner no longer reports \`${old}\` at all, because nothing on this cluster runs it any more."
-        fi
+        # THREE ANSWERS, NOT TWO. "Not SCANNED" used to be read as "gone", and
+        # from 0.3.8 the helper distinguishes an image with no running
+        # container (NO-WORKLOAD — genuinely gone) from one that is running
+        # with an unfinished scan (NOT-SCANNED — emphatically not gone). The
+        # second case reported as "gone" would be this step's own false pass.
+        case "$stold" in
+          SCANNED)
+            gone="No — \`${old}\` is still reported by the scanner (\`${nowold}\`), so something on this cluster is still running it. That may be another workload entirely; it is worth knowing which.";;
+          NO-WORKLOAD)
+            gone="Yes — the scanner sees no running container for \`${old}\` anywhere on this cluster.";;
+          *)
+            gone="Unclear — the scanner answered \`${stold:-no status}\` for \`${old}\`, which is neither a finding nor an absence. Something may still be running it with a scan that has not completed.";;
+        esac
         # Reused from the capture above rather than re-queried: nv-survey pages
         # the entire vulasset set on every invocation, and this is the same
         # answer it already gave.
         detail=$(printf '%s\n' "$snew" | head -c 1200)
         body="**Post-apply rescan.** The replacement is serving; this is the measurement, not the prediction.\\n\\n| | image | findings |\\n|---|---|---|\\n| now serving | \`${new}\` | \`${nownew}\` |\\n| replaced | \`${old}\` | ${nowold:-no longer reported} |\\n\\nIs the old image gone from the cluster? ${gone}\\n\\nThe canary comment earlier on this pull request predicted the replacement's numbers from a pod that was running but taking no traffic. Compare it with the row above: if the two disagree, the prediction was wrong and that is the finding.\\n\\n<details><summary>scanner detail</summary>\\n\\n\`\`\`\\n$(esc "$detail")\\n\`\`\`\\n</details>"
         comment "$body"
-        echo "CONFIRMED ${new} [${nownew}] IS SERVING; ${old} [${nowold:-gone}]. Your task is complete."
+        echo "CONFIRMED ${new} [${nownew}] IS SERVING; ${old} [${nowold:-${stold:-not reported}}]. Your task is complete."
     app-collection:
       appco: |
         #!/usr/bin/env python3
@@ -1480,9 +1606,16 @@ sandbox:
         #
         # WHAT IT WILL NOT DO:
         #   * report a clean image it did not see scanned. An image the scanner
-        #     has no findings for is UNSCANNED here, never zero. A registry it
+        #     has not FINISHED with is UNSCANNED here, never zero. A registry it
         #     cannot pull from and auto-scan switched off both look identical to
         #     a perfect image, and that is the one mistake worth designing out.
+        #
+        #     Note "finished", not "has no findings for". Those were the same
+        #     sentence until 0.3.8 and they are not the same thing: a scan that
+        #     ran and came back empty is a pass, and refusing to say so turned
+        #     the profile's own headline result into a failure report. The
+        #     distinction is `scan_summary`, in `nv-survey`; the refusal above
+        #     is unchanged and still the point.
         #   * recommend a merge for a canary that never became Ready. That is
         #     the finding — it is how a pod-spec mismatch (a non-root image on a
         #     port the spec binds as root) is caught before a human merges.
@@ -1502,8 +1635,10 @@ sandbox:
         say() { printf '%s\n' "$1" >&2; }
         comment() { /sandbox/bin/forge POST "${repo}/issues/${pr}/comments" "{\"body\":\"$1\"}" >/dev/null; }
         # `nv-survey` ends every single-image run in exactly one `status:` line
-        # — SCANNED, NOT-SCANNED or ERROR <kind> — and only prints `counts:`
-        # alongside SCANNED.
+        # — SCANNED, NOT-SCANNED, NO-WORKLOAD or ERROR <kind> — and only prints
+        # `counts:` alongside SCANNED. SCANNED means the scanner finished with
+        # the image, NOT that it found anything: `counts: critical=0 …` is a
+        # pass and is the result this step is built to produce.
         #
         # IT USED TO BE INFERRED FROM SILENCE, and that was wrong. This read
         # `nv-survey … 2>/dev/null | sed -n 's/^  counts: //p'` and treated an
@@ -1691,7 +1826,13 @@ sandbox:
             exit 1;;
         esac
         if [ "$stafter" != "SCANNED" ]; then
-          comment "**Unverified — do not read this as a pass.** \`${new}\` has been running as a canary in \`${cns}/${cname}\` for ${scanwaited}s and SUSE Security has still reported no findings for it, so the replacement is **UNSCANNED**, not clean.\\n\\nFor reference, \`${old}\` right now: \`${before}\`.\\n\\nThe scan was not left to auto-scan: it was requested outright with \`POST /v1/scan/workload\`, and the last request returned \`${sttrig:-no status}\`. That narrows it. \`NO-WORKLOAD\` means the scanner cannot see a running container for this image at all, which is a cluster problem rather than an image one. \`TRIGGERED\` means the scan was accepted and did not finish in ${scanwaited}s — check \`GET /v1/scan/status\` for a queue, and the scanner pod's logs for an image it could not read.\\n\\nWhat has not been established is anything about the image. An image nothing has scanned and an image with nothing wrong with it are the same empty answer from here."
+          # The scanner's own words about the canary's container, when it had
+          # any. This is the line that tells an unfinished scan from a missing
+          # one, and it is worth more on the pull request than any wording
+          # this script could choose.
+          sumline=$(field "$safter" scan_summary)
+          [ -n "$sumline" ] && sumline=" with \`${sumline}\`"
+          comment "**Unverified — do not read this as a pass.** \`${new}\` has been running as a canary in \`${cns}/${cname}\` for ${scanwaited}s and SUSE Security has still not finished scanning it, so the replacement is **UNSCANNED**, not clean.\\n\\nFor reference, \`${old}\` right now: \`${before}\`.\\n\\nThe query returned \`${stafter:-no status}\`${sumline}. \`NO-WORKLOAD\` means the scanner cannot see a running container for this image at all, which is a cluster problem rather than an image one; \`NOT-SCANNED\` means a container is running and the scan has not completed.\\n\\nThe scan was not left to auto-scan: it was requested outright with \`POST /v1/scan/workload\`, and the last request returned \`${sttrig:-no status}\` — check \`GET /v1/scan/status\` for a queue, and the scanner pod's logs for an image it could not read.\\n\\nNote that a finished scan finding nothing would NOT appear here: that is reported as a pass with \`critical=0\`, read from the scanner's \`scan_summary\` rather than inferred from an empty result. So this is not that."
           say "the canary is Ready but SUSE Security has reported nothing for ${new}"
           say "after ${scanwaited}s. That is UNSCANNED, not clean, and it is on the"
           say "pull request as unverified. Do not describe it as a pass."
