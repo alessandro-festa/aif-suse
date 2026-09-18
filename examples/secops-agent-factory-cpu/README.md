@@ -124,6 +124,17 @@ takes it away again; setting the image and the replica count stays with the agen
 agent's policy, pinned to one object by name. Neither side can do the other's half, which is what
 makes the canary verdict worth reading.
 
+**And a grant is not a capability until the credential is mounted.** 0.3.5 added the Role and left
+`automountServiceAccountToken: false` on the pod, which is what the two releases before this one
+shipped: the permission existed, the token to exercise it did not, and the run died at step 9 with
+`FileNotFoundError: /var/run/secrets/kubernetes.io/serviceaccount/token` the first time any run got
+that far. Since 0.3.7 the service account still says `false` — it is shared with the two TLS shims,
+which have no business with the API — and the orchestrator's **pod spec** overrides it to `true`.
+So the audit is two greps: one Role, in one namespace, and one pod out of three holding a token.
+If you are checking the "nothing here holds a kubeconfig" claim, that is the whole of what to
+check, and it is deliberately not a kubeconfig — it is a namespaced token that can create and
+delete one kind of object in one namespace.
+
 It used to be seeded by hand at `replicas: 0` and left between runs, which avoided the same
 problem by never creating anything. It also meant the demo's starting state included a stale
 Deployment nobody looked at, and a killed run left it running. The correct starting state is now

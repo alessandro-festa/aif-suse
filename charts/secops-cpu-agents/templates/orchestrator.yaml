@@ -5,12 +5,21 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "secops-cpu-agents.labels" . | nindent 4 }}
-# No Role and no RoleBinding anywhere in this chart, and no service-account
-# token mounted. The orchestrator talks to exactly three things — the OpenShell
-# gateway over mTLS, the forge over HTTP, and its own status port — and none of
-# them is the Kubernetes API. A ServiceAccount exists only because every pod
-# gets one; this makes it an explicitly empty one rather than `default` with an
-# automounted token nobody audited.
+# DENY BY DEFAULT HERE, and opted into by exactly one pod. Three pods share
+# this service account — the orchestrator and the two shims — and until 0.3.5
+# none of them had any business with the Kubernetes API at all: the orchestrator
+# talks to the OpenShell gateway over mTLS, the forge over HTTP, and its own
+# status port, and the shims terminate TLS. A ServiceAccount exists only because
+# every pod gets one, and this made it an explicitly empty one rather than
+# `default` with an automounted token nobody audited.
+#
+# 0.3.5 gave the orchestrator one Role (templates/rbac.yaml: create and delete
+# the canary Deployment, one namespace) and this line stayed `false`, so the
+# grant existed and the credential to use it did not. The run got all the way
+# to step 9 and died on `FileNotFoundError: .../serviceaccount/token`, which is
+# the first time any run had reached the call. The token is now mounted on the
+# orchestrator's pod spec and nowhere else — see the comment there — so the
+# shims stay tokenless and the opt-in is one line in one place.
 automountServiceAccountToken: false
 ---
 apiVersion: v1
@@ -67,7 +76,20 @@ spec:
         checksum/workflow: {{ include (print $.Template.BasePath "/workflow.yaml") . | sha256sum }}
     spec:
       serviceAccountName: secops-cpu-orchestrator
-      automountServiceAccountToken: false
+      # THE ONE POD THAT GETS A TOKEN, and the only reason it does is the
+      # canary fixture. `_kube` in orchestrator.py reads the token and the
+      # cluster CA from the standard projected path and makes exactly two
+      # calls with them — create the canary Deployment, delete it again — under
+      # the single namespaced Role in templates/rbac.yaml. Nothing else in this
+      # process touches the Kubernetes API, and no agent can: an agent that
+      # could POST a Deployment could start any image it liked in that
+      # namespace, which is a sandbox escape no egress rule would see.
+      #
+      # A pod-spec value overrides the service account's, which is why the
+      # account above can stay `false` and the two shims stay tokenless. Flip
+      # this back to `false` and the run dies at step 9, which is exactly what
+      # 0.3.5 and 0.3.6 did.
+      automountServiceAccountToken: true
       {{- include "secops-cpu-agents.imagePullSecrets" . | nindent 6 }}
       securityContext:
         runAsNonRoot: true
