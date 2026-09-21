@@ -50,12 +50,12 @@ kind: Blueprint
 metadata:
   labels:
     ai-factory.suse.com/blueprint-name: secops-openshell-gateway
-    ai-factory.suse.com/blueprint-version: 1.0.0
-  name: secops-openshell-gateway-1-0-0
+    ai-factory.suse.com/blueprint-version: 1.0.1
+  name: secops-openshell-gateway-1-0-1
 spec:
   source: Nvidia
   displayName: SecOps OpenShell Gateway
-  version: 1.0.0
+  version: 1.0.1
   description: |
     NVIDIA OpenShell gateway, configured as the governed execution substrate
     for the SecOps Agent Factory. Install once per cluster, then install
@@ -128,6 +128,33 @@ spec:
           # that can push to a git remote it is the whole point of using
           # OpenShell rather than a NetworkPolicy.
           topology: sidecar
+
+          image:
+            # THE DELTA FROM 1.0.0, and it is not optional: without it no
+            # sandbox can start at all.
+            #
+            # An empty tag does NOT fall back to the chart's own
+            # `openshell.supervisorImage` helper, which would have resolved to
+            # .Chart.AppVersion and been correct. _helpers.tpl's
+            # `openshell.supervisorImageOverrideEnabled` only emits the
+            # override when the repository differs from the default OR the tag
+            # is non-empty, so leaving both alone hands the decision to the
+            # GATEWAY BINARY's built-in default — the floating `:dev` tag.
+            #
+            # `:dev` is stale. Its arm64 manifest is a Debian image whose only
+            # binary is /openshell-supervisor, while this gateway's generated
+            # init container runs `/openshell-sandbox copy-self`. The pod dies
+            # in Init:StartError with
+            #
+            #   exec: "/openshell-sandbox": stat /openshell-sandbox:
+            #   no such file or directory
+            #
+            # which reaches the CLI as nothing more informative than
+            # `PodFailed: Pod failed`. Observed live on the CPU profile.
+            #
+            # The value is the chart's appVersion, i.e. the gateway commit, and
+            # must be changed together with chartVersion above.
+            tag: "17171cd9337a2181d4bb5a9e711e1f2ad5f69388"
 
         server:
           auth:
