@@ -651,7 +651,7 @@ spec:
   displayName: OpenShell Gateway
   source:
     sourceType: Blueprint
-    blueprint: { name: openshell-gateway, version: 0.2.4 }
+    blueprint: { name: openshell-gateway, version: 0.2.5 }
   targetNamespace: openshell
   targetClusters: ["local"]
   deployStrategy: FleetBundle

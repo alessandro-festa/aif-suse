@@ -49,7 +49,7 @@ wizard each time. For every one: **Step 2** Deployment Type **Fleet Bundle**, Ta
 > wizard will not stop you — its uniqueness check only looks within the chosen namespace.
 > Put the tenant in the name.
 
-**2.1 — OpenShell Gateway** v0.2.4
+**2.1 — OpenShell Gateway** v0.2.5
 
 | Field | Value |
 |---|---|

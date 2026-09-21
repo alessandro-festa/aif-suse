@@ -18,21 +18,25 @@
 # bump spec.version. Most optional blocks below are therefore left commented
 # out with the guidance needed to switch them on.
 #
-# VERSION 0.2.4, not 0.2.2. The blueprint NAME is what versions are scoped to,
+# VERSION 0.2.5, not 0.2.2. The blueprint NAME is what versions are scoped to,
 # and 0.2.2 and 0.2.3 of `openshell-gateway` are already taken by the SecOps
 # CPU profile's registry-image variant. Numbering over them would give one
 # cluster two different blueprints claiming the same version.
+#
+# 0.2.5 drops the locally built sandbox image for a pullable one — see
+# server.sandboxImage below. 0.2.4 cannot be installed on a cluster that has
+# not had the image side-loaded into its nodes first.
 apiVersion: ai-factory.suse.com/v1alpha1
 kind: Blueprint
 metadata:
   labels:
     ai-factory.suse.com/blueprint-name: openshell-gateway
-    ai-factory.suse.com/blueprint-version: 0.2.4
-  name: openshell-gateway-0-2-4
+    ai-factory.suse.com/blueprint-version: 0.2.5
+  name: openshell-gateway-0-2-5
 spec:
   source: Nvidia
   displayName: OpenShell Gateway
-  version: 0.2.4
+  version: 0.2.5
   description: |
     NVIDIA OpenShell gateway — a runtime environment for autonomous agents.
     Install this once per cluster, then install the "OpenShell Workspace"
@@ -191,39 +195,51 @@ spec:
 
           # Default image for new sandboxes.
           #
-          # THIS IS A LOCALLY BUILT IMAGE, NOT A PULLABLE ONE. Of
-          # ghcr.io/nvidia/openshell-community/sandboxes/{base,suse,python,
-          # openclaw-suse}, an anonymous pull succeeds for "base" alone; the
-          # others return DENIED. But "base" ships Claude Code and NO OpenClaw,
-          # so nothing in it can be driven by the nemoclaw CLI. The
-          # SUSE-branded openclaw-suse sandbox is what this demo needs, and it
-          # only exists in source.
+          # THE DELTA FROM 0.2.4. Our fork's registry, not NVIDIA's, and not a
+          # locally built image either. Through 0.2.4 this was
+          # "docker.io/openshell-community/sandboxes/openclaw-suse:demo" with a
+          # "Never" pull policy — a bare name that Docker normalises to
+          # docker.io, that no registry has ever held, and that therefore had to
+          # be built and `kind load`ed by hand before the blueprint would work
+          # at all. On a fresh cluster that is a silent trap: `docker pull` on
+          # it returns "repository does not exist".
           #
-          # BUILD AND LOAD IT BEFORE INSTALLING THIS BLUEPRINT (two stages —
-          # openclaw-suse builds FROM sandboxes/suse):
+          # Why not NVIDIA's. Of ghcr.io/nvidia/openshell-community/sandboxes/
+          # {base,suse,python,openclaw-suse}, an anonymous pull succeeds for
+          # "base" alone; the others return DENIED. And "base" ships Claude Code
+          # with NO OpenClaw, so nothing in it can be driven by the nemoclaw CLI.
           #
-          #   cd ~/Documents/dev/OpenShell-Community
-          #   docker buildx build --load -t openshell-community/sandboxes/suse:demo \
-          #     sandboxes/suse
-          #   docker buildx build --load \
-          #     --build-arg BASE_IMAGE=openshell-community/sandboxes/suse:demo \
-          #     -t openshell-community/sandboxes/openclaw-suse:demo \
-          #     sandboxes/openclaw-suse
-          #   kind load docker-image \
-          #     openshell-community/sandboxes/openclaw-suse:demo --name <cluster>
+          # This image is anonymously pullable — verified, no credentials, no
+          # imagePullSecret needed. `latest` and `v0.1.0` are the same manifest,
+          # sha256:2d817c37977977c94fc5d02d1066ced1451996e537dfda0c375e3b4ecb5e552b.
           #
-          # To fall back to the stock behaviour, restore
-          # "ghcr.io/nvidia/openshell-community/sandboxes/base:latest" and drop
-          # the Never pull policy — you lose OpenClaw, not the sandbox.
-          sandboxImage: "docker.io/openshell-community/sandboxes/openclaw-suse:demo"
-          # Never: the image is side-loaded into the nodes, so any pull attempt
-          # is an ImagePullBackOff. Change this to IfNotPresent (or drop it) the
-          # day the image is published to a registry.
-          sandboxImagePullPolicy: "Never"
-          # For a private registry (including the SUSE images above once they
-          # are published behind auth):
+          # ARM64 ONLY. Both tags were pushed by hand from an arm64 host. The
+          # fork's .github/workflows/openclaw-suse.yml is NOT the source of this
+          # image and was deliberately not used: it builds amd64 only and fires
+          # only on a tag push matching `openclaw-suse/v*`. On an amd64 cluster
+          # this image will not run — build and side-load there, or publish a
+          # multi-arch tag first.
+          #
+          # examples/secops-agent-factory-cpu/ pins the same image; keep the two
+          # in step.
+          sandboxImage: "ghcr.io/alessandro-festa/openshell-community/sandboxes/openclaw-suse:latest"
+          # IfNotPresent, NOT 0.2.4's "Never". This is a driver-level setting
+          # stamped on every sandbox pod whatever image it was created from, so
+          # "Never" breaks any sandbox created with `--from <registry image>`,
+          # not just the default one.
+          sandboxImagePullPolicy: "IfNotPresent"
+          # Not needed while the ghcr package is public. If it is made private,
+          # the Secret must exist in each WORKSPACE namespace (tenant-a,
+          # tenant-b) rather than in `openshell` — that is where sandbox pods
+          # run:
+          #
+          #   kubectl -n tenant-a create secret docker-registry ghcr-pull \
+          #     --docker-server=ghcr.io \
+          #     --docker-username=<github-user> \
+          #     --docker-password=<PAT with read:packages>
+          #
           # sandboxImagePullSecrets:
-          #   - name: openshell-sandbox-pull
+          #   - name: ghcr-pull
 
           # Left empty so sandbox workspace PVCs use the cluster's default
           # StorageClass. Set this on clusters that have no default, otherwise
