@@ -17,17 +17,22 @@
 # Create, which does expose a per-component values editor) or edit this file and
 # bump spec.version. Most optional blocks below are therefore left commented
 # out with the guidance needed to switch them on.
+#
+# VERSION 0.2.4, not 0.2.2. The blueprint NAME is what versions are scoped to,
+# and 0.2.2 and 0.2.3 of `openshell-gateway` are already taken by the SecOps
+# CPU profile's registry-image variant. Numbering over them would give one
+# cluster two different blueprints claiming the same version.
 apiVersion: ai-factory.suse.com/v1alpha1
 kind: Blueprint
 metadata:
   labels:
     ai-factory.suse.com/blueprint-name: openshell-gateway
-    ai-factory.suse.com/blueprint-version: 0.2.1
-  name: openshell-gateway-0-2-1
+    ai-factory.suse.com/blueprint-version: 0.2.4
+  name: openshell-gateway-0-2-4
 spec:
   source: Nvidia
   displayName: OpenShell Gateway
-  version: 0.2.1
+  version: 0.2.4
   description: |
     NVIDIA OpenShell gateway — a runtime environment for autonomous agents.
     Install this once per cluster, then install the "OpenShell Workspace"
@@ -110,6 +115,35 @@ spec:
           # Switch to "sidecar" for a separate proxy container — required if you
           # use upstreamProxy with authentication.
           # topology: combined
+
+          image:
+            # THE DELTA FROM 0.2.1, and it is not optional: without it no
+            # sandbox can start at all.
+            #
+            # An empty tag does NOT fall back to the chart's own
+            # `openshell.supervisorImage` helper, which would have resolved to
+            # .Chart.AppVersion and been correct. _helpers.tpl's
+            # `openshell.supervisorImageOverrideEnabled` only emits the
+            # override when the repository differs from the default OR the tag
+            # is non-empty, so leaving both alone hands the decision to the
+            # GATEWAY BINARY's built-in default — the floating `:dev` tag.
+            #
+            # `:dev` is stale. Its arm64 manifest is a Debian image whose only
+            # binary is /openshell-supervisor, while this gateway's generated
+            # init container runs `/openshell-sandbox copy-self`. The pod dies
+            # before initialising, with
+            #
+            #   exec: "/openshell-sandbox": stat /openshell-sandbox:
+            #   no such file or directory
+            #
+            # which reaches the CLI as nothing more informative than
+            # `PodFailed: Pod failed`.
+            #
+            # The value is the chart's appVersion, i.e. the gateway commit, and
+            # must be changed together with chartVersion above. That image is
+            # Alpine-based with ENTRYPOINT ["/openshell-sandbox"] and publishes
+            # linux/arm64.
+            tag: "17171cd9337a2181d4bb5a9e711e1f2ad5f69388"
 
         server:
           # ---------------------------------------------------------------

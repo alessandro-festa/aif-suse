@@ -267,6 +267,36 @@ live cluster's version, which makes local rendering disagree with the deployed r
 Blueprint A pins `supervisor.sideloadMethod: init-container`. Drop the pin on
 Kubernetes ≥ 1.35.
 
+### 4.3 Also pinned: the supervisor image tag
+
+Blueprint A pins `supervisor.image.tag` to the chart's appVersion. **Without it no sandbox
+starts at all**, and the failure points nowhere near the cause.
+
+Leaving both `supervisor.image.repository` and `supervisor.image.tag` at their chart
+defaults looks like the safe choice — the chart has an `openshell.supervisorImage` helper
+that resolves an empty tag to `.Chart.AppVersion`, which would be correct. It never runs.
+`_helpers.tpl`'s `openshell.supervisorImageOverrideEnabled` only emits the override into
+`gateway.toml` when the repository differs from the default **or** the tag is non-empty, so
+touching neither hands the decision to the gateway binary's own built-in default: the
+floating `:dev` tag.
+
+`:dev` is stale. Its arm64 manifest is a Debian image whose only binary is
+`/openshell-supervisor`, while the init container this gateway generates runs
+`/openshell-sandbox copy-self /opt/openshell/bin/openshell-sandbox`. Every sandbox pod dies
+in `Init:StartError`:
+
+```
+exec: "/openshell-sandbox": stat /openshell-sandbox: no such file or directory
+```
+
+The CLI reports that as `PodFailed: Pod failed`, which names neither the image, the init
+container, nor the tag. `kubectl -n <tenant> describe pod <sandbox>` is the only place the
+real message appears.
+
+The tag is the gateway commit, so **it must be changed together with `chartVersion`** on the
+component above. The pinned image is Alpine-based with `ENTRYPOINT ["/openshell-sandbox"]`
+and publishes `linux/arm64`.
+
 ---
 
 ## 5. Blueprint values vs gateway runtime state
@@ -621,7 +651,7 @@ spec:
   displayName: OpenShell Gateway
   source:
     sourceType: Blueprint
-    blueprint: { name: openshell-gateway, version: 0.2.0 }
+    blueprint: { name: openshell-gateway, version: 0.2.4 }
   targetNamespace: openshell
   targetClusters: ["local"]
   deployStrategy: FleetBundle
