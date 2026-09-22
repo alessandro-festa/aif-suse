@@ -7,7 +7,7 @@ annotations:
       name: llama-server
 apiVersion: v2
 name: secops-cpu-inference
-version: 0.1.1
+version: 0.1.2
 description: |
   CPU-only inference for the Sovereign Agentic SecOps zero-GPU profile: one
   llama.cpp server for generation and one for embeddings, no GPU, no NIM.

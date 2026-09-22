@@ -96,6 +96,34 @@ generative:
   contextSize: 8192
   parallel: 1
 
+  # --no-mmap, and it is a throughput fix rather than a footprint one.
+  #
+  # By default llama-server mmaps the GGUF from /models, so the ~2.5 GB of
+  # weights live in page cache — reclaimable memory, competing with the KV
+  # cache under the same 8Gi cgroup limit. Measured on downstream-1 during the
+  # 2026-09-17 run, inside the llm container's cgroup: memory.current
+  # 8,589,594,624 against memory.max 8,589,934,592, i.e. 340 KB of headroom,
+  # with memory.events max=18288, pgscan_direct 125M, pgmajfault 81k and
+  # workingset_refault_file 818k. Once prompts got long — triage ran at 3169
+  # tokens — the kernel started evicting model pages and re-reading them from
+  # the PVC once per token.
+  #
+  # The symptom is specific and worth recognising: generation collapses from
+  # ~9 t/s to ~1.2 t/s while prompt eval stays at ~30 t/s. Prompt eval is a
+  # batched sequential pass and survives eviction; per-token decode touches all
+  # the weights and does not. Triage took 499 s instead of ~60 s.
+  #
+  # --no-mmap reads the weights into anonymous memory, which the kernel cannot
+  # evict. Same bytes, same limit — but they stay resident, so the KV cache
+  # competes against a fixed allocation instead of racing it. Note this does
+  # NOT reduce total usage, so it is not a substitute for the 8192/1 budget
+  # above; both are needed at 8Gi.
+  #
+  # Set false only on a host with enough free RAM that the page cache is never
+  # under pressure, where mmap gives faster restarts and a cache shared with
+  # any other pod reading the same file.
+  noMmap: true
+
   resources:
     limits:
       cpu: "4"

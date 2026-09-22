@@ -112,7 +112,11 @@ spec:
     # -------------------------------------------------------------------
     - chartRepo: secops-cpu
       chartName: secops-cpu-inference
-      chartVersion: 0.1.1
+      # 0.1.2 adds --no-mmap to the generative server. At 0.1.1 the ~2.5 GB of
+      # weights sat in page cache inside the same 8Gi cgroup as the KV cache,
+      # and once prompts got long the kernel evicted them per token: generation
+      # collapsed from ~9 t/s to ~1.2 t/s and triage took 499 s instead of ~60.
+      chartVersion: 0.1.2
       vendor: suse
       # Pinned rather than taken from the install wizard. Three hostnames
       # depend on it: the provider URL quoted above, the ingest Job's

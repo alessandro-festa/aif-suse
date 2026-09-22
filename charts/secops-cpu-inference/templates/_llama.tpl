@@ -117,6 +117,11 @@ spec:
             {{- end }}
             - --parallel
             - "{{ $cfg.parallel }}"
+            {{- if $cfg.noMmap }}
+            # See values.yaml: keeps the weights in anonymous memory so the
+            # kernel cannot evict them out from under the KV cache.
+            - --no-mmap
+            {{- end }}
           {{- else }}
             - --embeddings
           {{- end }}
