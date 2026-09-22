@@ -18,25 +18,34 @@
 # bump spec.version. Most optional blocks below are therefore left commented
 # out with the guidance needed to switch them on.
 #
-# VERSION 0.2.5, not 0.2.2. The blueprint NAME is what versions are scoped to,
-# and 0.2.2 and 0.2.3 of `openshell-gateway` are already taken by the SecOps
-# CPU profile's registry-image variant. Numbering over them would give one
-# cluster two different blueprints claiming the same version.
+# VERSION 0.2.6, and the numbering is not contiguous by accident. The blueprint
+# NAME is what versions are scoped to, and 0.2.2/0.2.3 of `openshell-gateway`
+# are taken by the SecOps CPU profile's registry-image variant on another
+# branch. Numbering over them would give one cluster two different blueprints
+# claiming the same version. Check with
+#   kubectl get blueprint | grep openshell-gateway
+# and grep the other examples/* profiles before picking the next number.
 #
-# 0.2.5 drops the locally built sandbox image for a pullable one — see
-# server.sandboxImage below. 0.2.4 cannot be installed on a cluster that has
-# not had the image side-loaded into its nodes first.
+# 0.2.6 moves all three OpenShell images onto SUSE Linux Enterprise BCI 16.0,
+# built from build/openshell-bci/ — see BUILDING.md there. This replaces three
+# foreign bases (bci-base for the sandbox, gcr.io/distroless/cc-debian13 for the
+# gateway, alpine:3.22 for the supervisor) and, unlike 0.2.5's hand-pushed
+# arm64-only sandbox, publishes linux/amd64 + linux/arm64.
+#
+# 0.2.5 dropped the locally built sandbox image for a pullable one. 0.2.4 could
+# not be installed on a cluster without side-loading the image into its nodes
+# first.
 apiVersion: ai-factory.suse.com/v1alpha1
 kind: Blueprint
 metadata:
   labels:
     ai-factory.suse.com/blueprint-name: openshell-gateway
-    ai-factory.suse.com/blueprint-version: 0.2.5
-  name: openshell-gateway-0-2-5
+    ai-factory.suse.com/blueprint-version: 0.2.6
+  name: openshell-gateway-0-2-6
 spec:
   source: Nvidia
   displayName: OpenShell Gateway
-  version: 0.2.5
+  version: 0.2.6
   description: |
     NVIDIA OpenShell gateway — a runtime environment for autonomous agents.
     Install this once per cluster, then install the "OpenShell Workspace"
@@ -101,6 +110,25 @@ spec:
       releaseName: openshell
       values:
         # ---------------------------------------------------------------
+        # Images — SUSE Linux Enterprise BCI 16.0, new in 0.2.6
+        # ---------------------------------------------------------------
+        # Built from build/openshell-bci/ in this repo; see BUILDING.md there
+        # for the build recipe, the size and UID tables, and the Open Build
+        # Service portability analysis.
+        #
+        # The tag is the OpenShell commit these were compiled from, which is the
+        # same SHA as chartVersion's dev suffix and supervisor.image.tag below.
+        # All three move together — the gateway binary has the supervisor tag
+        # compiled into it, so a mismatch is not a version skew you can patch at
+        # the chart level.
+        image:
+          # Replaces gcr.io/nvidia/openshell/gateway (gcr.io/distroless/
+          # cc-debian13 underneath). Compiled from source on bci-base:16.0 and
+          # shipped on bci-micro:16.0.
+          repository: ghcr.io/alessandro-festa/openshell-bci/gateway
+          tag: "17171cd9337a2181d4bb5a9e711e1f2ad5f69388"
+
+        # ---------------------------------------------------------------
         # Topology
         # ---------------------------------------------------------------
         # Shared-gateway topology: the sandbox ServiceAccount, Role, RoleBinding
@@ -144,9 +172,21 @@ spec:
             # `PodFailed: Pod failed`.
             #
             # The value is the chart's appVersion, i.e. the gateway commit, and
-            # must be changed together with chartVersion above. That image is
-            # Alpine-based with ENTRYPOINT ["/openshell-sandbox"] and publishes
-            # linux/arm64.
+            # must be changed together with chartVersion above.
+            #
+            # NEW IN 0.2.6 — repository. Upstream's supervisor image is
+            # alpine:3.22 and publishes only what NVIDIA's CI builds; ours is
+            # the same binary compiled on SLE BCI 16.0 and shipped on
+            # bci-micro:16.0, for both linux/amd64 and linux/arm64. It keeps
+            # upstream's contract exactly: ENTRYPOINT ["/openshell-sandbox"],
+            # the binary at / with mode 0555, and nftables/iptables present for
+            # the egress-bypass rules.
+            #
+            # Statically linked, which is not cosmetic — this binary is lifted
+            # OUT of this image by the init container's `copy-self` and executed
+            # INSIDE whatever sandbox image the workload uses, so it cannot
+            # depend on that image's glibc.
+            repository: ghcr.io/alessandro-festa/openshell-bci/supervisor
             tag: "17171cd9337a2181d4bb5a9e711e1f2ad5f69388"
 
         server:
@@ -195,34 +235,46 @@ spec:
 
           # Default image for new sandboxes.
           #
-          # THE DELTA FROM 0.2.4. Our fork's registry, not NVIDIA's, and not a
-          # locally built image either. Through 0.2.4 this was
-          # "docker.io/openshell-community/sandboxes/openclaw-suse:demo" with a
-          # "Never" pull policy — a bare name that Docker normalises to
-          # docker.io, that no registry has ever held, and that therefore had to
-          # be built and `kind load`ed by hand before the blueprint would work
-          # at all. On a fresh cluster that is a silent trap: `docker pull` on
-          # it returns "repository does not exist".
+          # Two older constraints still worth knowing, because they rule out the
+          # obvious alternatives:
           #
-          # Why not NVIDIA's. Of ghcr.io/nvidia/openshell-community/sandboxes/
-          # {base,suse,python,openclaw-suse}, an anonymous pull succeeds for
-          # "base" alone; the others return DENIED. And "base" ships Claude Code
-          # with NO OpenClaw, so nothing in it can be driven by the nemoclaw CLI.
+          # - Through 0.2.4 this was "docker.io/openshell-community/sandboxes/
+          #   openclaw-suse:demo" with a "Never" pull policy — a bare name that
+          #   Docker normalises to docker.io, that no registry has ever held,
+          #   and that therefore had to be built and `kind load`ed by hand
+          #   before the blueprint would work at all. On a fresh cluster that is
+          #   a silent trap: `docker pull` on it returns "repository does not
+          #   exist".
+          # - NVIDIA's own are not usable. Of ghcr.io/nvidia/
+          #   openshell-community/sandboxes/{base,suse,python,openclaw-suse},
+          #   an anonymous pull succeeds for "base" alone; the others return
+          #   DENIED. And "base" ships Claude Code with NO OpenClaw, so nothing
+          #   in it can be driven by the nemoclaw CLI.
           #
-          # This image is anonymously pullable — verified, no credentials, no
-          # imagePullSecret needed. `latest` and `v0.1.0` are the same manifest,
-          # sha256:2d817c37977977c94fc5d02d1066ced1451996e537dfda0c375e3b4ecb5e552b.
+          # THE DELTA FROM 0.2.5, and it closes the arm64-only gap. 0.2.5 used
+          # ghcr.io/alessandro-festa/openshell-community/sandboxes/
+          # openclaw-suse:latest, 3.61 GB and linux/arm64 only — both tags were
+          # pushed by hand from an arm64 host, so the demo simply could not run
+          # on an amd64 cluster.
           #
-          # ARM64 ONLY. Both tags were pushed by hand from an arm64 host. The
-          # fork's .github/workflows/openclaw-suse.yml is NOT the source of this
-          # image and was deliberately not used: it builds amd64 only and fires
-          # only on a tag push matching `openclaw-suse/v*`. On an amd64 cluster
-          # this image will not run — build and side-load there, or publish a
-          # multi-arch tag first.
+          # This one is built from build/openshell-bci/Dockerfile.openclaw for
+          # linux/amd64 + linux/arm64, on the bci-micro-based sandbox rather
+          # than bci-base: 799 MB against 3.61 GB. The saving is mostly not the
+          # base swap — it is dropping toolchains and agent CLIs that were never
+          # part of the sandbox contract (gcc, make, vim, a uv-managed Python,
+          # and the bundled claude/codex/opencode/copilot/gh binaries).
           #
-          # examples/secops-agent-factory-cpu/ pins the same image; keep the two
-          # in step.
-          sandboxImage: "ghcr.io/alessandro-festa/openshell-community/sandboxes/openclaw-suse:latest"
+          # CONSEQUENCE WORTH KNOWING: policy.yaml inside the image still has
+          # rules bound to /usr/bin/gh, /usr/bin/glab, /usr/local/bin/claude and
+          # /usr/local/bin/opencode. Those binaries are not present, so those
+          # rules never match — intended, since they are alternative agents to
+          # OpenClaw. git IS present (git-core, 25 MB), so the `github` rule
+          # that lets an agent clone is live.
+          #
+          # examples/secops-agent-factory-cpu/ still pins the old
+          # openclaw-suse:latest; the two are deliberately out of step until
+          # that profile is retested against these images.
+          sandboxImage: "ghcr.io/alessandro-festa/openshell-bci/openclaw:17171cd9337a2181d4bb5a9e711e1f2ad5f69388"
           # IfNotPresent, NOT 0.2.4's "Never". This is a driver-level setting
           # stamped on every sandbox pod whatever image it was created from, so
           # "Never" breaks any sandbox created with `--from <registry image>`,

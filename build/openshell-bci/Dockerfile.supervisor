@@ -1,0 +1,149 @@
+# syntax=docker/dockerfile:1.4
+
+# SPDX-FileCopyrightText: Copyright (c) 2026 SUSE LLC. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+#!BuildTag: openshell-bci/supervisor:latest
+#!BuildTag: openshell-bci/supervisor:%PKG_VERSION%
+
+# =============================================================================
+# OpenShell supervisor on SUSE Linux Enterprise BCI 16.0
+# =============================================================================
+#
+# The per-sandbox supervisor. This image is never the sandbox's runtime base —
+# the gateway mounts it as a Kubernetes image-volume (k8s >= 1.35) or runs it as
+# an init container executing `/openshell-sandbox copy-self <dest>` into an
+# emptyDir, which the sandbox container then execs. So the binary is lifted OUT
+# of this image and run INSIDE an arbitrary other one.
+#
+# That is why it must be statically linked, and why the tag pinned here has to
+# match the gateway's compiled-in OPENSHELL_IMAGE_TAG. See Dockerfile.gateway.
+#
+# BUILD CONTEXT IS THE OPENSHELL CHECKOUT, NOT THIS REPO:
+#   docker buildx build -f build/openshell-bci/Dockerfile.supervisor \
+#     -t openshell-bci/supervisor:dev --platform linux/arm64 --load \
+#     /tmp/openshell-src
+# or just:  ./build.sh supervisor
+#
+# -----------------------------------------------------------------------------
+# Why this is static-glibc and not static-musl
+# -----------------------------------------------------------------------------
+# Upstream defaults to x86_64/aarch64-unknown-linux-musl. SLE_BCI 16.0 packages
+# no musl at all — no musl, no musl-devel, no musl-gcc, no rust-std-*-musl — and
+# the rust1.95 RPM installs only the native gnu std target.
+#
+# Rather than reach for rustup (which would put a network download in the base
+# layer and forfeit the OBS story), this uses upstream's own second supported
+# variant: SUPERVISOR_LIBC=glibc-static, implemented in
+# tasks/scripts/stage-prebuilt-binaries.sh as the gnu triple built with
+# `-C target-feature=+crt-static`. Their comment at lines 49-51 states plainly
+# that "both options produce a fully static binary because the supervisor is
+# executed from inside arbitrary sandbox images". SLE_BCI ships
+# glibc-devel-static (SUSE's name for glibc-static), which is the piece that
+# makes this work.
+#
+# Residual risk, called out honestly: statically linked glibc cannot dlopen NSS
+# modules, so getaddrinfo()-based DNS degrades. The supervisor uses rustls with
+# webpki-roots (its own bundled root store, no filesystem trust lookup), but
+# name resolution still needs verifying at runtime rather than inferred from a
+# successful link. The `--version` smoke test below does not cover it; Phase 6's
+# live `sandbox connect` does.
+# =============================================================================
+
+ARG BCI_VERSION=16.0
+ARG BUILDER_IMAGE=registry.suse.com/bci/bci-base:${BCI_VERSION}
+ARG RUNTIME_IMAGE=registry.suse.com/bci/bci-micro:${BCI_VERSION}
+
+# -----------------------------------------------------------------------------
+# Stage 1 — compile the static supervisor binary
+# -----------------------------------------------------------------------------
+FROM ${BUILDER_IMAGE} AS builder
+
+RUN set -eux; \
+    zypper --non-interactive --gpg-auto-import-keys refresh; \
+    zypper --non-interactive install --no-recommends \
+        rust1.95 \
+        cargo1.95 \
+        gcc \
+        gcc-c++ \
+        make \
+        glibc-devel \
+        glibc-devel-static \
+    ; \
+    zypper clean --all; \
+    rustc --version
+
+WORKDIR /src
+COPY . /src
+
+# TARGETARCH is supplied by buildx. The triple is the GNU one by design — the
+# static link comes from the rustflag, not from the target.
+ARG TARGETARCH
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+        amd64) target=x86_64-unknown-linux-gnu ;; \
+        arm64) target=aarch64-unknown-linux-gnu ;; \
+        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    RUSTFLAGS="-C target-feature=+crt-static" \
+      cargo build --release --locked --target "${target}" \
+        -p openshell-sandbox \
+        --bin openshell-sandbox; \
+    install -D -m 0555 "target/${target}/release/openshell-sandbox" /out/openshell-sandbox; \
+    /out/openshell-sandbox --version; \
+    # Fail the build rather than ship a dynamically linked supervisor: it would
+    # load fine here and then fail inside any sandbox image with a different
+    # glibc, which is the whole class of bug this check exists to prevent.
+    if ldd /out/openshell-sandbox 2>&1 | grep -qv 'not a dynamic executable'; then \
+        echo "ERROR: supervisor binary is not statically linked" >&2; \
+        ldd /out/openshell-sandbox >&2 || true; \
+        exit 1; \
+    fi
+
+# -----------------------------------------------------------------------------
+# Stage 2 — assemble the runtime firewall tooling
+# -----------------------------------------------------------------------------
+# Upstream's supervisor image is alpine:3.22 + `apk add nftables iptables
+# iptables-legacy`. The binary shells out to these for pod-namespace egress
+# enforcement, so they have to be in the image even though the binary itself is
+# self-contained.
+#
+# SLE 16 divergence: there is no iptables-legacy. Its iptables 1.8.11 is
+# nft-backend only and ships no xtables-legacy-multi. This is safe —
+# install_sidecar_bypass_rules() (netns/mod.rs:651) calls nft FIRST and only
+# falls back to iptables-legacy if the nft path itself errors, and SLE 16 puts
+# nft at /usr/sbin/nft, the first entry in NFT_SEARCH_PATHS. We lose a fallback
+# that should never fire; find_iptables_legacy() returns Option and the loss is
+# only reachable after nft has already failed.
+FROM ${BUILDER_IMAGE} AS rootfs
+
+RUN set -eux; \
+    zypper --non-interactive --gpg-auto-import-keys refresh; \
+    zypper --non-interactive --installroot /installroot \
+        --gpg-auto-import-keys install --no-recommends --auto-agree-with-licenses \
+        nftables \
+        iptables \
+    ; \
+    zypper --non-interactive --installroot /installroot clean --all
+
+# -----------------------------------------------------------------------------
+# Stage 3 — the shipped image
+# -----------------------------------------------------------------------------
+FROM ${RUNTIME_IMAGE}
+
+LABEL org.opencontainers.image.title="OpenShell supervisor (SLE BCI 16.0)" \
+      org.opencontainers.image.description="Statically linked OpenShell sandbox supervisor built on SUSE Linux Enterprise BCI 16.0" \
+      org.opencontainers.image.base.name="registry.suse.com/bci/bci-micro:16.0" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.vendor="SUSE LLC"
+
+COPY --from=rootfs /installroot /
+
+# Mode 0555 and root ownership, matching upstream: the Podman driver mounts this
+# as a read-only image volume and drops DAC_OVERRIDE, so the consuming
+# container's UID 0 must be able to read and exec it; the Kubernetes network
+# sidecar reaches it as a non-root proxy UID, which is why it is world-readable
+# rather than 0550.
+COPY --from=builder --chmod=0555 /out/openshell-sandbox /openshell-sandbox
+
+ENTRYPOINT ["/openshell-sandbox"]

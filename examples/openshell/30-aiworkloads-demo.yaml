@@ -27,7 +27,7 @@ spec:
     sourceType: Blueprint
     blueprint:
       name: openshell-gateway
-      version: 0.2.5
+      version: 0.2.6
   targetNamespace: openshell
   targetClusters: ["local"]
   deployStrategy: FleetBundle

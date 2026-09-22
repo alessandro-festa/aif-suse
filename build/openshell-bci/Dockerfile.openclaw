@@ -1,0 +1,97 @@
+# syntax=docker/dockerfile:1.4
+
+# SPDX-FileCopyrightText: Copyright (c) 2026 SUSE LLC. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+#!BuildTag: openshell-bci/openclaw:latest
+#!BuildTag: openshell-bci/openclaw:%PKG_VERSION%
+
+# =============================================================================
+# OpenClaw agent layer on the SLE BCI 16.0 sandbox
+# =============================================================================
+#
+# The sandbox image the AI Factory demo actually pins. It is Dockerfile.sandbox
+# plus the OpenClaw CLI and the device-pairing proxy that fronts the gateway.
+#
+# This is a straight port of OpenShell-Community/sandboxes/openclaw-suse, with
+# one change: the base is our bci-micro-derived sandbox rather than the ~1.1 GB
+# bci-base one, and it is built for amd64 + arm64 rather than arm64 alone.
+#
+# NOT OBS-PORTABLE, unlike the other three. `npm install -g` reaches the public
+# npm registry at build time, and the Open Build Service has no network during
+# builds. Making this OBS-capable would mean vendoring every transitive node
+# module as a source tarball. See BUILDING.md. Everything that CAN be RPM-pure
+# deliberately lives in Dockerfile.sandbox instead, which is why the two are
+# separate files rather than one.
+#
+# BUILD CONTEXT IS THE COMMUNITY SANDBOX DIRECTORY, NOT THIS REPO — that is
+# where policy.yaml, the start scripts, policy-proxy.js and proto/ live:
+#   docker buildx build -f build/openshell-bci/Dockerfile.openclaw \
+#     -t openshell-bci/openclaw:dev --platform linux/arm64 --load \
+#     --build-arg BASE_IMAGE=openshell-bci/sandbox:dev \
+#     ~/Documents/dev/OpenShell-Community/sandboxes/openclaw-suse
+# or just:  ./build.sh openclaw
+#
+# =============================================================================
+
+ARG BASE_IMAGE=openshell-bci/sandbox:dev
+FROM ${BASE_IMAGE}
+
+LABEL org.opencontainers.image.title="OpenShell OpenClaw sandbox (SLE BCI 16.0)" \
+      org.opencontainers.image.description="OpenClaw agent sandbox built on the SUSE Linux Enterprise BCI 16.0 OpenShell sandbox" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.vendor="SUSE LLC"
+
+USER root
+
+# Version pin carried over verbatim from sandboxes/openclaw-suse, including its
+# reasoning: 2026.5.18 inherits the fixes for GHSA-rchv-x836-w7xp,
+# GHSA-6mgf-v5j7-45cr and GHSA-5wcw-8jjv-m286, and is past 2026.3.11, whose
+# config validator rejects the operator-side openclaw.json patch (the current
+# schema uses timeoutSeconds — openclaw PR #83979).
+#
+# The three @grpc/js-yaml packages are runtime deps of policy-proxy.js, not of
+# openclaw itself.
+#
+# npm's cache is pruned in the same layer; left behind it is ~100 MB of tarballs
+# that nothing reads at runtime.
+ARG OPENCLAW_VERSION=2026.5.18
+RUN set -eux; \
+    npm install -g \
+        openclaw@${OPENCLAW_VERSION} \
+        @grpc/grpc-js \
+        @grpc/proto-loader \
+        js-yaml \
+    ; \
+    npm cache clean --force
+
+# The sandbox policy. OpenShell reads this from the image at sandbox creation
+# and re-validates against it on `provider attach`, which is why a policy edit
+# here is a rebuild, not a runtime change.
+COPY policy.yaml /etc/openshell/policy.yaml
+
+# Two start scripts, and the order matters. aif-nc's launcher.sh prefers
+# openclaw-suse-start when present and falls back to openclaw-start; the latter
+# is what a direct `openshell sandbox create --from openclaw-suse` uses outside
+# the cluster path.
+COPY --chmod=0755 openclaw-start.sh      /usr/local/bin/openclaw-start
+COPY --chmod=0755 openclaw-suse-start.sh /usr/local/bin/openclaw-suse-start
+
+# policy-proxy.js intercepts /api/policy and arms the on-demand device-pairing
+# state machine, fronting the gateway on port 18789; proto/ holds the NeMoClaw
+# gateway sync .proto definitions it loads at startup.
+COPY policy-proxy.js /usr/local/lib/policy-proxy.js
+COPY proto/          /usr/local/lib/nemoclaw-proto/
+
+# UID 1001, matching Dockerfile.sandbox's pinned `sandbox` account.
+RUN set -eux; \
+    mkdir -p /sandbox/.openclaw; \
+    chown -R sandbox:sandbox /sandbox/.openclaw
+
+USER sandbox
+
+# Kept from upstream, and deliberately not /bin/bash: when the image is deployed
+# as a bare Kubernetes Pod (aif-nc's PreDeployInCluster mode) bash exits
+# immediately for want of a TTY and the pod crashloops. The normal OpenShell
+# path is unaffected — it runs SandboxSpec.command and ignores this entirely.
+ENTRYPOINT ["sleep", "infinity"]

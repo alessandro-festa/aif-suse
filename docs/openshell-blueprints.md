@@ -294,8 +294,17 @@ container, nor the tag. `kubectl -n <tenant> describe pod <sandbox>` is the only
 real message appears.
 
 The tag is the gateway commit, so **it must be changed together with `chartVersion`** on the
-component above. The pinned image is Alpine-based with `ENTRYPOINT ["/openshell-sandbox"]`
-and publishes `linux/arm64`.
+component above.
+
+As of Blueprint 0.2.6 the pinned image is no longer NVIDIA's. `supervisor.image.repository`
+points at `ghcr.io/alessandro-festa/openshell-bci/supervisor`, the same binary compiled on
+SLE BCI 16.0 and shipped on `bci-micro:16.0` for both `linux/amd64` and `linux/arm64`,
+replacing upstream's `alpine:3.22`. It keeps upstream's contract exactly:
+`ENTRYPOINT ["/openshell-sandbox"]`, the binary at `/` with mode 0555, and
+nftables/iptables present for the egress-bypass rules. It is statically linked, which
+matters because the init container's `copy-self` lifts the binary out of this image and
+runs it inside whatever sandbox image the workload uses — it cannot depend on that image's
+glibc. See `build/openshell-bci/BUILDING.md`.
 
 ---
 
@@ -993,10 +1002,16 @@ These must be closed before this is anything more than a prototype.
 9. **Interceptors and operator-run middleware are unreachable.** §10 — an upstream chart
    gap, present on `origin/main`, not a consequence of our pin.
 
-10. **The SUSE-branded sandbox images are not published.** `sandboxes/suse` and
-    `sandboxes/openclaw-suse` exist in source in the `OpenShell-Community` fork but no tags
-    are pushed to ghcr.io, so `server.sandboxImage` points at the community
-    `sandboxes/base:latest`. Overriding it with a SUSE path today gives `ImagePullBackOff`.
+10. **The whole stack now runs on SLE BCI 16.0 — this gap is closed.** It had two lives.
+    First the SUSE-branded sandbox images were unpublished, so `server.sandboxImage` had to
+    point at the community `sandboxes/base:latest`. Then 0.2.5 pinned a hand-pushed
+    `sandboxes/openclaw-suse:latest`, which was pullable but 3.61 GB and **arm64 only**, so
+    the demo could not run on an amd64 cluster at all. Blueprint 0.2.6 replaces all three
+    images — gateway, supervisor and sandbox — with multi-arch ones built from
+    `build/openshell-bci/` on `bci-micro:16.0`. That also retires
+    `gcr.io/distroless/cc-debian13` (gateway) and `alpine:3.22` (supervisor) from the stack.
+    See `build/openshell-bci/BUILDING.md` for the recipe, the size and UID tables, and the
+    Open Build Service portability analysis.
 
 11. **`releaseName: openshell` is run-verified — this gap is closed.** §4. Both
     Blueprints have now been installed live from the UI onto a downstream cluster with

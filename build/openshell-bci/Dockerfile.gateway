@@ -1,0 +1,165 @@
+# syntax=docker/dockerfile:1.4
+
+# SPDX-FileCopyrightText: Copyright (c) 2026 SUSE LLC. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+#!BuildTag: openshell-bci/gateway:latest
+#!BuildTag: openshell-bci/gateway:%PKG_VERSION%
+
+# =============================================================================
+# OpenShell gateway on SUSE Linux Enterprise BCI 16.0
+# =============================================================================
+#
+# The cluster-side gRPC gateway: one StatefulSet in the `openshell` namespace
+# that owns sandbox lifecycle, policy distribution and inference routing.
+#
+# Upstream (deploy/docker/Dockerfile.gateway) does NOT compile in Docker. Their
+# CI builds the binary natively per-architecture, stages it under
+# deploy/docker/.build/prebuilt-binaries/<arch>/, and copies it into
+# gcr.io/distroless/cc-debian13. This Dockerfile replaces that two-step flow
+# with a self-contained multi-stage build on SUSE bases, which is both
+# reproducible from source and the only shape that could move to the Open
+# Build Service later.
+#
+# BUILD CONTEXT IS THE OPENSHELL CHECKOUT, NOT THIS REPO:
+#   docker buildx build -f build/openshell-bci/Dockerfile.gateway \
+#     -t openshell-bci/gateway:dev --platform linux/arm64 --load \
+#     --build-arg OPENSHELL_IMAGE_TAG=<tag> /tmp/openshell-src
+# or just:  ./build.sh gateway
+#
+# Toolchain note: SLE_BCI 16.0 packages rust1.95/cargo1.95, which is EXACTLY
+# the toolchain pinned in OpenShell's rust-toolchain.toml. No rustup, no
+# version drift, no third-party repository.
+#
+# glibc note: upstream cross-compiles with cargo-zigbuild against a glibc 2.28
+# floor because they target Debian. We compile natively per-arch and run on
+# bci-micro:16.0, so builder and runtime share SLE 16's glibc 2.40 and the
+# floor is unnecessary. The consequence is that THIS binary is not portable to
+# older glibc distributions, unlike upstream's. That is fine for an image whose
+# runtime ships in the same manifest, but do not lift the binary out of it.
+#
+# =============================================================================
+
+ARG BCI_VERSION=16.0
+ARG BUILDER_IMAGE=registry.suse.com/bci/bci-base:${BCI_VERSION}
+ARG RUNTIME_IMAGE=registry.suse.com/bci/bci-micro:${BCI_VERSION}
+
+# -----------------------------------------------------------------------------
+# Stage 1 — compile
+# -----------------------------------------------------------------------------
+FROM ${BUILDER_IMAGE} AS builder
+
+# rust1.95/cargo1.95  the version-pinned toolchain; the bare `rust` package
+#                     tracks latest and would drift off rust-toolchain.toml.
+# gcc, glibc-devel    `ring` (the rustls crypto provider) compiles C.
+# gcc-c++, make,      z3-sys builds the Z3 SMT solver from vendored C++ sources
+# cmake, python313      under the `bundled-z3` feature (see below). This is the
+#                       slow part of the build, not the Rust compile.
+#
+# Not needed, despite appearances: protobuf-devel. openshell-core/build.rs uses
+# the `protoc-bin-vendored` crate, which carries its own prebuilt protoc, so
+# there is no system protoc dependency.
+RUN set -eux; \
+    zypper --non-interactive --gpg-auto-import-keys refresh; \
+    zypper --non-interactive install --no-recommends \
+        rust1.95 \
+        cargo1.95 \
+        gcc \
+        gcc-c++ \
+        make \
+        cmake \
+        python313 \
+        python3-base \
+        glibc-devel \
+    ; \
+    zypper clean --all; \
+    rustc --version; \
+    cargo --version
+
+WORKDIR /src
+COPY . /src
+
+# The supervisor image tag the gateway will request when the Helm chart does not
+# override it. This is load-bearing: config.rs resolves the tag from
+# OPENSHELL_IMAGE_TAG -> IMAGE_TAG -> CARGO_PKG_VERSION, and rejects both empty
+# and the literal "0.0.0" — which is what the workspace version actually is. So
+# leaving this unset silently yields the floating `:dev` tag, whose published
+# manifest has only /openshell-supervisor while the generated init container
+# runs `/openshell-sandbox copy-self`. Every sandbox then dies in
+# Init:StartError, reported by the CLI as a bare "PodFailed: Pod failed" that
+# names neither the image nor the tag.
+ARG OPENSHELL_IMAGE_TAG=dev
+ENV OPENSHELL_IMAGE_TAG=${OPENSHELL_IMAGE_TAG}
+
+# `bundled-z3` is not optional here, despite the name suggesting a convenience.
+# tasks/scripts/stage-prebuilt-binaries.sh:180-182 force-appends it to the
+# gateway's feature list unconditionally, so this matches upstream's release
+# build exactly. The feature chain is
+#   openshell-gateway/bundled-z3 -> openshell-server -> openshell-prover -> z3/bundled
+# and it exists because the policy prover links the Z3 SMT solver. The
+# alternative — linking a system libz3 — is not available to us: SLE_BCI 16.0
+# packages no z3 at all (`zypper se z3` and `zypper se --provides libz3.so` both
+# come back empty), so the vendored C++ build is the only path. That is what
+# cmake/gcc-c++/python are in the builder for, and it dominates the build time.
+#
+# `strip = true` is already set on [profile.release] in the workspace Cargo.toml.
+RUN set -eux; \
+    cargo build --release --locked \
+        -p openshell-gateway \
+        --bin openshell-gateway \
+        --features bundled-z3; \
+    install -D -m 0755 target/release/openshell-gateway /out/openshell-gateway; \
+    /out/openshell-gateway --version
+
+# -----------------------------------------------------------------------------
+# Stage 2 — the one runtime dependency bci-micro does not already carry
+# -----------------------------------------------------------------------------
+# Z3 is C++, and z3-sys links it dynamically, so the gateway binary has a
+# DT_NEEDED on libstdc++.so.6 that no amount of Rust-side configuration removes.
+# bci-micro ships libgcc_s but not libstdc++ — upstream never hits this because
+# distroless/cc-debian13 bundles both. Without it the image starts and
+# immediately dies with
+#   error while loading shared libraries: libstdc++.so.6: cannot open shared
+#   object file
+# which looks like a broken build rather than a missing runtime package.
+#
+# Staged through --installroot for the same reason as the other images: it keeps
+# rpm and zypper out of what ships. ~2 MB.
+FROM ${BUILDER_IMAGE} AS rootfs
+
+RUN set -eux; \
+    zypper --non-interactive --gpg-auto-import-keys refresh; \
+    zypper --non-interactive --installroot /installroot \
+        --gpg-auto-import-keys install --no-recommends --auto-agree-with-licenses \
+        libstdc++6 \
+    ; \
+    zypper --non-interactive --installroot /installroot clean --all
+
+# -----------------------------------------------------------------------------
+# Stage 3 — the shipped image
+# -----------------------------------------------------------------------------
+FROM ${RUNTIME_IMAGE}
+
+LABEL org.opencontainers.image.title="OpenShell gateway (SLE BCI 16.0)" \
+      org.opencontainers.image.description="OpenShell gRPC gateway built from source on SUSE Linux Enterprise BCI 16.0" \
+      org.opencontainers.image.base.name="registry.suse.com/bci/bci-micro:16.0" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.vendor="SUSE LLC"
+
+# bci-micro already provides the rest of what the binary needs: glibc + the
+# dynamic loader, and /etc/ssl/ca-bundle.pem for the trust store. The gateway
+# links no OpenSSL — TLS is rustls/ring throughout — but it is built with
+# rustls-tls-native-roots, so it DOES read the system trust store at runtime for
+# outbound connections (OIDC, registries, inference endpoints).
+COPY --from=rootfs /installroot /
+COPY --from=builder /out/openshell-gateway /usr/local/bin/openshell-gateway
+
+# Matches upstream and the Helm chart's securityContext (runAsUser 1000,
+# fsGroup 1000). Numeric because bci-micro has no such passwd entry, which is
+# fine — Kubernetes only needs the number.
+USER 1000:1000
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/openshell-gateway"]
+CMD ["--bind-address", "0.0.0.0", "--port", "8080"]

@@ -1,0 +1,182 @@
+# syntax=docker/dockerfile:1.4
+
+# SPDX-FileCopyrightText: Copyright (c) 2026 SUSE LLC. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+#!BuildTag: openshell-bci/sandbox:latest
+#!BuildTag: openshell-bci/sandbox:%PKG_VERSION%
+
+# =============================================================================
+# OpenShell sandbox image on SUSE Linux Enterprise BCI 16.0
+# =============================================================================
+#
+# The container an end user's agent actually runs inside. OpenShell's supervisor
+# (see Dockerfile.supervisor) is injected into this image at pod start by an
+# init container, then execs the user's process under Landlock + a private
+# network namespace.
+#
+# This image replaces OpenShell-Community/sandboxes/suse (~1.1 GB, arm64 only).
+# It is built for linux/amd64 and linux/arm64, and is RPM-only: every byte comes
+# from the SLE_BCI 16.0 repository, so it can be rebuilt on the Open Build
+# Service. Anything needing npm or a curl|bash installer lives in
+# Dockerfile.openclaw instead, which is deliberately NOT OBS-portable.
+#
+# Base strategy — SUSE's canonical "minimal image" pattern:
+#   stage 1  bci-base:16.0  has zypper; installs the package set into an empty
+#            /installroot rather than into itself
+#   stage 2  bci-micro:16.0 (20 MB, glibc + bash + coreutils + ca-bundle, but no
+#            rpm and no zypper) receives that tree wholesale
+# The shipped image therefore carries no package manager and no rpm database.
+#
+# Build (the context is unused — nothing is COPYed in from it, so build.sh
+# passes this directory rather than the repo root to keep it small):
+#   docker buildx build -f build/openshell-bci/Dockerfile.sandbox \
+#     -t openshell-bci/sandbox:dev --platform linux/arm64 --load \
+#     build/openshell-bci
+# or just:  ./build.sh sandbox
+#
+# =============================================================================
+
+ARG BCI_VERSION=16.0
+ARG BUILDER_IMAGE=registry.suse.com/bci/bci-base:${BCI_VERSION}
+ARG RUNTIME_IMAGE=registry.suse.com/bci/bci-micro:${BCI_VERSION}
+
+# -----------------------------------------------------------------------------
+# Stage 1 — assemble the root filesystem
+# -----------------------------------------------------------------------------
+FROM ${BUILDER_IMAGE} AS rootfs
+
+# Packages are grouped by *why* they are here. Do not prune this list without
+# checking the reason — several entries look optional and are not.
+#
+# Required by the OpenShell supervisor:
+#   util-linux       /usr/bin/nsenter. The supervisor enters the sandbox's child
+#                    network namespace with `nsenter --net=`; it looks the binary
+#                    up in a fixed list (NSENTER_SEARCH_PATHS in
+#                    openshell-supervisor-process/src/netns/mod.rs) and aborts
+#                    with "trusted nsenter helper not found" if absent.
+#   iproute2         netns creation and veth pair setup.
+#   nftables         /usr/sbin/nft — the PRIMARY egress-bypass detection path.
+#   iptables         the documented fallback. Note SLE 16 ships only the nft
+#                    backend (iptables 1.8.11, no xtables-legacy-multi), so the
+#                    supervisor's iptables-legacy fallback is unavailable here.
+#                    Harmless: install_sidecar_bypass_rules() tries nft first and
+#                    only reaches the fallback if nft itself fails.
+#   ca-certificates  the sandbox's outbound TLS trust store.
+#   curl             used by the supervisor's own health probes and by agents.
+#   procps           ps/top; `ps -eo pid,tty,stat,args` is how a hung sandbox is
+#                    diagnosed, so it earns its ~1 MB.
+#   iputils          ping, for the same reason.
+#   tar              the chart's `workspace-init` init container seeds the
+#                    workspace PVC by piping /sandbox through `tar -cf` / -xf.
+#                    bci-micro has coreutils but no tar, and the init container
+#                    exits 1 with "find: 'tar': No such file or directory",
+#                    which surfaces only as PodFailed. No compression is used,
+#                    so gzip/xz are not needed.
+#
+# Required by OpenShell's SSH/SFTP transport:
+#   openssh-server   provides /usr/libexec/ssh/sftp-server (note: SUSE puts it
+#                    under /usr/libexec, not Debian's /usr/lib/openssh).
+#   openssh-clients  ssh + sftp client binaries.
+#
+# Required by the sandbox policy:
+#   git-core         policy.yaml's `github` rule is bound to the binary
+#                    /usr/bin/git and opens github.com:443 for `info/refs` and
+#                    `git-upload-pack`. Without git the rule is inert and an
+#                    agent cannot clone — the one capability from the old 3.6 GB
+#                    image that is worth its size. `git-core` rather than `git`:
+#                    the latter pulls in git-web, git-email, gitk, tk and perl.
+#
+# Required by the OpenClaw runtime layered on top (Dockerfile.openclaw):
+#   nodejs22, npm22  openclaw itself and the policy-proxy.js shim.
+#   python313        openclaw-suse-start rewrites ~/.openclaw/openclaw.json at
+#                    boot with a Python one-liner.
+#   python3-base     SUSE ships only the versioned /usr/bin/python3.13; this is
+#                    the package that adds the unversioned /usr/bin/python3
+#                    entry point that every script actually calls.
+#
+# Deliberately NOT installed, versus OpenShell-Community/sandboxes/suse:
+#   gcc, gcc-c++, make, vim, uv-managed Python, and the bundled agent CLIs
+#   (claude, codex, opencode, copilot, gh) — none are part of the sandbox
+#   contract, and together they are the bulk of that image's 2.87 GB.
+#   Note this leaves policy.yaml's `gitlab`, `claude_code` and part of the
+#   `nvidia` rule bound to binaries that are not here, so those rules never
+#   match. That is intended: they are alternative agents to OpenClaw, which is
+#   what this stack drives.
+# Versus sandboxes/suse-minimal we additionally drop net-tools, traceroute,
+#   netcat-openbsd and bind-utils: network diagnostics, not runtime requirements.
+#   If a policy or start script turns out to shell out to dig/netstat, these are
+#   the first things to add back.
+RUN set -eux; \
+    zypper --non-interactive --gpg-auto-import-keys refresh; \
+    zypper --non-interactive --installroot /installroot \
+        --gpg-auto-import-keys install --no-recommends --auto-agree-with-licenses \
+        ca-certificates \
+        curl \
+        git-core \
+        iproute2 \
+        iptables \
+        iputils \
+        nftables \
+        openssh-clients \
+        openssh-server \
+        procps \
+        tar \
+        util-linux \
+        nodejs22 \
+        npm22 \
+        python313 \
+        python3-base \
+    ; \
+    zypper --non-interactive --installroot /installroot clean --all
+
+# Accounts. OpenShell's policy.yaml pins `run_as_user: sandbox` by NAME, and
+# nothing upstream pins a number — but an unpinned `useradd -r` hands out a
+# different UID on every rebuild, which makes PVC ownership and `fsGroup`
+# non-reproducible across image versions. So the IDs are fixed here:
+#
+#   supervisor  1000:1000  privileged process management; nologin shell
+#   sandbox     1001:1001  the agent workload; owns /sandbox, real bash shell
+#
+# --root operates on the staged tree, which keeps `shadow` (and its
+# dependencies) in the builder and out of the shipped image. `--system` is
+# deliberately not used: it caps IDs at SYS_UID_MAX (499) on SLE and warns when
+# an explicit UID exceeds that, and pinning the number is the whole point here.
+RUN set -eux; \
+    groupadd --root /installroot --gid 1000 supervisor; \
+    useradd  --root /installroot --uid 1000 --gid 1000 \
+             --home-dir /nonexistent --shell /usr/sbin/nologin \
+             --no-create-home supervisor; \
+    groupadd --root /installroot --gid 1001 sandbox; \
+    useradd  --root /installroot --uid 1001 --gid 1001 \
+             --home-dir /sandbox --shell /bin/bash --no-create-home sandbox; \
+    mkdir -p /installroot/sandbox; \
+    chown 1001:1001 /installroot/sandbox
+
+# -----------------------------------------------------------------------------
+# Stage 2 — the shipped image
+# -----------------------------------------------------------------------------
+FROM ${RUNTIME_IMAGE}
+
+LABEL org.opencontainers.image.title="OpenShell sandbox (SLE BCI 16.0)" \
+      org.opencontainers.image.description="Minimal OpenShell agent sandbox built on SUSE Linux Enterprise BCI 16.0" \
+      org.opencontainers.image.base.name="registry.suse.com/bci/bci-micro:16.0" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.vendor="SUSE LLC"
+
+# bci-micro already provides glibc, bash, coreutils and /etc/ssl/ca-bundle.pem;
+# this overlays the staged tree on top of it.
+COPY --from=rootfs /installroot /
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/sandbox
+
+WORKDIR /sandbox
+USER sandbox
+
+# OpenShell runs SandboxSpec.command as the main process, not this entrypoint,
+# so it only matters when the image is started directly (docker run, or a bare
+# Kubernetes Pod). `sandbox connect` attaches to the main process — it does not
+# spawn a shell — which is why the sandbox must be created with --tty.
+ENTRYPOINT ["/bin/bash"]
