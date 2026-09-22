@@ -32,8 +32,9 @@ export interface AppCollectionItem {
   packaging_format?: PackagingFormat;
   repository_url?: string;
   // The authoritative operator-managed ClusterRepo name this app installs from.
-  // Attached by the dynamic fetchers so install never re-resolves by URL. Absent
-  // for static-catalog items (resolved via findManagedRepoNameByUrl at install).
+  // Dynamic fetchers attach the live name; the operator also derives stable NGC
+  // names for static-catalog items so mirror endpoint changes do not change app
+  // identity. Other static items fall back to URL resolution at install time.
   repository_name?: string;
   // 'suse-ai' and 'nvidia' are the built-in libraries; a remote catalog may define
   // its own library values, which the UI groups dynamically. `string & Record<never, never>`
@@ -134,9 +135,9 @@ export function getLibraryForClusterRepo(
   return getLibraryFromRepoUrl(repoUrl);
 }
 
-/** Resolve the ClusterRepo name to install an app from. Dynamic-mode items carry
- *  the authoritative repository_name; static-catalog items resolve their
- *  repository_url within the managed set. */
+/** Resolve the ClusterRepo name to install an app from. Prefer the stable logical
+ *  identity when the catalog supplies one; otherwise resolve repository_url only
+ *  within the operator-managed set. */
 export async function resolveInstallRepoName(
   $store: any,
   app: Pick<AppCollectionItem, 'repository_name' | 'repository_url'>,
@@ -249,12 +250,21 @@ async function loadAppsFromRepos(
  */
 export async function fetchNvidiaApps($store: any, settings?: any | null, managedRepos?: ManagedRepo[]): Promise<NvidiaAppsResult> {
   // Managed nvidia repos (fixed names + team-labeled). Sorted for deterministic
-  // first-wins dedup. No host-based discovery, so unmanaged NGC repos are excluded.
+  // first-wins dedup. In mirror mode every stable source alias points at the same
+  // endpoint; fetch that index only once, preferring a ready canonical `nvidia`
+  // repo. The curated overlay restores each app's source-specific logical alias.
+  // No host-based discovery, so unmanaged NGC repos are excluded.
   // `managedRepos`, when supplied, avoids re-listing ClusterRepos (the caller lists once).
   const all = managedRepos ?? await fetchManagedRepos($store);
   const managed = all
     .filter(r => r.library === 'nvidia')
-    .sort((a, b) => a.url.localeCompare(b.url) || a.name.localeCompare(b.name));
+    .sort((a, b) => {
+      const byUrl = a.url.localeCompare(b.url);
+      if (byUrl) return byUrl;
+      if (a.ready !== b.ready) return a.ready ? -1 : 1;
+      const rank = (name: string) => name === 'nvidia' ? 0 : name === 'nvidia-blueprints' ? 1 : 2;
+      return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
+    });
 
   const failedRepos: FailedRepo[] = [];
 
@@ -280,7 +290,18 @@ export async function fetchNvidiaApps($store: any, settings?: any | null, manage
     return { apps: [], failedRepos };
   }
 
-  const apps = await loadAppsFromRepos($store, managed, 'nvidia', failedRepos);
+  // Stable compatibility aliases intentionally share the aggregate mirror URL.
+  // Loading each alias would download the same index repeatedly and whichever
+  // alias sorted first would incorrectly become every app's repository_name.
+  const seenEndpoints = new Set<string>();
+  const discoveryRepos = managed.filter((repo) => {
+    const endpoint = repo.url.trim().replace(/\/+$/, '');
+    if (seenEndpoints.has(endpoint)) return false;
+    seenEndpoints.add(endpoint);
+    return true;
+  });
+
+  const apps = await loadAppsFromRepos($store, discoveryRepos, 'nvidia', failedRepos);
   return { apps, failedRepos };
 }
 
@@ -288,7 +309,7 @@ export async function fetchNvidiaApps($store: any, settings?: any | null, manage
 export const CLUSTERREPOS_URL =
   '/k8s/clusters/local/apis/catalog.cattle.io/v1/clusterrepos?limit=1000';
 
-const READY_CONDITION_TYPES = ['FollowerDownloaded', 'OCIDownloaded', 'Downloaded'];
+export const READY_CONDITION_TYPES = ['FollowerDownloaded', 'OCIDownloaded', 'Downloaded'];
 
 /** A ClusterRepo is ready when its index is actually fetchable. Called by
  *  fetchManagedRepos (which stamps the result onto ManagedRepo.ready, consumed by
@@ -302,24 +323,32 @@ const READY_CONDITION_TYPES = ['FollowerDownloaded', 'OCIDownloaded', 'Downloade
  *  it also preserves the older-Rancher path that set the ConfigMap without a ready
  *  condition. */
 export function isRepoReady(repo: any): boolean {
+  if (repo?.spec?.enabled === false) return false;
   if (!repo?.status?.indexConfigMapName) return false;
+  if ((repo?.metadata?.generation ?? 0) > (repo?.status?.observedGeneration ?? 0)) return false;
   // A stale index can outlive a later download failure: if spec.url is changed to
   // a broken endpoint, indexConfigMapName keeps pointing at the PREVIOUS index
   // while OCIDownloaded/Downloaded flips to False. Serving that index would list
   // apps from a source the cluster is no longer configured to use, so treat any
-  // currently-failing download condition as not-ready (repoNotReadyMessage then
+  // failing or unknown download condition as not-ready (repoNotReadyMessage then
   // surfaces the reason).
   const conditions = repo?.status?.conditions || [];
   const failing = conditions.some(
-    (c: any) => READY_CONDITION_TYPES.includes(c?.type) && c?.status === 'False',
+    (c: any) => READY_CONDITION_TYPES.includes(c?.type) && c?.status !== 'True',
   );
   return !failing;
 }
 
 /** Human-readable reason a repo is not ready, from its failing download condition. */
 export function repoNotReadyMessage(repo: any): string | undefined {
+  if (repo?.spec?.enabled === false) return 'The repository is disabled.';
+  if ((repo?.metadata?.generation ?? 0) > (repo?.status?.observedGeneration ?? 0)) {
+    return 'Waiting for the latest repository configuration to be processed.';
+  }
   const conditions = repo?.status?.conditions || [];
   const failing = conditions.find(
+    (c: any) => READY_CONDITION_TYPES.includes(c?.type) && c?.status === 'False' && c?.message,
+  ) || conditions.find(
     (c: any) => READY_CONDITION_TYPES.includes(c?.type) && c?.status !== 'True' && c?.message,
   );
   return failing?.message || undefined;
@@ -365,7 +394,6 @@ export async function fetchManagedRepos($store: any): Promise<ManagedRepo[]> {
     const repos = res?.data?.items || res?.data || res?.items || [];
     const out: ManagedRepo[] = [];
     for (const repo of repos) {
-      if (repo?.spec?.enabled === false) continue;
       const name = repo?.metadata?.name || '';
       if (!name) continue;
       const labels = repo?.metadata?.labels || {};
@@ -479,8 +507,10 @@ export async function fetchAppsFromRepository($store: any, repoName: string): Pr
  * URL is a private mirror that never matches the curated repository_url.
  *
  * Precedence:
- *  - curated wins (enrichment the Helm index lacks, + logo for air-gap):
- *    labels, documentation_url, reference_guide_url, changelog_url, logo_url.
+ *  - curated wins (enrichment/identity the Helm index lacks, + logo for air-gap):
+ *    labels, documentation_url, reference_guide_url, changelog_url, logo_url,
+ *    repository_name. The logical repository name remains source-specific even
+ *    when every live ClusterRepo alias points at one aggregate mirror URL.
  *  - live wins, curated fallback (chart-intrinsic, fresh in the live index):
  *    name, description, project_url, source_code_url, packaging_format.
  *  - live always wins (identity/volatile): slug_name, library, repository_url,
@@ -512,6 +542,7 @@ export function overlayCuratedMetadata(
       reference_guide_url: c.reference_guide_url || app.reference_guide_url,
       changelog_url:       c.changelog_url       || app.changelog_url,
       logo_url:            browserSafeCatalogLogo(c.logo_url) || browserSafeCatalogLogo(app.logo_url),
+      repository_name:     c.repository_name || app.repository_name,
       // live wins, curated fallback
       name:            app.name            || c.name,
       description:     app.description     || c.description,
