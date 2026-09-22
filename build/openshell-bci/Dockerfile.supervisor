@@ -94,11 +94,18 @@ RUN set -eux; \
     # Fail the build rather than ship a dynamically linked supervisor: it would
     # load fine here and then fail inside any sandbox image with a different
     # glibc, which is the whole class of bug this check exists to prevent.
-    if ldd /out/openshell-sandbox 2>&1 | grep -qv 'not a dynamic executable'; then \
-        echo "ERROR: supervisor binary is not statically linked" >&2; \
-        ldd /out/openshell-sandbox >&2 || true; \
-        exit 1; \
-    fi
+    #
+    # Both accepted spellings are needed — glibc's ldd words this per
+    # architecture. x86_64 prints "statically linked"; aarch64 prints "not a
+    # dynamic executable". Matching only one of them fails the other arch on a
+    # binary that is in fact static.
+    ldd_out="$(ldd /out/openshell-sandbox 2>&1 || true)"; \
+    case "${ldd_out}" in \
+        *'not a dynamic executable'*|*'statically linked'*) ;; \
+        *) echo "ERROR: supervisor binary is not statically linked" >&2; \
+           echo "${ldd_out}" >&2; \
+           exit 1 ;; \
+    esac
 
 # -----------------------------------------------------------------------------
 # Stage 2 — assemble the runtime firewall tooling
