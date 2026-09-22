@@ -1,6 +1,6 @@
 # secops-cpu-agents — the agent plane of the zero-GPU profile.
 #
-# Sized for downstream-1: 3 arm64 kind nodes on a shared 22.8 GiB podman VM
+# Sized for the authoring cluster: 3 arm64 nodes sharing ~23 GiB of RAM
 # with NO SWAP. On a no-swap host an overcommit is an OOM kill, not a slowdown,
 # so every limit here was chosen against a measured budget rather than rounded
 # up for comfort. See the Step 0 budget in the plan.
@@ -2886,9 +2886,9 @@ rancher:
   serverPort: 8443
 
   # Rancher's own id for the downstream cluster the agents run on. Not the
-  # display name: the API path is `/k8s/clusters/<id>/…`, and `downstream-1`
-  # there is a 404. Read it with
-  #   kubectl --context kind-sims-datacenter get clusters.management.cattle.io
+  # display name: the API path is `/k8s/clusters/<id>/…`, and the display name
+  # there is a 404. The value below is one environment's — read yours with
+  #   kubectl --context <primary-context> get clusters.management.cattle.io
   # and match it to the displayName.
   clusterId: c-jhrj6
 

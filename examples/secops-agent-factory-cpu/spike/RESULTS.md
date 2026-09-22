@@ -96,7 +96,7 @@ Read this before quoting the latency anywhere.
   processing to differ; token generation should be close.
 - **Tool-call success transfers; latency does not.** 8/9 is a property of the model and its chat
   template, and will hold on the cluster. The seconds column will not, and must be re-measured
-  once `secops-cpu-inference` is running on downstream-1.
+  once `secops-cpu-inference` is running on the target cluster.
 - **`--jinja` was on for every run.** Without it llama-server does not emit `tool_calls` at all
   and this gate scores 0/9 regardless of model. It is not tuning; it is load-bearing.
 
@@ -104,13 +104,13 @@ Read this before quoting the latency anywhere.
 
 `bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M` was the planned second candidate, on the strength of
 its 8/9 in the Ollama table. It was **not run**, deliberately: Qwen3-4B already meets the bar at
-4.95 GB, and 7B Q4_K_M would land near 6.5 GB against a shared 22.8 GiB podman VM **with no
+4.95 GB, and 7B Q4_K_M would land near 6.5 GB against a shared ~23 GiB budget **with no
 swap**, where an overcommit is an OOM kill rather than a slowdown. Testing a model that cannot be
 deployed would produce a number and no decision.
 
 If Qwen3-4B later proves too weak on the actual remediation task — which this gate does not
-measure — 7B is the next rung, and it costs memory elsewhere: NeuVector's manager on downstream-1
-is the first thing to cut.
+measure — 7B is the next rung, and it costs memory elsewhere: NeuVector's manager on the managed
+cluster is the first thing to cut.
 
 ## Consequence for the chart
 

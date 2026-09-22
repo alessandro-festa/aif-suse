@@ -51,7 +51,7 @@ credentials:
     # `auth_style: header` with an explicit `header_name`, rather than
     # `bearer`, which would prepend "Bearer " and fail authentication.
     #
-    # The key is minted against the controller on downstream-1 with the admin
+    # The key is minted against the controller on the managed cluster with the admin
     # role. That is deliberate and it is the demo: with a reader key, `POST
     # /v1/policy/rule` would be refused by NeuVector and the sandbox policy
     # would never be exercised. The README's isolation proof claims the

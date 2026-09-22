@@ -1,16 +1,19 @@
 # SUSE Security as a two-cluster federation
 
-The CPU profile runs its agents on `downstream-1`. SUSE Security is the oracle at
+The CPU profile runs its agents on the **managed** cluster. SUSE Security is the oracle at
 **both** ends of the remediation loop — triage reads a finding from it, and validation
 asks it to rescan after the patch. So the agents need a controller REST API they can
 reach, and the human needs one place to read findings from.
 
 A single install cannot give both. This directory is the two-cluster arrangement that can.
 
-| Cluster | Context | Role | Values |
+| Cluster | Context (yours will differ) | Role | Values |
 |---|---|---|---|
-| `sims-datacenter` | `kind-sims-datacenter` | federated **primary** (master) | [`primary-sims-datacenter.values.yaml`](primary-sims-datacenter.values.yaml) |
-| `downstream-1` | `kind-downstream-1` | federated **managed** (remote) | [`managed-downstream-1.values.yaml`](managed-downstream-1.values.yaml) |
+| Rancher management cluster | `<primary-context>` | federated **primary** (master) | [`primary.values.yaml`](primary.values.yaml) |
+| Downstream workload cluster | `<managed-context>` | federated **managed** (remote) | [`managed.values.yaml`](managed.values.yaml) |
+
+Throughout this file, `<primary-context>` and `<managed-context>` are your own kubectl
+context names; substitute them before running anything.
 
 This replaces the cross-cluster NodePort sketch that an earlier draft of the plan used.
 The reason is one line in the managed values: setting `controller.apisvc.type` creates
@@ -48,25 +51,27 @@ infrastructure with its own lifecycle, owned by whoever owns the cluster, exactl
 [`../../../secops-agent-factory/integrations/suse-security-prereq.md`](../../../secops-agent-factory/integrations/suse-security-prereq.md)
 describes for the GPU profile. The Blueprint consumes it; it does not manage it.
 
-## Measured facts these files depend on
+## Environment facts these files depend on
 
-Everything below was read from the live clusters, not assumed. Re-check before reusing
-these files anywhere else — most of it is per-environment.
+The values files carry one environment's IDs, names and addresses. Every row below is
+per-environment: read yours off the live clusters and substitute before installing.
 
-| Fact | Value | How to re-check |
+| Fact | Where it is used | How to read it |
 |---|---|---|
-| Rancher server URL | `https://rancher-192-168-1-74.sslip.io:8443` | `kubectl get settings.management.cattle.io server-url -o jsonpath='{.value}'` |
-| `downstream-1` Rancher cluster ID | `c-jhrj6` | `kubectl get clusters.management.cattle.io -o custom-columns='ID:.metadata.name,NAME:.spec.displayName'` |
-| System project — `local` / `downstream-1` | `p-5ptgb` / `p-glplv` | `kubectl get projects.management.cattle.io -n <clusterId>` |
-| Node IPs | `10.89.0.2` (primary); `10.89.0.3/.4/.5` (downstream-1) | `kubectl get nodes -o wide` |
-| NodePorts in use | **none**, on either cluster — 30443/30444 are free | `kubectl get svc -A -o json \| jq '..\|.nodePort? // empty'` |
-| Chart version | `110.0.1+up2.11.1` (core 2.11.1) | `ClusterRepo/rancher-charts`, branch `release-v2.15` |
+| Rancher server URL | `global.cattle.url`, both files | `kubectl get settings.management.cattle.io server-url -o jsonpath='{.value}'` |
+| Managed cluster's Rancher cluster ID | `global.cattle.clusterId`, managed file | `kubectl get clusters.management.cattle.io -o custom-columns='ID:.metadata.name,NAME:.spec.displayName'` |
+| System project IDs, per cluster | `global.cattle.systemProjectId` | `kubectl get projects.management.cattle.io -n <clusterId>` |
+| Node IPs, both clusters | the federation join addresses | `kubectl get nodes -o wide` |
+| NodePorts already in use | 30443 / 30444 must be free | `kubectl get svc -A -o json \| jq '..\|.nodePort? // empty'` |
+| Chart version | the `$VER` below | `ClusterRepo/rancher-charts`, branch `release-v2.15` |
 
-The Rancher URL is the sslip.io ingress, **not** a port-forward. The distinction is
+The Rancher URL must be an **ingress hostname, not a port-forward**. The distinction is
 load-bearing: `global.cattle.url` is what the controller builds its Rancher SSO redirect
-from, and a port-forward port changes between sessions, so an SSO login configured
-against one would break silently the next day. The previous install had exactly this
-bug — `https://localhost:56861/`.
+from, and it is also the address the controller calls back to when validating a session
+token. A `https://localhost:<port>` port-forward URL resolves, inside the controller pod,
+to that pod's own loopback — the callback is refused and every SSO login returns
+`401 Authentication failed`. A port-forward port also changes between sessions, so an SSO
+login configured against one breaks silently the next day.
 
 ## Install
 
@@ -80,32 +85,32 @@ VER=110.0.1+up2.11.1
 ```
 
 The CRD chart is separate and must go first on each cluster — a fresh cluster has no
-NeuVector CRDs (verified: the previous uninstall removed them).
+NeuVector CRDs.
 
-### 1. Primary — `sims-datacenter`
+### 1. Primary
 
 ```sh
 helm install neuvector-crd "$CHARTS/neuvector-crd/$VER" \
-  --kube-context kind-sims-datacenter \
+  --kube-context <primary-context> \
   -n cattle-neuvector-system --create-namespace
 
 helm install neuvector "$CHARTS/neuvector/$VER" \
-  --kube-context kind-sims-datacenter \
+  --kube-context <primary-context> \
   -n cattle-neuvector-system \
-  -f primary-sims-datacenter.values.yaml
+  -f primary.values.yaml
 ```
 
-### 2. Managed — `downstream-1`
+### 2. Managed
 
 ```sh
 helm install neuvector-crd "$CHARTS/neuvector-crd/$VER" \
-  --kube-context kind-downstream-1 \
+  --kube-context <managed-context> \
   -n cattle-neuvector-system --create-namespace
 
 helm install neuvector "$CHARTS/neuvector/$VER" \
-  --kube-context kind-downstream-1 \
+  --kube-context <managed-context> \
   -n cattle-neuvector-system \
-  -f managed-downstream-1.values.yaml
+  -f managed.values.yaml
 ```
 
 ### 3. The Rancher UI extension
@@ -121,14 +126,14 @@ The chart is in the `rancher-ui-plugins` ClusterRepo, which is git-backed, so cl
 git clone --depth 1 -b main https://github.com/rancher/ui-plugin-charts /tmp/uiplugins
 
 helm install neuvector-ui-ext /tmp/uiplugins/charts/neuvector-ui-ext/2.2.1 \
-  --kube-context kind-sims-datacenter -n cattle-ui-plugin-system
+  --kube-context <primary-context> -n cattle-ui-plugin-system
 ```
 
 Install it on the **primary only** — Rancher extensions are a management-cluster concern and the one
 install serves every cluster in the selector. Wait for `STATE: cached`:
 
 ```sh
-kubectl --context kind-sims-datacenter get uiplugins.catalog.cattle.io -A
+kubectl --context <primary-context> get uiplugins.catalog.cattle.io -A
 ```
 
 A hard refresh of the browser is needed after it caches, or the nav entry will not appear.
@@ -140,15 +145,14 @@ expressed in values. In the **primary's** SUSE Security UI (Rancher → cluster
 `local` → SUSE Security):
 
 1. **Multi-Cluster Management → Promote to primary cluster.**
-   Set the reachable master address to `10.89.0.2` port `30443` — the NodePort from
-   `primary-sims-datacenter.values.yaml`. Copy the generated join token.
-2. In the **managed** cluster's UI (Rancher → cluster `downstream-1` → SUSE Security):
-   **Multi-Cluster Management → Join primary cluster**, with server `10.89.0.2`,
+   Set the reachable master address to the primary's node IP, port `30443` — the NodePort
+   from `primary.values.yaml`. Copy the generated join token.
+2. In the **managed** cluster's UI (Rancher → the managed cluster → SUSE Security):
+   **Multi-Cluster Management → Join primary cluster**, with the same primary node IP,
    port `30443`, and the token from step 1.
 
-`10.89.0.0/24` is the podman network **inside** the VM. It is not routable from macOS —
-that is fine, because only the clusters need to reach each other. The human reaches both
-UIs through Rancher.
+These node IPs only have to be routable **between the two clusters**. They do not need to
+be reachable from your workstation — the human reaches both UIs through Rancher.
 
 ## Reaching the console
 
@@ -156,23 +160,27 @@ Two routes, and they are not equivalent.
 
 **Through Rancher — use this one.** It is the surface the plan's human-in-the-loop design depends on
 (*"what did SUSE Security find, and did the rescan clear it?"*), it authenticates with your Rancher
-identity via SSO, and the cluster selector switches between the primary and `downstream-1`:
+identity via SSO, and the cluster selector switches between the primary and the managed cluster:
 
 ```sh
-kubectl --context kind-sims-datacenter -n cattle-system port-forward svc/rancher 8443:443
+kubectl --context <primary-context> -n cattle-system port-forward svc/rancher 8443:443
 ```
 
 then <https://localhost:8443> → pick the cluster → **SUSE Security** in the left nav.
+
+This route only works if `global.cattle.url` is a cluster-reachable ingress hostname — see
+the note above. If SSO returns `401 Authentication failed`, that is the cause, and the
+direct route below is the workaround.
 
 **Direct to the manager — for debugging only.** Bypasses Rancher entirely, so it needs the local
 admin password and gives no federated view:
 
 ```sh
-kubectl --context kind-sims-datacenter -n cattle-neuvector-system \
+kubectl --context <primary-context> -n cattle-neuvector-system \
   port-forward svc/neuvector-service-webui 8444:8443
 ```
 
-then <https://localhost:8444>. Same command against `--context kind-downstream-1` reaches the
+then <https://localhost:8444>. Same command against `--context <managed-context>` reaches the
 managed cluster's own manager.
 
 ### The admin password is NOT `admin`
@@ -187,11 +195,11 @@ The cause is a Secret the chart did not create. With `bootstrapPassword: ""` a
 is initialised from it. Read it back per cluster:
 
 ```sh
-kubectl --context kind-sims-datacenter -n cattle-neuvector-system \
+kubectl --context <primary-context> -n cattle-neuvector-system \
   get secret neuvector-bootstrap-secret -o jsonpath='{.data.bootstrapPassword}' | base64 -d; echo
 ```
 
-The two clusters get **different** passwords. `kind-downstream-1` needs the same command with its
+The two clusters get **different** passwords. The managed cluster needs the same command with its
 own context.
 
 If the account is locked, wait five minutes — there is no reset command, and restarting the
@@ -207,37 +215,37 @@ None of this affects the designed path: **Rancher SSO needs no local password at
 agents authenticate with an API key, not with the admin account.
 
 Note the Rancher port-forward and `global.cattle.url` are **different things**. The port-forward is
-how your browser reaches Rancher; `global.cattle.url` is the sslip.io ingress the controller builds
-its SSO redirect from. Setting the latter to a `localhost:<port>` port-forward URL is the bug the
-previous install had.
+how your browser reaches Rancher; `global.cattle.url` is the ingress hostname the controller builds
+its SSO redirect from and calls back to. Setting the latter to a `localhost:<port>` port-forward URL
+is the bug described above.
 
 ## Verify
 
 ```sh
 # 1. One controller and one scanner per cluster, not three.
-for c in kind-sims-datacenter kind-downstream-1; do
+for c in <primary-context> <managed-context>; do
   echo "== $c"; kubectl --context $c -n cattle-neuvector-system get deploy
 done
 
-# 2. The REST API Service exists on downstream-1 at the port the policy names.
-kubectl --context kind-downstream-1 -n cattle-neuvector-system \
+# 2. The REST API Service exists on the managed cluster at the port the policy names.
+kubectl --context <managed-context> -n cattle-neuvector-system \
   get svc neuvector-svc-controller-api -o wide
 #    expect: ClusterIP, port 10443
 
 # 3. Federation services are up with the pinned node ports.
-kubectl --context kind-sims-datacenter -n cattle-neuvector-system \
+kubectl --context <primary-context> -n cattle-neuvector-system \
   get svc neuvector-svc-controller-fed-master      # 11443 -> 30443
-kubectl --context kind-downstream-1 -n cattle-neuvector-system \
+kubectl --context <managed-context> -n cattle-neuvector-system \
   get svc neuvector-svc-controller-fed-managed     # 10443 -> 30444
 
 # 4. The managed cluster shows as connected in the primary's federated view.
 ```
 
-Then the check that actually matters for the agents — from a pod **on downstream-1**,
-the policy's endpoint must resolve and answer:
+Then the check that actually matters for the agents — from a pod **on the managed
+cluster**, the policy's endpoint must resolve and answer:
 
 ```sh
-kubectl --context kind-downstream-1 -n default run nv-probe --rm -it --restart=Never \
+kubectl --context <managed-context> -n default run nv-probe --rm -it --restart=Never \
   --image=registry.suse.com/bci/bci-base:16.0 -- \
   curl -sk https://neuvector-svc-controller-api.cattle-neuvector-system:10443/v1/eula
 ```

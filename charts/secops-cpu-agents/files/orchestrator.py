@@ -40,7 +40,7 @@ HANDOFF: A DEVIATION FROM THE PLAN, AND WHY
 
 The plan pointed at OpenShell's `examples/multi-agent-notepad/`, where several
 sandboxes collaborate over a shared filesystem, and said "do not invent a bus".
-That pattern needs ReadWriteMany storage. downstream-1 has exactly one
+That pattern needs ReadWriteMany storage. The target cluster has exactly one
 StorageClass — `standard`, `rancher.io/local-path` — which is RWO and
 WaitForFirstConsumer, so two sandboxes on two nodes cannot share a volume. The
 notepad pattern is not available here.

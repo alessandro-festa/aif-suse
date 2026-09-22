@@ -52,8 +52,8 @@ credentials:
     # `user:token` pair. The `appco` helper writes the literal word "Basic"
     # itself — see sandbox.helpers.app-collection in values.yaml. The pair
     # comes from the `application-collection` Secret (keys `user` and `token`)
-    # that AI Factory already holds in the `aif-operator` namespace on
-    # sims-datacenter; the README shows how to transfer it without it ever
+    # that AI Factory already holds in the `aif-operator` namespace on the
+    # primary cluster; the README shows how to transfer it without it ever
     # appearing in a shell history or a terminal.
     description: base64("<user>:<token>") from the application-collection Secret
     env_vars: [APPCO_BASIC]

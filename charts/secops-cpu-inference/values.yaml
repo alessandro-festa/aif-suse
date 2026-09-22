@@ -9,7 +9,7 @@
 # blueprint's component list.
 #
 # THERE IS NO `nvidia.com/gpu` ANYWHERE IN THIS CHART, deliberately.
-# downstream-1 runs the run.ai fake-gpu-operator, so its nodes advertise
+# The authoring cluster runs the run.ai fake-gpu-operator, so its nodes advertise
 # `nvidia.com/gpu` and carry `nvidia.com/gpu.product=H200` labels with no CUDA
 # device behind them. A pod that requests a GPU here will schedule happily and
 # then fail at runtime — the worst of both worlds. Requesting nothing is the
@@ -78,7 +78,7 @@ generative:
   # the two researchers overlap.
   #
   # THESE WERE 16384/2, AND THAT CONFIGURATION IS OOM-KILLED MID-RUN. Measured
-  # on downstream-1 during the researcher fan-out, on the pod cgroup:
+  # on the test cluster during the researcher fan-out, on the pod cgroup:
   #   memory.peak 8540913664 (7.95 GiB) against an 8Gi limit, anon 6.49 GB
   # and the kill lands on the one pod every agent depends on, two phases into a
   # twenty-minute run. Two slots of 8192 is 16384 tokens of KV cache at ~144
@@ -88,7 +88,7 @@ generative:
   # context, because a slot was already 8192: what is lost is the overlap
   # between the two researchers, who now queue instead. That is minutes of wall
   # clock. The alternative, raising the limit to 10Gi, spends memory the host
-  # does not have — MemAvailable on the podman VM is ~6.5 GB with NO SWAP, so
+  # does not have — MemAvailable on the authoring cluster was ~6.5 GB with NO SWAP, so
   # the pod-level kill simply becomes a VM-level one.
   #
   # On a host with real memory, put these back to 16384/2 and the researchers
@@ -100,8 +100,8 @@ generative:
   #
   # By default llama-server mmaps the GGUF from /models, so the ~2.5 GB of
   # weights live in page cache — reclaimable memory, competing with the KV
-  # cache under the same 8Gi cgroup limit. Measured on downstream-1 during the
-  # 2026-09-17 run, inside the llm container's cgroup: memory.current
+  # cache under the same 8Gi cgroup limit. Measured on the test cluster during
+  # the 2026-09-17 run, inside the llm container's cgroup: memory.current
   # 8,589,594,624 against memory.max 8,589,934,592, i.e. 340 KB of headroom,
   # with memory.events max=18288, pgscan_direct 125M, pgmajfault 81k and
   # workingset_refault_file 818k. Once prompts got long — triage ran at 3169
@@ -130,7 +130,7 @@ generative:
       # Measured peak RSS for Qwen3-4B Q4_K_M at threads=4 was 5.02 GB on the
       # sovereignty-assessment spike; the whole pod peaked at 7.95 GiB here
       # with the old 16384/2 context budget, which is the kill above. The
-      # podman VM has NO SWAP, so an overcommit here is an OOM kill of the one
+      # nodes have NO SWAP, so an overcommit here is an OOM kill of the one
       # pod everything else depends on.
       memory: 8Gi
     requests:
@@ -174,7 +174,7 @@ modelCache:
   #
   # Set persistence:false only if the cluster has no usable StorageClass.
   persistence: true
-  # downstream-1 has exactly one StorageClass, `standard`
+  # The test cluster has exactly one StorageClass, `standard`
   # (rancher.io/local-path, RWO, WaitForFirstConsumer). Empty means "use the
   # cluster default", which is correct here and portable elsewhere.
   storageClass: ""
@@ -186,8 +186,8 @@ service:
   type: ClusterIP
   port: 8000
 
-# Neither Deployment tolerates or targets anything: downstream-1's three nodes
-# are homogeneous and there is no reason to pin. Left here because the absence
+# Neither Deployment tolerates or targets anything: the test cluster's three
+# nodes are homogeneous and there is no reason to pin. Left here because the absence
 # is a decision, not an omission.
 nodeSelector: {}
 tolerations: []

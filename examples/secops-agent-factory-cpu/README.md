@@ -8,8 +8,16 @@ agents sharing one pod and two in sandboxes, every agent runs in its own sandbox
 policy.
 
 The GPU profile's floor is ~12 GPUs and ~1.3 TB of PVC. This one is **0 GPUs, ~9 GB of RAM and
-21 Gi of PVC**, and it was authored against `downstream-1` — three arm64 kind nodes on a 22.8 GiB
-podman VM with no swap.
+21 Gi of PVC**. It was authored against three arm64 nodes sharing ~23 GiB of RAM with no swap.
+
+**Installing this?** Start with [`QUICKSTART.md`](QUICKSTART.md) — the ordered step-by-step path.
+This file is the reference behind it: why each choice is what it is, and what to read when a step
+fails.
+
+**Two clusters, and this file never names them.** The topology is a Rancher management cluster
+(the **primary**) and a downstream workload cluster (the **managed** one) where the agents and
+the whole stack actually run. Commands below use `<primary-context>` and `<managed-context>` as
+placeholders for your own kubectl context names — substitute them before running anything.
 
 Unlike the parent, **this one has been installed and run.** Triage, both researchers and the
 clarifier have executed on the cluster, against the live corpus, and the run reaches human gate #1
@@ -99,7 +107,7 @@ decides the remediation, and cve.org does not.
 Three implementation notes that deviate from the obvious design, all deliberate:
 
 - **Handoff goes through the orchestrator, not a shared filesystem.** Upstream's
-  `multi-agent-notepad` pattern needs RWX; `downstream-1` has one StorageClass, `standard`
+  `multi-agent-notepad` pattern needs RWX; the managed cluster has one StorageClass, `standard`
   (`rancher.io/local-path`), and it is **RWO**. The orchestrator collects each agent's stdout and
   passes it into the next agent's prompt. That is strictly tighter — no two agents ever see the same
   mutable surface.
@@ -257,7 +265,7 @@ briefing, which is the third time that lesson has been learned here.
 
 | Claim | Status | How it was checked |
 |---|---|---|
-| Both Blueprint CRs are accepted by the API server | **verified** | `kubectl --context=kind-sims-datacenter apply --dry-run=server` — exercises the semver regex, the `source` enum, the `listMapKey=chartName` uniqueness constraint and the DNS-1123 limits |
+| Both Blueprint CRs are accepted by the API server | **verified** | `kubectl --context=<primary-context> apply --dry-run=server` — exercises the semver regex, the `source` enum, the `listMapKey=chartName` uniqueness constraint and the DNS-1123 limits |
 | Both follow the operator's naming convention | **verified** | the `slug(displayName)-version` checks from `charts/aif-operator/tests/default-blueprints-convention.sh`, applied to this directory |
 | The three AIWorkload CRs are schema-valid | **verified** | dry-run clean once their namespaces exist; against the real namespaces they fail only on `namespaces … not found`, which is a missing prerequisite |
 | The three ClusterRepos are accepted | **verified** | same dry run |
@@ -270,19 +278,19 @@ briefing, which is the third time that lesson has been learned here.
 | Gitea 12.7.0 renders on this profile's values, arm64 included | **verified** | `helm template` → 8 documents, no GPU references; image pinned to the multi-arch **index** digest `sha256:414ba5b2…` (`gitea:1.27.0-rootless`: arm64 + amd64 + riscv64) |
 | SUSE Application Collection has no Gitea and no Forgejo | **verified** | a real absence, not an auth failure: `postgresql` and `milvus` resolve anonymously from `oci://dp.apps.rancher.io/charts` in the same session, while both forges return "unable to locate any tags" |
 | The Gitea seed API shapes below | **verified against source, NOT RUN** | `CreateUserOption`, `AddCollaboratorOption`, `CreateAccessTokenOption` and `CreateBranchProtectionOption` read from go-gitea at tag `v1.27.0`; the token route is guarded by `reqSelfOrAdmin() + reqBasicOrRevProxyAuth()`, so admin basic auth can mint a token for another user |
-| SUSE Security is installed on **both** clusters | **verified** | `neuvector` + `neuvector-crd` `110.0.1+up2.11.1` (core 5.6.1) on `sims-datacenter` and `downstream-1`; `neuvector-ui-ext` 2.2.1 on the primary |
+| SUSE Security is installed on **both** clusters | **verified** | `neuvector` + `neuvector-crd` `110.0.1+up2.11.1` (core 5.6.1) on the primary and the managed cluster; `neuvector-ui-ext` 2.2.1 on the primary |
 | The REST API Service name is `neuvector-svc-controller-`**`api`** | **verified the hard way** | `neuvector-svc-controller` is the headless gossip Service on 18300/18301. The GPU profile's policy pointed at it; fixed there too |
 | `openshell.openshell.svc.cluster.local` needs no extra SAN | **verified** | `DEFAULT_SERVER_SANS`, `OpenShell/crates/openshell-bootstrap/src/pki.rs:32` — provided the release is named `openshell` in namespace `openshell` |
 | `sandboxImagePullPolicy` is driver-level, not per-image | **verified** | `crates/openshell-driver-kubernetes/src/main.rs:45,100`. This is the **only** delta between gateway blueprint 0.2.1 and 0.2.2 |
-| The federation join between the two SUSE Security installs | **NOT DONE** | a UI handshake: promote the primary, copy the token, join from downstream-1. See [`integrations/suse-security/README.md`](integrations/suse-security/README.md) |
+| The federation join between the two SUSE Security installs | **NOT DONE** | a UI handshake: promote the primary, copy the token, join from the managed cluster. See [`integrations/suse-security/README.md`](integrations/suse-security/README.md) |
 | The three charts exist in `oci://ghcr.io/alessandro-festa/charts` | **verified** | all three pushed at 0.1.0 — `secops-cpu-inference` `sha256:300f7bc3…`, `-knowledge` `sha256:46e81976…`, `-agents` `sha256:5c6c7f33…` |
 | The orchestrator image | **verified** | built and pushed as `ghcr.io/alessandro-festa/secops-cpu-orchestrator:0.1.0`, digest `sha256:df1c3bf4…`, linux/arm64, and pinned by that digest in the chart. Inside it, as uid 65532: `openshell --version` is 0.0.116 (the version `orchestrator.py` asserts at runtime), `ldd` says "not a dynamic executable" — the musl-static claim checked rather than trusted — `XDG_CONFIG_HOME` is writable, the mounted `orchestrator.py` compiles, and it imports **nothing outside the standard library** |
 | The chart and orchestrator ghcr packages are publicly pullable | **verified** | all four made public by hand in the package settings — GitHub exposes no API for this. The HelmOp pulls the charts and the kubelet pulls the image with no `clientSecretName` and no pull secret |
 | `openclaw-suse` is `linux/arm64` and its CLIs run | **verified** | built natively on an Apple Silicon host — **not** by the fork's workflow, which sets no `platforms:` and no QEMU — and pushed to `ghcr.io/alessandro-festa/openshell-community/sandboxes/openclaw-suse` as `v0.1.0` and `latest`, digest `sha256:2d817c37…`. Inside it: `uname -m` = aarch64, `opencode` 1.2.18, `openclaw` 2026.5.18, `codex` 0.117.0, `copilot` 1.0.16, `claude` 2.1.145, node 22.22.0, Python 3.13.12 |
 | The ghcr sandbox package is publicly pullable | **verified** | the package was made public; an anonymous `ghcr.io/token` bearer fetches the manifest with HTTP 200. So `server.sandboxImagePullSecrets` stays commented out in blueprint 10 |
 | The `sandboxes/suse` base it is built on is arm64 | **verified** | the `latest` already on ghcr is an OCI index carrying exactly one platform, `linux/arm64` |
-| Agent-sandbox CRDs on downstream-1 | **verified** | applied from the v1.0.0 release; the controller is Running and the gateway creates sandboxes through it |
-| The whole stack installs from the Blueprints | **verified** | three AIWorkloads → HelmOps in `fleet-default` → llama.cpp, the embedding server, Qdrant, the ingest Job, Gitea and the orchestrator all Ready on downstream-1 |
+| Agent-sandbox CRDs on the managed cluster | **verified** | applied from the v1.0.0 release; the controller is Running and the gateway creates sandboxes through it |
+| The whole stack installs from the Blueprints | **verified** | three AIWorkloads → HelmOps in `fleet-default` → llama.cpp, the embedding server, Qdrant, the ingest Job, Gitea and the orchestrator all Ready on the managed cluster |
 | Agents actually call their tools and answer from real data | **verified, after a prompt fix** | triage and both researchers return corpus-derived content — `log4j`, fixed version `2.17.1`, and the shaded-JAR caveat from the runbook. See "What the first live run broke" |
 | The clarifier opens the plan issue in Gitea | **verified** | issue #2, then #3 on the re-run, each with the citations and the proposed change |
 | The run reaches human gate #1 and stops there | **verified** | the orchestrator parks on the unlabelled issue and creates no remediation sandbox |
@@ -362,8 +370,8 @@ credential in the URL, which also keeps the handle out of `.git/config` remotes 
 Qwen3-4B needs ~144 KiB per token of KV cache, `-c` is the **total** budget split across slots, and
 the measured peak was `memory.peak 8540913664` — 8.54 GB against an 8.0 GB ceiling, anonymous
 alone 6.49 GB. The chart now defaults to `-c 8192 --parallel 1`. Raising the limit instead is the
-worse trade on this host: the VM has 22.8 GiB and no swap shared between two kind clusters, so the
-kill simply moves to whichever pod asks next. Losing the parallel researcher slot costs wall-clock
+worse trade on a no-swap host with ~23 GiB shared across the whole stack: the kill simply moves to
+whichever pod asks next. Losing the parallel researcher slot costs wall-clock
 only — they now queue, at roughly 260 s each.
 
 **6. Every run reported zero SUSE Security findings, and the scanner was right.** Two independent
@@ -442,7 +450,8 @@ verify, set `suseSecurity.tlsShim.enabled: false` — every consumer goes throug
 
 | File | What it is |
 |---|---|
-| `00-clusterrepos.yaml` | Three ClusterRepos: our charts on ghcr, OpenShell, Gitea. Applied to **sims-datacenter** — see its header |
+| `QUICKSTART.md` | The ordered install path — start here. This file is the reference behind it |
+| `00-clusterrepos.yaml` | Three ClusterRepos: our charts on ghcr, OpenShell, Gitea. Applied to the **primary** — see its header |
 | `10-blueprint-openshell-gateway.yaml` | OpenShell gateway **0.2.2** — `examples/openshell/`'s 0.2.1 with a registry sandbox image |
 | `20-blueprint-secops-cpu.yaml` | The stack: CPU inference, the corpus, the agent plane, and Gitea. Four components |
 | `30-aiworkloads.yaml` | The install set, `targetClusters: ["c-jhrj6"]`. Do not apply as one unit |
@@ -464,42 +473,42 @@ The three charts are in [`charts/`](../../charts/), not here: `secops-cpu-infere
 
 ## Prerequisites
 
-### On the host
+### Cluster capacity
 
-MemAvailable is ~14.9 GB with **no swap**, so overcommit is an OOM kill rather than a slowdown. The
-budget is llama.cpp ~6 GB, embeddings ~0.5, Qdrant ~0.5, Gitea ~0.4, gateway ~0.3, orchestrator ~0.2
-and at most three sandboxes alive at once ~1.2 → **~9.1 GB**. Thin, and it now carries two SUSE
-Security installs rather than one, so measure rather than assume:
+The profile assumes **no swap**, so an overcommit is an OOM kill rather than a slowdown. The budget
+is llama.cpp ~6 GB, embeddings ~0.5, Qdrant ~0.5, Gitea ~0.4, gateway ~0.3, orchestrator ~0.2 and at
+most three sandboxes alive at once ~1.2 → **~9.1 GB**, plus a SUSE Security install on each cluster.
+Want **>= 12 GB allocatable** on the managed cluster. Measure rather than assume:
 
 ```sh
-podman machine ssh 'grep MemAvailable /proc/meminfo'      # want >= 12 GB
+kubectl --context <managed-context> get nodes \
+  -o custom-columns='NODE:.metadata.name,ALLOC-MEM:.status.allocatable.memory'
 ```
 
-If it is short: drop the stale empty namespaces `ollama-system` and
-`simple-chatbot-with-rag-system`, or grow the VM —
-`podman machine stop && podman machine set --memory 28672 && podman machine start`, then restart
-both kind clusters.
+If it is short, either give the nodes more memory or reduce the request/limit pairs in
+`charts/secops-cpu-inference/values.yaml` — the llama.cpp pod is by far the largest consumer, and
+its context budget (`contextSize` / `parallel`) is what you trade against.
 
-### On downstream-1
+### On the managed cluster
 
 ```sh
 # Agent-sandbox CRDs and controller. NOT a Blueprint component: agent-sandbox
 # ships raw YAML, and Blueprint components are chart-only.
-kubectl --context=kind-downstream-1 apply -f \
+kubectl --context=<managed-context> apply -f \
   https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.0/sandbox-with-extensions.yaml
 
 # Namespaces. The sandbox namespace MUST carry the label the gateway watches --
 # a missing label surfaces as "sandbox create failed" with no mention of labels.
 for ns in openshell ns-secops-sandboxes ns-secops-cpu ns-secops-forge; do
-  kubectl --context=kind-downstream-1 create namespace $ns
+  kubectl --context=<managed-context> create namespace $ns
 done
-kubectl --context=kind-downstream-1 label namespace ns-secops-sandboxes \
+kubectl --context=<managed-context> label namespace ns-secops-sandboxes \
   ai-factory.suse.com/openshell-workspace=true
 
 # Gitea's admin credentials. Created BEFORE the chart installs; the chart
 # otherwise ships `password: r8sA8CPHD9!bt6d` in plain text. It reads exactly
 # two keys.
-kubectl --context=kind-downstream-1 -n ns-secops-forge create secret generic gitea-admin-secret \
+kubectl --context=<managed-context> -n ns-secops-forge create secret generic gitea-admin-secret \
   --from-literal=username=gitea_admin \
   --from-literal=password="$(openssl rand -base64 24)"
 ```
@@ -517,7 +526,7 @@ anything else.
 ### Turn the scanner on — this is not optional, and it used to fail silently
 
 **NeuVector's auto-scan defaults to OFF**, and there are two independent NeuVector installs
-here, one per kind cluster, never federated. Only `downstream-1`'s is in the pipeline's path,
+here, one per cluster, never federated. Only the managed cluster's is in the pipeline's path,
 so any statement about scanner settings has to name a cluster.
 
 With auto-scan off, every finding query returns an empty set and the API answers 200 while it
@@ -600,7 +609,7 @@ and the provenance of the count cannot drift apart. `low` stays the CVE view's, 
 `scan_summary` has no `low` field at all. It is one column of a four-column row with a different
 origin; the survey issue carries a line saying so, next to the line naming the controller.
 
-To set auto-scan, if it is off, use the NeuVector UI on `downstream-1` (reach it through
+To set auto-scan, if it is off, use the NeuVector UI on the managed cluster (reach it through
 Rancher) or `PATCH /v1/scan/config` **from your own workstation** — not from a sandbox. Give it
 a few minutes, then confirm there is something to survey:
 
@@ -649,13 +658,13 @@ itself. Triage runs the same helper, and from 0.3.8 every invocation of `nv-surv
 collection to get at `scan_summary`. The three other policies that talk to SUSE Security already
 allowed it.
 
-### On sims-datacenter
+### On the primary cluster
 
 Nothing new: the Rancher local cluster already runs the aif-operator and SUSE Security. The
 ClusterRepos, Blueprints and AIWorkloads all go **here**, not downstream — the operator resolves a
 ClusterRepo with its own client (`resolveClusterRepo`,
 `operator/internal/controller/aiworkload/blueprint.go:1099` → `r.Get`), and `targetClusters` is what
-sends the HelmOp to `downstream-1`.
+sends the HelmOp to the managed cluster.
 
 ---
 
@@ -686,8 +695,8 @@ gateway gives you a system that looks healthy and fails on the first sandbox.
    machine that is already arm64.
 2. Make the four ghcr packages public, or the pull fails — see the ledger row. The sandbox and base
    images are already public.
-3. `kubectl --context=kind-sims-datacenter apply -f 00-clusterrepos.yaml`
-4. The prerequisites above, on downstream-1.
+3. `kubectl --context=<primary-context> apply -f 00-clusterrepos.yaml`
+4. The prerequisites above, on the managed cluster.
 5. `10-blueprint-openshell-gateway.yaml`, then `../openshell/20-blueprint-openshell-workspace.yaml`,
    then document 1 and document 2 of `30-aiworkloads.yaml`. Wait for the gateway to be Ready before
    the workspace.
@@ -716,9 +725,9 @@ gateway gives you a system that looks healthy and fails on the first sandbox.
    ```
    The third one's credential already exists in the cluster — AI Factory holds the Application
    Collection service account as the `application-collection` Secret in `aif-operator` on
-   sims-datacenter — so **move it, do not retype it**, and do not let it reach your terminal:
+   the primary — so **move it, do not retype it**, and do not let it reach your terminal:
    ```sh
-   APPCO_BASIC=$(kubectl --context=kind-sims-datacenter -n aif-operator \
+   APPCO_BASIC=$(kubectl --context=<primary-context> -n aif-operator \
      get secret application-collection -o jsonpath='{.data.user} {.data.token}' |
      { read -r u t; printf '%s:%s' "$(printf %s "$u" | base64 -d)" \
                                    "$(printf %s "$t" | base64 -d)" | base64 | tr -d '\n'; })
@@ -786,11 +795,11 @@ Port-forward Gitea first (`ROOT_URL` is `http://localhost:3000/`, so the port-fo
 canonical URL for this profile):
 
 ```sh
-kubectl --context=kind-downstream-1 -n ns-secops-forge port-forward svc/gitea-http 3000:3000 &
+kubectl --context=<managed-context> -n ns-secops-forge port-forward svc/gitea-http 3000:3000 &
 
 GITEA=http://localhost:3000/api/v1
 ADMIN=gitea_admin
-ADMIN_PW=$(kubectl --context=kind-downstream-1 -n ns-secops-forge \
+ADMIN_PW=$(kubectl --context=<managed-context> -n ns-secops-forge \
   get secret gitea-admin-secret -o jsonpath='{.data.password}' | base64 -d)
 BOT_PW=$(openssl rand -base64 24)
 
@@ -853,9 +862,9 @@ TOKEN=$(curl -sf -u "$ADMIN:$ADMIN_PW" -H 'Content-Type: application/json' \
   | jq -r .sha1)
 
 # 7. Hand it to the orchestrator. A FILE, never an environment variable.
-kubectl --context=kind-downstream-1 -n ns-secops-cpu create secret generic secops-gitea-token \
+kubectl --context=<managed-context> -n ns-secops-cpu create secret generic secops-gitea-token \
   --from-literal=token="$TOKEN"
-kubectl --context=kind-downstream-1 -n ns-secops-cpu rollout restart deploy/secops-cpu-orchestrator
+kubectl --context=<managed-context> -n ns-secops-cpu rollout restart deploy/secops-cpu-orchestrator
 ```
 
 Then commit something for the agents to patch — **this is a step, not a footnote**: with an empty
@@ -923,9 +932,10 @@ branch protection and push whitelist with it, which is a worse trade than a larg
 
 ## Reaching the UIs
 
-The podman network `10.89.0.0/24` lives inside the VM and is not routable from macOS, and
-`downstream-1` has no ingress controller. Everything on downstream-1 is reached with
-`kubectl port-forward`, exactly as `docs/openshell-demo.md` already does for Rancher.
+The profile assumes the managed cluster has no ingress controller and no externally routable
+address for these services. Everything on it is reached with `kubectl port-forward`, exactly as
+`docs/openshell-demo.md` already does for Rancher. If you do have an ingress controller, expose
+them however you normally would — nothing in the pipeline depends on the port-forward.
 
 The two you need in front of an audience — Gitea and the orchestrator status page — are opened for
 you by [`reset-demo.sh`](#resetting-between-runs), which also stops any stale forwards first. The
@@ -933,10 +943,10 @@ table below is the manual form, and the rest of the surfaces.
 
 | Surface | Command | Then open |
 |---|---|---|
-| **Gitea** — both gates | `kubectl --context=kind-downstream-1 -n ns-secops-forge port-forward svc/gitea-http 3000:3000` | <http://localhost:3000> |
-| **Qdrant dashboard** — read the cited advisory | `kubectl --context=kind-downstream-1 -n ns-secops-cpu port-forward svc/secops-cpu-qdrant 6333:6333` | <http://localhost:6333/dashboard> |
-| **Orchestrator status** — which agent is where | `kubectl --context=kind-downstream-1 -n ns-secops-cpu port-forward svc/secops-cpu-orchestrator 8088:8080` | <http://localhost:8088> (`/api/state` for JSON) |
-| **llama.cpp** — debugging only | `kubectl --context=kind-downstream-1 -n ns-secops-cpu port-forward svc/secops-cpu-llm 8000:8000` | `curl localhost:8000/v1/models` |
+| **Gitea** — both gates | `kubectl --context=<managed-context> -n ns-secops-forge port-forward svc/gitea-http 3000:3000` | <http://localhost:3000> |
+| **Qdrant dashboard** — read the cited advisory | `kubectl --context=<managed-context> -n ns-secops-cpu port-forward svc/secops-cpu-qdrant 6333:6333` | <http://localhost:6333/dashboard> |
+| **Orchestrator status** — which agent is where | `kubectl --context=<managed-context> -n ns-secops-cpu port-forward svc/secops-cpu-orchestrator 8088:8080` | <http://localhost:8088> (`/api/state` for JSON) |
+| **llama.cpp** — debugging only | `kubectl --context=<managed-context> -n ns-secops-cpu port-forward svc/secops-cpu-llm 8000:8000` | `curl localhost:8000/v1/models` |
 
 **8088, not 8080, and the reason generalises.** A `port-forward` whose local port is already held by
 something else on the host does not fail — it binds `[::1]` only, and `curl 127.0.0.1:8080` then

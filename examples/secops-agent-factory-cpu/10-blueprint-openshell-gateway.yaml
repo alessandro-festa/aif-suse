@@ -26,7 +26,7 @@
 # `server.sandboxImagePullPolicy` DOES. It is a driver-level setting stamped
 # onto every sandbox pod regardless of which image was requested
 # (crates/openshell-driver-kubernetes/src/main.rs:45,100). Blueprint 0.2.1 sets
-# it to "Never", because its image is side-loaded with `kind load`. Leave that
+# it to "Never", because its image is side-loaded onto the nodes. Leave that
 # in place and a sandbox created from a registry reference fails with
 # ErrImageNeverPull — an error that reads like a missing image rather than a
 # gateway setting.
@@ -39,8 +39,8 @@
 #
 # INSTALL EXACTLY ONE GATEWAY PER CLUSTER. Both versions pin
 # `releaseName: openshell` in namespace `openshell`, so installing this
-# alongside 0.2.1 puts two HelmOps on one Helm release. If downstream-1 already
-# runs 0.2.1, either upgrade the existing AIWorkload to 0.2.7 or leave it and
+# alongside 0.2.1 puts two HelmOps on one Helm release. If the target cluster
+# already runs 0.2.1, either upgrade the existing AIWorkload to 0.2.7 or leave it and
 # side-load the arm64 sandbox image instead — do not install both.
 apiVersion: ai-factory.suse.com/v1alpha1
 kind: Blueprint
@@ -61,8 +61,8 @@ spec:
     Identical to 0.2.1 except that the default sandbox image is pulled from a
     registry rather than side-loaded into the nodes, and the supervisor image
     is pinned to the gateway's own commit. Use this version when the sandbox
-    image is published; use 0.2.1 when it is built locally and loaded with
-    `kind load`.
+    image is published; use 0.2.1 when it is built locally and side-loaded onto
+    the nodes.
 
     Requires the Kubernetes Agent Sandbox CRDs and controller on the cluster:
       kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.0/sandbox-with-extensions.yaml
@@ -74,8 +74,8 @@ spec:
     so sandboxImagePullSecrets below stays commented out. Flip the package back
     to private and it must be uncommented.
 
-    IT MUST ALSO BE linux/arm64. downstream-1 is three arm64 kind nodes, and an
-    amd64-only manifest schedules and then dies with an exec-format error. The
+    IT MUST MATCH YOUR NODES' ARCHITECTURE. This image is linux/arm64; on amd64
+    nodes it schedules and then dies with an exec-format error, and vice versa. The
     published image IS arm64: built natively on an Apple Silicon host rather
     than by the fork's GitHub workflow, which sets no `platforms:` and no QEMU.
     Verified inside the image — `uname -m` is aarch64 and all five CLIs report
@@ -131,8 +131,8 @@ spec:
 
         supervisor:
           # Pinned rather than auto-detected from .Capabilities.KubeVersion.
-          # ImageVolume is only on by default from Kubernetes 1.35; downstream-1
-          # is 1.31.0. Drop this on K8s >= 1.35.
+          # ImageVolume is only on by default from Kubernetes 1.35; the target
+          # cluster is 1.31.0. Drop this on K8s >= 1.35.
           sideloadMethod: init-container
 
           image:
@@ -236,8 +236,8 @@ spec:
           # per sandbox with `--policy`, which is what the orchestrator does.
           policyValidationFailureMode: fail_closed
 
-          # Empty = the cluster default StorageClass. downstream-1 has exactly
-          # one, `standard` (rancher.io/local-path, WaitForFirstConsumer), and
+          # Empty = the cluster default StorageClass. The target cluster has
+          # exactly one, `standard` (rancher.io/local-path, WaitForFirstConsumer), and
           # it is the default — so this resolves. Set it explicitly on a cluster
           # with no default, or sandbox workspace PVCs stay Pending and the
           # sandbox never starts.

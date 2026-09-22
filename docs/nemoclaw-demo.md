@@ -16,8 +16,8 @@ cluster; the gateway, sandboxes and Ollama run on the downstream cluster. Every 
 below is explicit about which one.
 
 ```bash
-MGMT=kind-sims-datacenter     # aif-operator, Blueprint + AIWorkload CRDs
-DOWN=kind-downstream-1        # openshell gateway, tenant namespaces, sandboxes
+MGMT=<primary-context>        # aif-operator, Blueprint + AIWorkload CRDs
+DOWN=<managed-context>        # openshell gateway, tenant namespaces, sandboxes
 ```
 
 ---
@@ -312,7 +312,7 @@ Two details worth knowing:
 ## Why the agent loop is not in this demo
 
 `nemoclaw demo-a agent` does work — it completes real multi-step tool-calling turns against
-the cluster-hosted model — but it is too slow to show live. Measured on this kind cluster:
+the cluster-hosted model — but it is too slow to show live. Measured on the test cluster:
 
 | Model | Agent turn |
 |---|---|

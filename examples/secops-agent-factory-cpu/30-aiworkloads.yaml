@@ -8,20 +8,24 @@
 # first and you get a system that looks healthy and fails on the first sandbox.
 # Apply one document, wait for it to be Ready, apply the next.
 #
-# APPLY ALL OF THIS TO sims-datacenter, the Rancher local cluster. These are
-# operator CRs, and the operator runs on local; downstream-1 has no Blueprint
-# or AIWorkload CRD at all. What sends the workload downstream is
+# APPLY ALL OF THIS TO THE PRIMARY, the Rancher local cluster. These are
+# operator CRs, and the operator runs on local; the managed cluster has no
+# Blueprint or AIWorkload CRD at all. What sends the workload downstream is
 # targetClusters, not where the YAML is applied.
 #
-# TARGET IS downstream-1, NOT `local`. Every other committed AIWorkload in this
-# repository uses targetClusters: ["local"]; this profile is the exception,
-# because downstream-1 is the cluster with the memory rather than the cluster
-# with Rancher on it. Two consequences follow, and both bite silently:
+# TARGET IS THE MANAGED CLUSTER, NOT `local`. Every other committed AIWorkload
+# in this repository uses targetClusters: ["local"]; this profile is the
+# exception, because the managed cluster is the one with the memory rather than
+# the one with Rancher on it. Two consequences follow, and both bite silently:
 #
 #   - the HelmOp lands in **fleet-default**, not fleet-local
 #   - the operator appends the Fleet cluster ID to the instance name
 #
-#   kubectl get clusters.management.cattle.io   # confirm c-jhrj6 is downstream-1
+# The cluster ID in targetClusters below is one environment's — it is generated
+# when a cluster is registered and will not match yours. Read yours with:
+#
+#   kubectl get clusters.management.cattle.io \
+#     -o custom-columns='ID:.metadata.name,NAME:.spec.displayName'
 #
 # WORKLOAD NAMES ARE GLOBAL WITHIN A FLEET WORKSPACE. The HelmOp is named
 # "<aiworkload-name>-<chartName>", so the AIWorkload's own namespace is NOT
@@ -35,7 +39,7 @@
 # be byte-identical, and the copy that drifts is the one somebody reads. Apply
 # it from there:
 #
-#   kubectl --context=kind-sims-datacenter apply -f ../openshell/20-blueprint-openshell-workspace.yaml
+#   kubectl --context=<primary-context> apply -f ../openshell/20-blueprint-openshell-workspace.yaml
 #
 # The gateway blueprint IS copied, at 10-blueprint-openshell-gateway.yaml,
 # because it has one genuine delta: sandboxImagePullPolicy. See its header.
@@ -54,7 +58,7 @@
 # 1. The gateway. Once per cluster, pinned to the `openshell` namespace by the
 #    Blueprint regardless of what is set here.
 #
-#    IF A GATEWAY IS ALREADY INSTALLED on downstream-1 from
+#    IF A GATEWAY IS ALREADY INSTALLED on the managed cluster from
 #    examples/openshell/, do not apply this — upgrade that AIWorkload's
 #    blueprint version to 0.2.7 instead. Both versions pin the same release
 #    name in the same namespace, so two AIWorkloads would fight over one Helm

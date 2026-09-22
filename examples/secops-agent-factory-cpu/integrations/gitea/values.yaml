@@ -59,8 +59,8 @@ replicaCount: 1
 # Everything the chart would otherwise bring with it
 # -----------------------------------------------------------------------------
 # The chart's defaults are a production forge: PostgreSQL HA and a three-node
-# Valkey cluster, six pods before Gitea itself starts. On a 22.8 GiB no-swap VM
-# already carrying two kind clusters, llama.cpp and Qdrant, that is the whole
+# Valkey cluster, six pods before Gitea itself starts. On nodes already carrying
+# llama.cpp and Qdrant inside a ~23 GiB no-swap budget, that is the whole
 # remaining budget spent on the component that does the least work.
 #
 # With all four disabled the chart falls back to Gitea's own defaults —
@@ -90,8 +90,8 @@ gitea:
       # in front of it, and nothing in this profile uses it.
       START_SSH_SERVER: false
       DISABLE_SSH: true
-      # Reached by port-forward from the Mac — the podman network is not
-      # routable from the host and downstream-1 has no ingress controller. This
+      # Reached by port-forward from the workstation — the target cluster has no
+      # ingress controller and no externally routable address. This
       # must match the port-forward in the README, or every clone URL Gitea
       # renders in its own UI is wrong.
       #
@@ -153,7 +153,7 @@ persistence:
   size: 5Gi
   accessModes:
     - ReadWriteOnce
-  # Empty means the cluster default, which on downstream-1 is `standard`
+  # Empty means the cluster default, which on the test cluster is `standard`
   # (rancher.io/local-path, WaitForFirstConsumer).
   storageClass:
 

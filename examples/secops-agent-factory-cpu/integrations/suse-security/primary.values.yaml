@@ -1,18 +1,18 @@
 # SUSE Security (NeuVector) — PRIMARY cluster, the federated master.
 #
-# Target: kind-sims-datacenter (Rancher management cluster, Fleet ID `local`).
+# Target: the Rancher management cluster (Fleet ID `local`).
 # Chart:  neuvector 110.0.1+up2.11.1 from rancher-charts (core 2.11.1).
 #
 # This is NOT installed by a Blueprint. SUSE Security is a platform
 # prerequisite — see ../../../secops-agent-factory/integrations/suse-security-prereq.md.
 # What this file contributes is the seam: the values that make a two-cluster
-# federation work on a laptop, where there is no LoadBalancer and no spare RAM.
+# federation work where there is no LoadBalancer provider and no spare RAM.
 #
 # WHY A FEDERATION AND NOT ONE INSTALL
 #
-# The agents run on downstream-1, and the validation agent's whole job is to
-# ask an authority that is not itself whether a patch actually removed a CVE.
-# That call has to reach a controller REST API. Two ways to arrange it:
+# The agents run on the managed cluster, and the validation agent's whole job
+# is to ask an authority that is not itself whether a patch actually removed a
+# CVE. That call has to reach a controller REST API. Two ways to arrange it:
 #
 #   single install on the Rancher cluster -> the agents are on a different
 #     cluster, so the in-cluster DNS name in the sandbox policy does not
@@ -29,7 +29,7 @@
 #
 # The federated master. It holds the aggregated view, the federated policy,
 # and the UI the human actually looks at. The remote cluster joins it — see
-# managed-downstream-1.values.yaml.
+# managed.values.yaml.
 
 # DELIBERATELY NOT SET, and not merely forgotten.
 #
@@ -53,12 +53,18 @@
 
 global:
   # DECISION: keep Rancher's own values exactly as Cluster Tools sets them.
+  # Everything under `cattle:` is environment-specific — the IDs and the URL
+  # below are one environment's values and will not match yours. Read them off
+  # the live cluster before installing.
+  #
   # `cattle.url` is what the controller's Rancher SSO redirect is built from,
   # and it must match the Rancher server-url setting or the SSO round trip
   # lands on a host the browser cannot reach. Read from the live cluster:
   #   kubectl get settings.management.cattle.io server-url -o jsonpath='{.value}'
-  # It is the sslip.io ingress, NOT a port-forward URL — a port-forward port
-  # changes between sessions and would silently break SSO on the next one.
+  # It must be a URL that resolves from INSIDE a pod — an ingress hostname, not
+  # a port-forward URL. A port-forward `https://localhost:<port>` resolves to
+  # the controller pod's own loopback, so the SSO token-validation callback is
+  # refused and every login returns 401.
   cattle:
     clusterId: local
     clusterName: local
@@ -66,43 +72,43 @@ global:
     rkeWindowsPathPrefix: ""
     systemDefaultRegistry: registry.rancher.com
     systemProjectId: p-5ptgb
-    url: https://rancher-192-168-1-74.sslip.io:8443
+    url: https://rancher.example.com:8443
   systemDefaultRegistry: registry.rancher.com
 
 controller:
   # DECISION: 1, not the chart default of 3.
   #
-  # sims-datacenter is a SINGLE-NODE kind cluster. Three controller replicas
+  # The primary is typically a SINGLE-NODE cluster. Three controller replicas
   # on one node is not high availability — it is the same failure domain
   # three times, at three times the memory. Measured before this change: the
-  # sims-datacenter container alone held 6.0 GB of a 22.8 GiB podman VM that
-  # also hosts downstream-1, with no swap. On a no-swap VM an overcommit is an
-  # OOM kill, not a slowdown.
+  # primary alone held 6.0 GB of a ~23 GiB no-swap budget shared with the
+  # managed cluster. Without swap an overcommit is an OOM kill, not a
+  # slowdown. Raise this to 3 on a real multi-node primary.
   replicas: 1
 
   federation:
     mastersvc:
       # DECISION: NodePort, not the upstream default of LoadBalancer.
       #
-      # kind has no LoadBalancer implementation, so a LoadBalancer Service
-      # sits at <pending> forever and the remote cluster can never join. Both
-      # kind clusters are containers on the same podman network, so a NodePort
-      # on this cluster's node IP is directly reachable from downstream-1:
+      # A cluster with no LoadBalancer provider leaves a LoadBalancer Service
+      # at <pending> forever, and the remote cluster can then never join. A
+      # NodePort on this cluster's node IP works as long as the managed
+      # cluster can route to it. Read the node IPs with:
       #
-      #   sims-datacenter-control-plane   10.89.0.2
-      #   downstream-1-control-plane      10.89.0.3
-      #   downstream-1-worker             10.89.0.4
-      #   downstream-1-worker2            10.89.0.5
+      #   kubectl get nodes -o wide
       #
-      # The join URL for the remote cluster is therefore:
-      #   https://10.89.0.2:30443
+      # The join URL for the remote cluster is then:
+      #   https://<primary-node-ip>:30443
       #
-      # Note that 10.89.0.0/24 lives INSIDE the podman VM and is not routable
-      # from macOS. That is fine — only the remote cluster needs to reach it.
-      # The human reaches the UI through Rancher.
+      # That address only has to be reachable from the managed cluster, not
+      # from your workstation — the human reaches the UI through Rancher.
+      #
+      # If your primary DOES have a LoadBalancer provider, set type:
+      # LoadBalancer here and drop the nodePort below; it is the better
+      # arrangement where it is available.
       type: NodePort
       # Service port is fixed at 11443 by the chart; this is the node port.
-      # Nothing else on either cluster uses a NodePort today (verified).
+      # Check nothing else on either cluster already uses it.
       nodePort: 30443
 
 cve:

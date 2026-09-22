@@ -5,15 +5,15 @@
 # to a ClusterRepo on the target cluster, the HelmOp never produces a release
 # and the AIWorkload stalls without a useful message. Apply this file first.
 #
-#   kubectl --context=kind-sims-datacenter apply -f 00-clusterrepos.yaml
-#   kubectl --context=kind-sims-datacenter get clusterrepo
+#   kubectl --context=<primary-context> apply -f 00-clusterrepos.yaml
+#   kubectl --context=<primary-context> get clusterrepo
 #
-# APPLY IT TO sims-datacenter — the RANCHER LOCAL CLUSTER — even though every
-# workload in this profile runs on downstream-1. The lookup is done by the
-# operator's own client (`resolveClusterRepo`, blueprint.go:1099 → `r.Get`),
+# APPLY IT TO THE PRIMARY — the RANCHER LOCAL CLUSTER — even though every
+# workload in this profile runs on the managed cluster. The lookup is done by
+# the operator's own client (`resolveClusterRepo`, blueprint.go:1099 → `r.Get`),
 # and the operator runs on local. So the repo is read where the operator is,
-# not where the chart lands. Applying this to downstream-1 instead is the
-# quiet failure: the AIWorkload reports the ClusterRepo not ready, and the
+# not where the chart lands. Applying this to the managed cluster instead is
+# the quiet failure: the AIWorkload reports the ClusterRepo not ready, and the
 # downstream cluster has a ClusterRepo nothing ever reads.
 #
 # Same for the Blueprint and AIWorkload CRs in 10-/20-/30-: all three go to

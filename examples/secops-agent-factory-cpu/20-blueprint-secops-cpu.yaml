@@ -80,9 +80,10 @@ spec:
     one sandbox per agent through the gateway, and a workspace that does not
     exist produces a failure that never mentions workspaces.
 
-    SIZED AGAINST A MEASURED BUDGET, NOT ROUNDED UP. The host is a 22.8 GiB
-    podman VM with NO SWAP carrying two kind clusters, so an overcommit here is
-    an OOM kill rather than a slowdown. Roughly: llama.cpp 8Gi, embeddings 2Gi,
+    SIZED AGAINST A MEASURED BUDGET, NOT ROUNDED UP. These numbers were chosen
+    for nodes totalling ~23 GiB of RAM WITH NO SWAP, where an overcommit is an
+    OOM kill rather than a slowdown. Raise them if your nodes are larger.
+    Roughly: llama.cpp 8Gi, embeddings 2Gi,
     Qdrant 1Gi, Gitea 0.5Gi, orchestrator 0.25Gi, and at most three sandboxes
     alive at once. Six agents does not mean six concurrent pods — the
     orchestrator creates a sandbox, runs its agent, collects the result and
@@ -126,7 +127,7 @@ spec:
       targetNamespace: ns-secops-cpu
       values:
         # NO nvidia.com/gpu ANYWHERE, and this is not merely unnecessary —
-        # downstream-1 advertises fake H200s through run.ai's
+        # the authoring cluster advertises fake H200s through run.ai's
         # fake-gpu-operator (run.ai/fake.gpu=true), so a pod requesting one
         # schedules successfully and then fails at runtime. An absent resource
         # request is safer here than a present one.

@@ -1,10 +1,11 @@
 # SUSE Security (NeuVector) — MANAGED cluster, the remote member.
 #
-# Target: kind-downstream-1 (Rancher cluster ID c-jhrj6, 3 arm64 nodes).
+# Target: the downstream cluster the agents run on (a Rancher-registered
+#         cluster, so it has a generated Rancher cluster ID of its own).
 # Chart:  neuvector 110.0.1+up2.11.1 from rancher-charts (core 2.11.1).
 #
-# This is the install the agents actually talk to. It joins the master on
-# sims-datacenter — see primary-sims-datacenter.values.yaml for the why.
+# This is the install the agents actually talk to. It joins the master on the
+# primary cluster — see primary.values.yaml for the why.
 #
 # THE ONE LINE THAT MATTERS MOST IS `controller.apisvc.type`.
 #
@@ -38,33 +39,35 @@
 # carry a cross-cluster node IP and NodePort that changes with the environment.
 
 # bootstrapPassword is deliberately unset — see the long note in
-# primary-sims-datacenter.values.yaml. Note that the two clusters generate
-# DIFFERENT random passwords, so the primary's will not work here.
+# primary.values.yaml. Note that the two clusters generate DIFFERENT random
+# passwords, so the primary's will not work here.
 
 global:
   # Same reasoning as the primary: these are Rancher's own values, and
   # `cattle.url` must equal the Rancher server-url or SSO redirects break.
-  # Read live with:
+  # Everything under `cattle:` is environment-specific — the IDs, names and
+  # URL below are one environment's values. Read yours live with:
   #   kubectl get settings.management.cattle.io server-url -o jsonpath='{.value}'
-  # clusterId is the Rancher cluster ID, NOT the kubectl context name. Confirm
-  # before installing — it changes whenever the cluster is re-registered:
-  #   kubectl --context kind-sims-datacenter get clusters.management.cattle.io \
+  # clusterId is the Rancher cluster ID, NOT the kubectl context name, and
+  # clusterName is the Rancher display name. Both change whenever the cluster
+  # is re-registered. Confirm against the primary before installing:
+  #   kubectl --context <primary-context> get clusters.management.cattle.io \
   #     -o custom-columns='ID:.metadata.name,NAME:.spec.displayName'
   cattle:
-    clusterId: c-jhrj6
-    clusterName: downstream-1
+    clusterId: c-xxxxx
+    clusterName: managed
     rkePathPrefix: ""
     rkeWindowsPathPrefix: ""
     systemDefaultRegistry: registry.rancher.com
     systemProjectId: p-glplv
-    url: https://rancher-192-168-1-74.sslip.io:8443
+    url: https://rancher.example.com:8443
   systemDefaultRegistry: registry.rancher.com
 
 controller:
-  # One controller. downstream-1 has three nodes, so unlike the primary this
-  # could spread — but the memory budget is the binding constraint, not the
-  # node count. See the Step 0 budget in the plan: llama.cpp alone wants ~6 GB
-  # of a 14.9 GB MemAvailable shared by both clusters, with no swap.
+  # One controller. A multi-node managed cluster could spread these, unlike a
+  # single-node primary — but the memory budget is the binding constraint, not
+  # the node count. llama.cpp alone wants ~6 GB, and the profile is sized for
+  # roughly 15 GB allocatable with no swap. Raise this on a larger cluster.
   replicas: 1
 
   apisvc:
@@ -74,8 +77,8 @@ controller:
     # ClusterIP, not NodePort: only in-cluster callers need it. The agents run
     # on this cluster, and the human reads findings through Rancher, not by
     # curling the API. Keeping it ClusterIP means the REST API is not exposed
-    # on any node IP, which matters because the podman network is flat — a
-    # NodePort here would be reachable from every other kind container.
+    # on any node IP — a NodePort here would widen the REST API's reach for no
+    # benefit.
     type: ClusterIP
     # ctrlServerPort defaults to 10443, which is the port the policy names.
     # Left at the default deliberately; changing it would desynchronise the
@@ -83,26 +86,25 @@ controller:
 
   federation:
     managedsvc:
-      # DECISION: NodePort, for the same kind-has-no-LoadBalancer reason as
+      # DECISION: NodePort, for the same no-LoadBalancer-provider reason as
       # the master service on the primary.
       #
       # Direction of travel is worth being precise about, because it is easy
       # to assume both ends dial each other. They do not:
       #
-      #   this cluster  --joins-->  https://10.89.0.2:30443   (mastersvc, 11443)
-      #   the master    --polls-->  https://10.89.0.3:30444   (managedsvc, 10443)
+      #   this cluster  --joins-->  https://<primary-node-ip>:30443  (mastersvc, 11443)
+      #   the master    --polls-->  https://<managed-node-ip>:30444  (managedsvc, 10443)
       #
       # So both services must be reachable, and the managed one has to be
-      # exposed on this cluster's node IP even though nothing outside the
-      # podman VM will ever call it.
+      # exposed on this cluster's node IP even though only the primary will
+      # ever call it.
       #
-      # 10.89.0.3 is downstream-1-control-plane. Any of the three node IPs
-      # works — a NodePort answers on every node — but pin the one you type
-      # into the Rancher UI so the join is reproducible.
+      # Any of this cluster's node IPs works — a NodePort answers on every
+      # node — but pin the one you type into the Rancher UI so the join is
+      # reproducible.
       type: NodePort
       # Service port is controller.apisvc.ctrlServerPort (10443); this is the
-      # node port. 30444 is free on both clusters (verified: no NodePort
-      # Services exist anywhere today).
+      # node port. Check 30444 is free on both clusters before installing.
       nodePort: 30444
 
 manager:
@@ -112,7 +114,7 @@ manager:
   # so a second web UI is redundant and costs ~200-300 MB. Two reasons not to:
   #
   #   1. Rancher's SUSE Security UI extension drives the per-cluster manager
-  #      when you switch the Rancher cluster selector to downstream-1. With no
+  #      when you switch the Rancher cluster selector to this cluster. With no
   #      manager, that navigation dead-ends, and the plan's human-in-the-loop
   #      surface #1 ("what did SUSE Security find") half-works in a way that
   #      reads as a bug during a demo.
@@ -133,8 +135,8 @@ cve:
     # One that runs reliably beats three that trigger an OOM kill.
     replicas: 1
 
-# The enforcer is a DaemonSet and is intentionally left alone: downstream-1
-# has three nodes, so this install carries three enforcers. That is not
-# waste — the enforcer is what gives the scan results something to be about,
-# and pinning it to one node would make the findings depend on where a pod
-# happened to schedule.
+# The enforcer is a DaemonSet and is intentionally left alone: a multi-node
+# managed cluster carries one enforcer per node. That is not waste — the
+# enforcer is what gives the scan results something to be about, and pinning
+# it to one node would make the findings depend on where a pod happened to
+# schedule.

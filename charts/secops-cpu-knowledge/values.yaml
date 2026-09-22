@@ -20,8 +20,8 @@ global:
 qdrant:
   image:
     repository: qdrant/qdrant
-    # Verified multi-arch: linux/amd64, linux/arm64. downstream-1 is arm64, so
-    # this is a hard gate, not a preference.
+    # Verified multi-arch: linux/amd64, linux/arm64. The authoring cluster is
+    # arm64, so this is a hard gate, not a preference.
     tag: v1.12.4
     digest: ""
     pullPolicy: IfNotPresent
@@ -36,7 +36,7 @@ qdrant:
 
   persistence:
     enabled: true
-    # Empty means the cluster default. downstream-1 has exactly one
+    # Empty means the cluster default. The test cluster has exactly one
     # StorageClass: `standard` (rancher.io/local-path, RWO,
     # WaitForFirstConsumer).
     storageClass: ""

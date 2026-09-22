@@ -39,7 +39,9 @@
 #   preflight below refuses rather than cleans.
 set -eu
 
-CTX=kind-downstream-1
+# The managed cluster's kubectl context. Override with CTX=... if the current
+# context is not it.
+CTX=${CTX:-$(kubectl config current-context)}
 OWNER=secops
 REPO=cluster-manifests
 GITEA_PORT=3000
