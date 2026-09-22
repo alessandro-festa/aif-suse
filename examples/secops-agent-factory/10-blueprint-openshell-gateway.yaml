@@ -6,6 +6,13 @@
 # not the agent cooperates. A prompt-injected agent is still an agent that
 # cannot reach an endpoint the policy does not name.
 #
+# 1.0.3 pins the supervisor image — without it no sandbox starts at all, and
+# the failure surfaces only as `PodFailed` — and moves both the supervisor and
+# the gateway onto the SLE BCI 16.0 builds in build/openshell-bci/, which
+# publish linux/amd64 as well as linux/arm64. Version numbers for this
+# blueprint NAME are shared across branches; 1.0.1 and 1.0.2 are taken by the
+# secops-bp copy, hence 1.0.3.
+#
 # ADAPTED FROM examples/openshell/10-blueprint-openshell-gateway.yaml, which is
 # installed and working on the local test cluster. The differences are: the
 # SecOps sandbox image, OTLP wired to SUSE Observability, the credential KEK
@@ -50,12 +57,12 @@ kind: Blueprint
 metadata:
   labels:
     ai-factory.suse.com/blueprint-name: secops-openshell-gateway
-    ai-factory.suse.com/blueprint-version: 1.0.0
-  name: secops-openshell-gateway-1-0-0
+    ai-factory.suse.com/blueprint-version: 1.0.3
+  name: secops-openshell-gateway-1-0-3
 spec:
   source: Nvidia
   displayName: SecOps OpenShell Gateway
-  version: 1.0.0
+  version: 1.0.3
   description: |
     NVIDIA OpenShell gateway, configured as the governed execution substrate
     for the SecOps Agent Factory. Install once per cluster, then install
@@ -110,6 +117,32 @@ spec:
       # the gateway to the sandbox on :2222, now dropped).
       releaseName: openshell
       values:
+        # ---------------------------------------------------------------
+        # Images — SUSE Linux Enterprise BCI 16.0, new in 1.0.3
+        # ---------------------------------------------------------------
+        # Built from build/openshell-bci/ on branch openshell-support; see
+        # BUILDING.md there for the recipe, the size and UID tables, and the
+        # Open Build Service portability analysis.
+        #
+        # Gateway and supervisor only. `server.sandboxImage` below stays on the
+        # SUSE-published SecOps sandbox — that is a different image with the
+        # security tooling this profile's agents need, and our openclaw build
+        # is not a substitute for it.
+        #
+        # The tag is the OpenShell commit both were compiled from, the same SHA
+        # as chartVersion's dev suffix. They move together — the gateway binary
+        # has the supervisor tag compiled into it, so a mismatch is not a
+        # version skew you can patch at the chart level.
+        image:
+          # Replaces gcr.io/nvidia/openshell/gateway (gcr.io/distroless/
+          # cc-debian13 underneath). Compiled from source on bci-base:16.0 and
+          # shipped on bci-micro:16.0, linux/amd64 + linux/arm64. For a SUSE
+          # product story the runtime under our control matters; a Debian base
+          # from Google's registry is the one piece of this stack we could not
+          # account for.
+          repository: ghcr.io/alessandro-festa/openshell-bci/gateway
+          tag: "17171cd9337a2181d4bb5a9e711e1f2ad5f69388"
+
         # Shared-gateway topology: the per-namespace ServiceAccount, Role,
         # RoleBinding and NetworkPolicy come from blueprint 11, once per tenant.
         workspaceResources:
@@ -128,6 +161,44 @@ spec:
           # that can push to a git remote it is the whole point of using
           # OpenShell rather than a NetworkPolicy.
           topology: sidecar
+
+          image:
+            # NEW IN 1.0.3, and it is not optional: without it no sandbox can
+            # start at all.
+            #
+            # An empty tag does NOT fall back to the chart's own
+            # `openshell.supervisorImage` helper, which would have resolved to
+            # .Chart.AppVersion and been correct. _helpers.tpl's
+            # `openshell.supervisorImageOverrideEnabled` only emits the
+            # override when the repository differs from the default OR the tag
+            # is non-empty, so leaving both alone hands the decision to the
+            # GATEWAY BINARY's built-in default — the floating `:dev` tag.
+            #
+            # `:dev` is stale. Its arm64 manifest is a Debian image whose only
+            # binary is /openshell-supervisor, while this gateway's generated
+            # init container runs `/openshell-sandbox copy-self`. The pod dies
+            # in Init:StartError with
+            #
+            #   exec: "/openshell-sandbox": stat /openshell-sandbox:
+            #   no such file or directory
+            #
+            # which reaches the CLI as nothing more informative than
+            # `PodFailed: Pod failed`. Observed live on the CPU profile.
+            #
+            # The repository is our SLE BCI 16.0 build rather than upstream's
+            # alpine:3.22 one, and keeps upstream's contract exactly:
+            # ENTRYPOINT ["/openshell-sandbox"], the binary at / with mode
+            # 0555, and nftables/iptables present for the egress-bypass rules.
+            #
+            # Statically linked, which is not cosmetic — this binary is lifted
+            # OUT of this image by the init container's `copy-self` and
+            # executed INSIDE the SecOps sandbox image below, so it cannot
+            # depend on that image's glibc.
+            #
+            # The tag is the chart's appVersion, i.e. the gateway commit, and
+            # must be changed together with chartVersion above.
+            repository: ghcr.io/alessandro-festa/openshell-bci/supervisor
+            tag: "17171cd9337a2181d4bb5a9e711e1f2ad5f69388"
 
         server:
           auth:
