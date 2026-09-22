@@ -57,7 +57,7 @@ spec:
     sourceType: Blueprint
     blueprint:
       name: secops-openshell-gateway
-      version: 1.0.1
+      version: 1.0.2
   targetNamespace: openshell
   targetClusters: ["local"]
   deployStrategy: FleetBundle

@@ -56,7 +56,7 @@
 #
 #    IF A GATEWAY IS ALREADY INSTALLED on downstream-1 from
 #    examples/openshell/, do not apply this — upgrade that AIWorkload's
-#    blueprint version to 0.2.3 instead. Both versions pin the same release
+#    blueprint version to 0.2.7 instead. Both versions pin the same release
 #    name in the same namespace, so two AIWorkloads would fight over one Helm
 #    release.
 apiVersion: ai-factory.suse.com/v1alpha1
@@ -70,7 +70,7 @@ spec:
     sourceType: Blueprint
     blueprint:
       name: openshell-gateway
-      version: 0.2.3
+      version: 0.2.7
   targetNamespace: openshell
   targetClusters: ["c-jhrj6"]
   deployStrategy: FleetBundle
