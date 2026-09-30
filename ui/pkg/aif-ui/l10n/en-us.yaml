@@ -186,6 +186,40 @@ suseai:
             label: HTTPS CA Bundle (optional)
             secretNameLabel: CA Secret Name
             keyNameLabel: CA Bundle Key
+        blueprintCatalogs:
+          title: Blueprint Catalogs
+          default:
+            title: Default Catalog
+            helmNote: 'The default catalog is configured via Helm values (defaultBlueprints.enabled / defaultBlueprints.gitSourced).'
+            statusBundled: Bundled
+            statusGit: Git-Sourced
+            statusDisabled: Disabled
+            statusUnknown: Unknown
+          custom:
+            title: Custom Catalogs
+            add: Add Catalog
+            remove: Remove catalog
+            name:
+              label: Name
+              required: Catalog name is required
+              tooLong: Catalog name must be 40 characters or less
+              invalid: Catalog name must be lowercase alphanumeric and hyphens only, and must start and end with an alphanumeric character
+              reserved: '"{name}" is reserved for the default catalog'
+              duplicate: Catalog name must be unique
+            path:
+              label: Paths (comma-separated)
+            repoURL:
+              label: Repository URL
+            branch:
+              label: Branch
+            credSecretRef:
+              label: Password or Personal Access Token (optional)
+              secretNameLabel: Credential Secret
+              keyNameLabel: Password or Token Key
+            caBundleSecretRef:
+              label: HTTPS CA Bundle (optional)
+              secretNameLabel: CA Secret Name
+              keyNameLabel: CA Bundle Key
         rancherCatalog:
           title: Rancher API Access
           description: 'Credentials the operator uses to call the Rancher API. Currently this is needed only to fetch charts from git-backed ClusterRepos, which expose no HTTP or OCI URL. Those charts do not show up under Apps — the token only lets a Blueprint deploy them. Create a token in Rancher under Account & API Keys, store it in a Secret in the operator namespace, then reference that Secret below.'
@@ -213,6 +247,10 @@ suseai:
             keyNameLabel: Secret Key
           insecureSkipVerify:
             label: Skip TLS verification (development only)
+    blueprints:
+      catalog:
+        all: All catalogs
+        suseBlueprints: SUSE Blueprints
   apps:
     title: Apps
     backToApps: Back to Apps
@@ -285,6 +323,7 @@ suseai:
       configuration: Configuration
       selectApps: Select Applications
       review: Review
+      customize: Customize
     review:
       readonlyNotice: Configuration preview (read-only)
     form:
@@ -336,6 +375,8 @@ suseai:
       blueprintDetails: Blueprint Details
       configureApps: Configure Applications
       configureAppsDesc: Set default Helm values for each application in this blueprint.
+      customize: Customize
+      customizeDesc: Override this blueprint's default Helm values for this deployment, or exclude a component entirely. Leave a component untouched to keep the blueprint's defaults.
       configuration: Configuration
       reviewInstall: Review & Install
       reviewCreate: Review & Create
@@ -351,6 +392,14 @@ suseai:
       namespace: Namespace
       releaseName: Release
       fixedNamespace: fixed
+      customized: Customized
+      includeComponent: Include
+      componentExcluded: Excluded — this component will not be deployed.
+      excluded: Excluded
+    errors:
+      allComponentsDisabled: At least one component must remain enabled.
+    warnings:
+      excludingRunningComponent: This component is currently deployed — excluding it will remove its resources on the next sync.
   repositories:
     title: Repositories
     add: Add Repository
@@ -402,6 +451,7 @@ suseai:
       deleteSuccess: Deleted successfully
       confirmDelete: Are you sure you want to delete this item?
   workloads:
+    customizedTooltip: Workload configuration deviates from the default blueprint definition
     openInRancher: Open in Rancher
     viewApp: Open app in Rancher
     viewNamespace: View namespace in Rancher
