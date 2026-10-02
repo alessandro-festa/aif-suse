@@ -54,6 +54,22 @@ const (
 // Named "Origin" (not "Source") to avoid collision with the existing
 // BlueprintSource struct in aiworkload_types.go, which is a reference type.
 // The user-visible field name remains "source" via the JSON tag.
+// WorkloadCategory says what a blueprint, or a workload made from one, is
+// for. It is a label for people and for the UI to filter and group on; the
+// operator does not change its behaviour by category. Lifecycle is the
+// kind, category is the purpose.
+// +kubebuilder:validation:Enum=inference;training;agent;rag;data;custom
+type WorkloadCategory string
+
+const (
+	WorkloadCategoryInference WorkloadCategory = "inference"
+	WorkloadCategoryTraining  WorkloadCategory = "training"
+	WorkloadCategoryAgent     WorkloadCategory = "agent"
+	WorkloadCategoryRAG       WorkloadCategory = "rag"
+	WorkloadCategoryData      WorkloadCategory = "data"
+	WorkloadCategoryCustom    WorkloadCategory = "custom"
+)
+
 // +kubebuilder:validation:Enum=SUSE;Nvidia;Partner;Custom
 type BlueprintOrigin string
 
@@ -130,6 +146,12 @@ type BlueprintSpec struct {
 	// include the empty string, so setting `source: ""` will fail admission.
 	// +optional
 	Source BlueprintOrigin `json:"source,omitempty"`
+	// Category says what the blueprint is for: inference, training, agent,
+	// rag, data, or custom. Declared by the author; the UI filters and groups
+	// on it. Omit the field to leave it unset; the enum does not include the
+	// empty string.
+	// +optional
+	Category WorkloadCategory `json:"category,omitempty"`
 	// Deprecated marks this blueprint version as deprecated.
 	// +optional
 	Deprecated bool `json:"deprecated,omitempty"`
@@ -144,6 +166,7 @@ type BlueprintSpec struct {
 // +kubebuilder:resource:scope=Cluster,shortName=bp
 // +kubebuilder:printcolumn:name="Display Name",type=string,JSONPath=`.spec.displayName`
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.spec.version`
+// +kubebuilder:printcolumn:name="Category",type=string,JSONPath=`.spec.category`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Blueprint is the Schema for the blueprints API.

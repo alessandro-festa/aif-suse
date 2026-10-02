@@ -20,6 +20,9 @@ spec:
     - jsonPath: .spec.displayName
       name: Display Name
       type: string
+    - jsonPath: .spec.category
+      name: Category
+      type: string
     - jsonPath: .spec.deployStrategy
       name: Strategy
       type: string
@@ -54,6 +57,19 @@ spec:
           spec:
             description: AIWorkloadSpec defines the desired state of AIWorkload.
             properties:
+              category:
+                description: |-
+                  Category says what the workload is for, with the same values as a
+                  Blueprint's category. A workload made from a Blueprint carries the
+                  Blueprint's value; the UI filters and groups on it.
+                enum:
+                - inference
+                - training
+                - agent
+                - rag
+                - data
+                - custom
+                type: string
               componentValues:
                 description: ComponentValues holds per-component Helm value overrides.
                 items:

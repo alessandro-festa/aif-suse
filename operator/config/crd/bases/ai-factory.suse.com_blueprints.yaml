@@ -23,6 +23,9 @@ spec:
     - jsonPath: .spec.version
       name: Version
       type: string
+    - jsonPath: .spec.category
+      name: Category
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -51,6 +54,20 @@ spec:
           spec:
             description: BlueprintSpec defines the desired state of a Blueprint version.
             properties:
+              category:
+                description: |-
+                  Category says what the blueprint is for: inference, training, agent,
+                  rag, data, or custom. Declared by the author; the UI filters and groups
+                  on it. Omit the field to leave it unset; the enum does not include the
+                  empty string.
+                enum:
+                - inference
+                - training
+                - agent
+                - rag
+                - data
+                - custom
+                type: string
               components:
                 description: Components are the Helm charts included in this blueprint.
                   chartName is unique per blueprint.

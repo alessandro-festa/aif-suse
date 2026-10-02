@@ -1,3 +1,4 @@
+import type { WorkloadCategory } from './blueprint-types';
 // pkg/aif-ui/types/aiworkload-types.ts
 export type AIWorkloadSourceType = 'App' | 'Blueprint';
 export type AIWorkloadDeployStrategy = 'Helm' | 'FleetBundle' | 'GitOps';
@@ -32,6 +33,8 @@ export interface ComponentValueOverride {
 
 export interface AIWorkloadSpec {
   displayName:      string;
+  // Copied from the Blueprint at install; see WorkloadCategory.
+  category?:        WorkloadCategory;
   source:           AIWorkloadSource;
   targetNamespace:  string;
   targetClusters?:  string[];

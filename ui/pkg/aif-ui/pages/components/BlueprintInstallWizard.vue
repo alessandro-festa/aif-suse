@@ -166,6 +166,7 @@ async function onInstall() {
     try {
       await updateAIWorkload(namespace.value, workloadName.value, {
         displayName: blueprint.value.spec.displayName,
+        category:    blueprint.value.spec.category,
         source: {
           sourceType: 'Blueprint',
           blueprint: { name: props.blueprintName, version: props.blueprintVersion },
@@ -236,6 +237,7 @@ async function onInstall() {
       t.crName,
       {
         displayName:     blueprint.value!.spec.displayName,
+        category:        blueprint.value!.spec.category,
         source: {
           sourceType: 'Blueprint',
           blueprint: {

@@ -135,6 +135,11 @@ type AIWorkloadSpec struct {
 	// DisplayName is the user-provided workload display name.
 	// +kubebuilder:validation:MinLength=1
 	DisplayName string `json:"displayName"`
+	// Category says what the workload is for, with the same values as a
+	// Blueprint's category. A workload made from a Blueprint carries the
+	// Blueprint's value; the UI filters and groups on it.
+	// +optional
+	Category WorkloadCategory `json:"category,omitempty"`
 	// Source describes what is being deployed.
 	Source AIWorkloadSource `json:"source"`
 	// TargetNamespace is the namespace on target clusters.
@@ -296,6 +301,7 @@ type AIWorkloadStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=aiwl
 // +kubebuilder:printcolumn:name="Display Name",type=string,JSONPath=`.spec.displayName`
+// +kubebuilder:printcolumn:name="Category",type=string,JSONPath=`.spec.category`
 // +kubebuilder:printcolumn:name="Strategy",type=string,JSONPath=`.spec.deployStrategy`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

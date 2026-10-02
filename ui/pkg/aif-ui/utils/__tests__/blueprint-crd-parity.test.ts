@@ -3,7 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import yaml from 'js-yaml';
 import { browserSafeBlueprintIcon } from '../catalog-logo';
-import { BLUEPRINT_ORIGINS } from '../../types/blueprint-types';
+import { BLUEPRINT_ORIGINS, WORKLOAD_CATEGORIES } from '../../types/blueprint-types';
 
 // The UI must never render an icon the API server would reject, and the CRD
 // must reject what the UI treats as unsafe at the scheme level. The UI adds
@@ -56,5 +56,19 @@ describe('blueprint icon CRD parity', () => {
 describe('blueprint source CRD parity', () => {
   it('matches the CRD source enum', () => {
     expect([...BLUEPRINT_ORIGINS].sort()).toEqual([...specProps.source.enum].sort());
+  });
+});
+
+// Category is one list shared by Blueprint and AIWorkload; the UI's copy
+// must match both CRD enums exactly.
+describe('workload category CRD parity', () => {
+  const workloadCrd = yaml.load(readFileSync(path.resolve(__dirname, '../../../../../charts/aif-operator/crds/ai-factory.suse.com_aiworkloads.yaml'), 'utf8')) as any;
+  const workloadSpecProps = workloadCrd.spec.versions[0].schema.openAPIV3Schema.properties.spec.properties;
+
+  it('matches the Blueprint CRD category enum', () => {
+    expect([...WORKLOAD_CATEGORIES].sort()).toEqual([...specProps.category.enum].sort());
+  });
+  it('matches the AIWorkload CRD category enum', () => {
+    expect([...WORKLOAD_CATEGORIES].sort()).toEqual([...workloadSpecProps.category.enum].sort());
   });
 });
