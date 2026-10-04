@@ -85,6 +85,9 @@ type clusterRepoInfo struct {
 	ClientSecret   string   // name of the basic-auth secret; empty if unauthenticated
 	ClientSecretNS string   // namespace of the basic-auth secret (typically cattle-system)
 	Custom         bool     // repo carries the custom-repo marker label (admin-defined ClusterRepo)
+	// InsecureSkipTLSVerify mirrors the ClusterRepo's spec.insecureSkipTLSVerify: the admin
+	// trusts this repo's certificate as is (a self-signed or mirror registry).
+	InsecureSkipTLSVerify bool
 }
 
 // reconcileBlueprintStatus handles blueprint-sourced AIWorkloads.
@@ -522,6 +525,7 @@ func (r *AIWorkloadReconciler) ensureBlueprintHelmOp(
 		if repoInfo.ClientSecret != "" {
 			_ = unstructured.SetNestedField(ho.Object, repoInfo.ClientSecret, "spec", "helmSecretName")
 		}
+		applyRepoTLS(ho, repoInfo)
 
 		if err := r.Patch(ctx, ho, client.Apply,
 			client.ForceOwnership,
@@ -541,6 +545,17 @@ func (r *AIWorkloadReconciler) ensureBlueprintHelmOp(
 		})
 	}
 	return digest, nil
+}
+
+// applyRepoTLS carries the ClusterRepo's TLS verification setting to the HelmOp. Rancher honours
+// insecureSkipTLSVerify when it indexes the repo; without it on the HelmOp, Fleet's own pull of
+// the same chart fails certificate verification, the HelmOp is not Accepted, and its Bundle is
+// never rebuilt (the component then waits in Pending). A ClusterRepo caBundle is not carried
+// yet: Fleet takes a CA through a credentials Secret (helmSecretName), not a field.
+func applyRepoTLS(ho *unstructured.Unstructured, repoInfo clusterRepoInfo) {
+	if repoInfo.InsecureSkipTLSVerify {
+		_ = unstructured.SetNestedField(ho.Object, true, "spec", "insecureSkipTLSVerify")
+	}
 }
 
 const (
@@ -1260,6 +1275,7 @@ func (r *AIWorkloadReconciler) resolveClusterRepo(ctx context.Context, repoName 
 	// It gets its own pull secret built from the repo's credentials instead
 	// (customRepoInjector). The marker label is the single source of truth.
 	info.Custom = cr.GetLabels()[credentials.CustomRepoLabel] == credentials.LabelValueTrue
+	info.InsecureSkipTLSVerify, _, _ = unstructured.NestedBool(cr.Object, "spec", "insecureSkipTLSVerify")
 
 	url, _, _ := unstructured.NestedString(cr.Object, "spec", "url")
 	if url == "" {
