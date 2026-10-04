@@ -309,6 +309,53 @@ spec:
                   workload:
                     type: string
                 type: object
+              report:
+                description: Report is what the run reported about itself, for a run
+                  that prints one.
+                properties:
+                  checks:
+                    items:
+                      description: 'AIJobReportCheck is one check in a report: passed,
+                        passed with a warning, or failed.'
+                      properties:
+                        detail:
+                          type: string
+                        name:
+                          type: string
+                        ok:
+                          type: boolean
+                        warn:
+                          type: boolean
+                      required:
+                      - name
+                      - ok
+                      type: object
+                    maxItems: 50
+                    type: array
+                  env:
+                    additionalProperties:
+                      type: string
+                    description: 'Env describes where it ran: driver, GPU, node.'
+                    type: object
+                  metrics:
+                    additionalProperties:
+                      type: string
+                    description: Metrics are the measurements, e.g. bus bandwidth,
+                      as text.
+                    type: object
+                  pod:
+                    description: Pod is the pod whose log the report was read from.
+                    type: string
+                  reportedAt:
+                    format: date-time
+                    type: string
+                  status:
+                    description: 'Status is the run''s own verdict: pass or fail.'
+                    type: string
+                  test:
+                    description: Test names what reported, e.g. "GPU Smoke Test".
+                    type: string
+                type: object
               resources:
                 description: AIJobResources records what the job was given.
                 properties:

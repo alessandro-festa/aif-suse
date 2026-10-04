@@ -186,6 +186,42 @@ type AIJobResult struct {
 	Message  string `json:"message,omitempty"`
 }
 
+// AIJobReport is what a run reported about itself: the last AIF_RESULT line
+// its first worker printed. Test and benchmark profiles end with one. Captured
+// when the run finishes, so it outlives the pods and their logs.
+type AIJobReport struct {
+	// Test names what reported, e.g. "GPU Smoke Test".
+	// +optional
+	Test string `json:"test,omitempty"`
+	// Status is the run's own verdict: pass or fail.
+	// +optional
+	Status string `json:"status,omitempty"`
+	// +optional
+	// +kubebuilder:validation:MaxItems=50
+	Checks []AIJobReportCheck `json:"checks,omitempty"`
+	// Metrics are the measurements, e.g. bus bandwidth, as text.
+	// +optional
+	Metrics map[string]string `json:"metrics,omitempty"`
+	// Env describes where it ran: driver, GPU, node.
+	// +optional
+	Env map[string]string `json:"env,omitempty"`
+	// Pod is the pod whose log the report was read from.
+	// +optional
+	Pod string `json:"pod,omitempty"`
+	// +optional
+	ReportedAt *metav1.Time `json:"reportedAt,omitempty"`
+}
+
+// AIJobReportCheck is one check in a report: passed, passed with a warning, or failed.
+type AIJobReportCheck struct {
+	Name string `json:"name"`
+	OK   bool   `json:"ok"`
+	// +optional
+	Warn bool `json:"warn,omitempty"`
+	// +optional
+	Detail string `json:"detail,omitempty"`
+}
+
 // AIJobCleanup tracks removal of the execution objects.
 type AIJobCleanup struct {
 	// +optional
@@ -223,6 +259,9 @@ type AIJobStatus struct {
 	Resources *AIJobResources `json:"resources,omitempty"`
 	// +optional
 	Result *AIJobResult `json:"result,omitempty"`
+	// Report is what the run reported about itself, for a run that prints one.
+	// +optional
+	Report *AIJobReport `json:"report,omitempty"`
 	// +optional
 	Cleanup AIJobCleanup `json:"cleanup,omitempty"`
 	// +listType=map

@@ -91,6 +91,7 @@ var (
 // +kubebuilder:rbac:groups=kubeflow.org,resources=pytorchjobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=services;configmaps;secrets;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims,verbs=get;list;watch
@@ -118,6 +119,9 @@ type AIJobReconciler struct {
 	// spec.url. For running the operator outside the cluster, where an in-cluster
 	// repository Service does not resolve; nil in production.
 	RepoURLOverrides map[string]string
+	// PodLogs reads the first worker's log for its report when the run
+	// finishes; nil is built from the manager's config.
+	PodLogs PodLogReader
 	// AllowInsecureRegistryTLS lets an AIJob pull from a ClusterRepo that sets
 	// insecureSkipTLSVerify, as the operator's other chart pulls; off refuses it.
 	AllowInsecureRegistryTLS bool
@@ -256,10 +260,19 @@ func (r *AIJobReconciler) reconcileJob(ctx context.Context, job *v1alpha1.AIJob,
 
 	phase := derivePhase(st.Phase, installed, obs)
 	if phase.IsTerminal() {
+		finishing := !st.Phase.IsTerminal()
 		completion(st, obs.execution, obs.pods)
 		if st.CompletedAt == nil {
 			t := metav1.NewTime(r.now())
 			st.CompletedAt = &t
+		}
+		if finishing && st.Report == nil {
+			// once, as it finishes: the pods and their logs are still there
+			var execution metav1.Object
+			if obs.execution != nil {
+				execution = obs.execution
+			}
+			r.captureReport(ctx, job, execution, obs.pods)
 		}
 		st.Phase = phase
 		setCondition(st, gen, v1alpha1.AIJobConditionCompleted, metav1.ConditionTrue, string(phase), st.Result.Message)
@@ -646,6 +659,13 @@ func (r *AIJobReconciler) event(job *v1alpha1.AIJob, typ, reason, msg string) {
 func (r *AIJobReconciler) SetupWithManager(mgr controllerruntime.Manager) error {
 	if r.APIReader == nil {
 		r.APIReader = mgr.GetAPIReader()
+	}
+	if r.PodLogs == nil {
+		logs, err := NewPodLogReader(mgr.GetConfig())
+		if err != nil {
+			return err
+		}
+		r.PodLogs = logs
 	}
 	return controllerruntime.NewControllerManagedBy(mgr).
 		For(&v1alpha1.AIJob{}, builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))).

@@ -279,6 +279,14 @@ rules:
       - aijobs/finalizers
     verbs:
       - update
+  # A finished AIJob keeps the result its run reported: read once from the
+  # first worker's log.
+  - apiGroups:
+      - ""
+    resources:
+      - pods/log
+    verbs:
+      - get
   - apiGroups:
       - batch
     resources:
