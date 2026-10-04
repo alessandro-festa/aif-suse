@@ -1,0 +1,37 @@
+# torchrun across 1-4 workers with c10d rendezvous. Code comes from a ConfigMap (its train.py key)
+# or the script box; data and checkpoints from claims in the project namespace. Runs the SUSE
+# Application Collection PyTorch image (torch 2.14, CUDA 13, driver 580+, torch only).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pytorch-distributed
+  namespace: ai-profiles
+  labels:
+    trainingjobs/profile: training
+data:
+  profile.yaml: |
+    displayName: PyTorch Distributed
+    description: Distributed PyTorch training with torchrun, one GPU per worker. Stopped after 8 hours.
+    framework: PyTorch
+    status: ready
+    values:
+      image: { repository: dp.apps.rancher.io/containers/pytorch, tag: 2.14.0-nvidia-2.1 }
+      imagePullSecrets: [{ name: suse-ai-pull-combined }]
+      job: { kind: job, mode: torchrun, nodes: 2, gpusPerNode: 1 }
+      rendezvous: { backend: c10d }
+      resources:
+        requests: { cpu: "4", memory: 16Gi, ephemeral-storage: 5Gi }
+      storage:
+        # outputs: a new volume per run, kept after it; scratch: a per-pod Longhorn volume
+        checkpointCreate: { enabled: true, size: 20Gi, storageClass: longhorn, keep: true }
+        scratchSize: 50Gi
+        scratchMedium: volume
+        scratchStorageClass: longhorn
+      env:
+        - { name: PYTHONUNBUFFERED, value: "1" }
+    editable: [image, tag, script, configMap, args, env, nodes, gpusPerNode, datasetPVC, checkpointPVC, runtimeLimitHours]
+    limits:
+      nodes: { min: 1, max: 4 }
+      gpusPerNode: { min: 1, max: 2 }
+      registries: [dp.apps.rancher.io/containers/, nvcr.io/nvidia/, pytorch/]
+      maxRuntimeHours: 8

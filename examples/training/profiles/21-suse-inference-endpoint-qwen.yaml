@@ -1,0 +1,27 @@
+# The SUSE Inference Endpoint shape: vLLM behind the LiteLLM gateway (virtual keys, teams, budgets,
+# rate limits, prompt-injection guardrails), from blueprint suse-inference-endpoint-dra 1.1.0
+# (../blueprints/). LiteLLM needs its credentials Secret in the project first; the Deploy page
+# checks for it.
+# Needs the vllm-dra chart in a vllm-dra-charts ClusterRepo; see the blueprint's notes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: suse-inference-endpoint-qwen
+  namespace: ai-profiles
+  labels:
+    trainingjobs/profile: inference
+data:
+  profile.yaml: |
+    displayName: SUSE Inference Endpoint · Qwen2.5 1.5B
+    description: LLM gateway with API keys, budgets and guardrails, in front of vLLM on one GPU (DRA).
+    framework: vLLM + LiteLLM
+    gpu: A2000
+    status: beta
+    blueprint: { name: suse-inference-endpoint-dra, version: 1.1.0 }
+    requiredSecrets:
+      - name: litellm-credentials
+        hint: >-
+          kubectl -n <project-namespace> create secret generic litellm-credentials
+          --from-literal=PROXY_MASTER_KEY="sk-$(openssl rand -hex 24)"
+          --from-literal=LITELLM_SALT_KEY="sk-$(openssl rand -hex 24)"
+          --from-literal=UI_USERNAME=admin

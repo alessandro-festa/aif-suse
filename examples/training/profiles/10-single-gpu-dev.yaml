@@ -1,0 +1,32 @@
+# One worker, one GPU, a scratch volume for the Hugging Face cache, on the SUSE Application
+# Collection PyTorch image (torch 2.14, CUDA 13; needs NVIDIA driver 580+; torch only, no
+# torchvision or pip). The pull secret is AI Factory's, present in namespaces it has deployed into.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: single-gpu-dev
+  namespace: ai-profiles
+  labels:
+    trainingjobs/profile: training
+data:
+  profile.yaml: |
+    displayName: Single GPU Development
+    description: One worker with one GPU for development and small fine-tunes. Stopped after 4 hours.
+    framework: PyTorch
+    status: ready
+    values:
+      image: { repository: dp.apps.rancher.io/containers/pytorch, tag: 2.14.0-nvidia-2.1 }
+      imagePullSecrets: [{ name: suse-ai-pull-combined }]
+      job: { kind: job, mode: torchrun, nodes: 1, gpusPerNode: 1 }
+      resources:
+        requests: { cpu: "2", memory: 8Gi, ephemeral-storage: 5Gi }
+      storage: { scratchSize: 20Gi }
+      env:
+        - { name: PYTHONUNBUFFERED, value: "1" }
+        - { name: HF_HOME, value: /scratch/hf }
+        - { name: OUT_DIR, value: /scratch/out }
+    editable: [image, tag, script, configMap, env, datasetPVC, runtimeLimitHours]
+    limits:
+      nodes: { min: 1, max: 1 }
+      registries: [dp.apps.rancher.io/containers/, nvcr.io/nvidia/, pytorch/]
+      maxRuntimeHours: 4

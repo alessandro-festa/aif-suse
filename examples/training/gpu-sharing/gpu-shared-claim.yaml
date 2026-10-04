@@ -1,0 +1,39 @@
+# A shared GPU for one project namespace: one ResourceClaim, configured for MPS, that several
+# workloads attach to by name (gpu-train-job gpu.sharedClaim, vllm-dra servingEngineSpec.dra.sharedClaim)
+# and so run on the same physical GPU at the same time.
+#
+# MPS enforces GPU memory per process. The default below is high on purpose: each workload sets its
+# own cap with CUDA_MPS_PINNED_DEVICE_MEM_LIMIT (the charts do, from the profile's "GPU memory"), and
+# a client without one gets this default. Tested on an RTX A2000: two pods capped at
+# 4 GiB and 6 GiB ran concurrently and were each refused past their cap.
+#
+# The trainingjobs/gpu-share label is how AI Factory finds it. One claim per GPU it should
+# share; create it in each project namespace that should share a GPU (a platform admin's job).
+# Needs the NVIDIA DRA driver with featureGates.MPSSupport=true.
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  name: gpu-shared
+  namespace: team-a        # the project namespace
+  labels:
+    trainingjobs/gpu-share: mps
+spec:
+  devices:
+    requests:
+    - name: gpu
+      exactly:
+        deviceClassName: gpu.nvidia.com
+        allocationMode: ExactCount
+        count: 1
+    config:
+    - requests: ["gpu"]
+      opaque:
+        driver: gpu.nvidia.com
+        parameters:
+          apiVersion: resource.nvidia.com/v1beta1
+          kind: GpuConfig
+          sharing:
+            strategy: MPS
+            mpsConfig:
+              defaultActiveThreadPercentage: 100
+              defaultPinnedDeviceMemoryLimit: 11000Mi

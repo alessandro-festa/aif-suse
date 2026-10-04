@@ -1,0 +1,248 @@
+# SUSE Inference Endpoint (DRA) 1.1.0: vLLM behind the LiteLLM gateway, for clusters that expose
+# GPUs through DRA.
+#
+# Components: vllm-dra 0.1.10 (the Application Collection vllm chart with a DRA option: a GPU
+# through a ResourceClaim instead of nvidia.com/gpu; Qwen2.5-1.5B-Instruct, 2 CPU / 5Gi) and
+# litellm 1.81.13 from the SUSE Registry. The litellm values are the bundled inference endpoint's,
+# with the model list pointed at this blueprint's router and model.
+#
+# Needs the vllm-dra chart (the SUSE Application Collection vllm chart 0.1.10 plus a DRA option)
+# in a ClusterRepo named vllm-dra-charts. It is not published with AI Factory: the DRA option is
+# proposed upstream to the Application Collection chart, and until then a site that runs DRA hosts
+# the fork itself. On a cluster with the GPU device plugin, use the SUSE Inference Endpoint.
+{
+  "apiVersion": "ai-factory.suse.com/v1alpha1",
+  "kind": "Blueprint",
+  "metadata": {
+    "name": "suse-inference-endpoint-dra-1-1-0",
+    "labels": {
+      "ai-factory.suse.com/blueprint-name": "suse-inference-endpoint-dra",
+      "ai-factory.suse.com/blueprint-version": "1.1.0",
+      "ai-factory.suse.com/source": "custom"
+    }
+  },
+  "spec": {
+    "displayName": "SUSE Inference Endpoint (DRA)",
+    "version": "1.1.0",
+    "source": "Custom",
+    "description": "OpenAI-compatible LLM gateway (LiteLLM: virtual keys, teams, budgets,\nrate limits, prompt-injection guardrails) in front of vLLM, on clusters that\nallocate GPUs through Dynamic Resource Allocation. Based on SUSE Inference\nEndpoint 1.0.1 with the vLLM component replaced by vllm-dra.\n\nPREREQUISITE: Secret \"litellm-credentials\" in the target namespace with\nPROXY_MASTER_KEY, LITELLM_SALT_KEY and UI_USERNAME (see the SUSE Inference\nEndpoint blueprint). Public models need no Hugging Face token.\n\nNEEDS the vllm-dra chart, a fork of the SUSE Application Collection vllm chart\nthat can request GPUs through DRA, in a ClusterRepo named vllm-dra-charts. It is not\npublished with AI Factory; its DRA option is proposed to the Application Collection chart.",
+    "components": [
+      {
+        "chartName": "vllm-dra",
+        "chartRepo": "vllm-dra-charts",
+        "chartVersion": "0.1.10",
+        "vendor": "suse",
+        "values": {
+          "global": {
+            "imagePullSecrets": [
+              "application-collection"
+            ],
+            "imageRegistry": ""
+          },
+          "routerSpec": {
+            "enableRouter": true,
+            "registry": "dp.apps.rancher.io",
+            "repository": "containers/lmcache-lmstack-router",
+            "tag": "0.1.10-3.60",
+            "imagePullPolicy": "IfNotPresent",
+            "replicaCount": 1,
+            "containerPort": 8000,
+            "servicePort": 80,
+            "serviceType": "ClusterIP",
+            "serviceDiscovery": "k8s",
+            "k8sServiceDiscoveryType": "pod-ip",
+            "routingLogic": "roundrobin",
+            "ingress": {
+              "enabled": false
+            },
+            "autoscaling": {
+              "enabled": false,
+              "minReplicas": 1,
+              "maxReplicas": 3,
+              "targetCPUUtilizationPercentage": 80
+            },
+            "resources": {
+              "requests": {
+                "cpu": "400m",
+                "memory": "1000Mi"
+              },
+              "limits": {
+                "memory": "1000Mi"
+              }
+            }
+          },
+          "servingEngineSpec": {
+            "enableEngine": true,
+            "containerPort": 8000,
+            "servicePort": 80,
+            "runtimeClassName": "",
+            "dra": {
+              "enabled": true,
+              "deviceClassName": "gpu.nvidia.com"
+            },
+            "modelSpec": [
+              {
+                "name": "qwen2-5-1-5b",
+                "modelURL": "Qwen/Qwen2.5-1.5B-Instruct",
+                "registry": "dp.apps.rancher.io",
+                "repository": "containers/vllm-openai",
+                "tag": "0.19.0-5.29",
+                "imagePullPolicy": "IfNotPresent",
+                "replicaCount": 1,
+                "requestCPU": 2,
+                "requestMemory": "5Gi",
+                "requestGPU": 1,
+                "pvcStorage": "20Gi",
+                "pvcAccessMode": [
+                  "ReadWriteOnce"
+                ],
+                "storageClass": "longhorn",
+                "env": [
+                  {
+                    "name": "HF_TOKEN",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "huggingface-token",
+                        "key": "HF_TOKEN",
+                        "optional": true
+                      }
+                    }
+                  }
+                ],
+                "vllmConfig": {
+                  "dtype": "half",
+                  "maxModelLen": 4096,
+                  "extraArgs": [
+                    "--gpu-memory-utilization",
+                    "0.85"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "chartName": "litellm",
+        "chartRepo": "suse-ai-registry",
+        "chartVersion": "1.81.13",
+        "values": {
+          "autoscaling": {
+            "enabled": false,
+            "maxReplicas": 5,
+            "minReplicas": 1,
+            "targetCPUUtilizationPercentage": 80
+          },
+          "db": {
+            "database": "litellm",
+            "deployStandalone": true,
+            "useExisting": false
+          },
+          "environmentSecrets": [
+            "litellm-credentials"
+          ],
+          "global": {
+            "imagePullSecrets": [
+              "application-collection"
+            ],
+            "imageRegistry": ""
+          },
+          "image": {
+            "pullPolicy": "IfNotPresent",
+            "registry": "registry.suse.com",
+            "repository": "ai/containers/litellm-database",
+            "tag": "v1.81.13"
+          },
+          "ingress": {
+            "className": "nginx",
+            "enabled": false,
+            "hosts": [
+              {
+                "host": "inference.example.com",
+                "paths": [
+                  {
+                    "path": "/",
+                    "pathType": "Prefix"
+                  }
+                ]
+              }
+            ],
+            "tls": []
+          },
+          "masterkeySecretKey": "PROXY_MASTER_KEY",
+          "masterkeySecretName": "litellm-credentials",
+          "migrationJob": {
+            "enabled": true
+          },
+          "postgresql": {
+            "architecture": "standalone",
+            "auth": {
+              "database": "litellm",
+              "password": "ChangeMe-litellm-db-password",
+              "postgres-password": "ChangeMe-litellm-db-password",
+              "username": "litellm"
+            },
+            "persistence": {
+              "storageClass": "longhorn"
+            },
+            "podTemplates": {
+              "initContainers": {
+                "volume-permissions": {
+                  "enabled": true
+                }
+              }
+            }
+          },
+          "proxyConfigMap": {
+            "create": true
+          },
+          "proxy_config": {
+            "general_settings": {
+              "master_key": "os.environ/PROXY_MASTER_KEY",
+              "store_model_in_db": true,
+              "store_prompts_in_spend_logs": false
+            },
+            "guardrails": [],
+            "litellm_settings": {
+              "callbacks": [
+                "detect_prompt_injection"
+              ],
+              "drop_params": true,
+              "prompt_injection_params": {
+                "heuristics_check": true,
+                "reject_as_response": true,
+                "similarity_check": true
+              }
+            },
+            "model_list": [
+              {
+                "litellm_params": {
+                  "api_base": "http://vllm-dra-router-service:80/v1",
+                  "api_key": "dummy-vllm-has-no-auth",
+                  "model": "openai/Qwen/Qwen2.5-1.5B-Instruct"
+                },
+                "model_info": {
+                  "access_groups": [
+                    "general"
+                  ]
+                },
+                "model_name": "qwen2.5-1.5b"
+              }
+            ]
+          },
+          "replicaCount": 1,
+          "resources": {},
+          "service": {
+            "port": 4000,
+            "type": "ClusterIP"
+          },
+          "serviceMonitor": {
+            "enabled": false,
+            "interval": "15s"
+          }
+        },
+        "vendor": "suse"
+      }
+    ]
+  }
+}

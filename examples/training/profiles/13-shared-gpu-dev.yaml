@@ -1,0 +1,38 @@
+# One worker with 4 GiB of a GPU, beside other workloads on the same card. Under KAI with GPU
+# sharing, KAI queues it until 4 GiB is free and HAMi-core caps it there; in a DRA project with an
+# MPS ResourceClaim it attaches to that claim. The GPU mode is left to the cluster so the same
+# profile works either way.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shared-gpu-dev
+  namespace: ai-profiles
+  labels:
+    trainingjobs/profile: training
+data:
+  profile.yaml: |
+    displayName: GPU Development (shared GPU)
+    description: One worker with 4 GiB of a shared GPU, alongside other workloads; waits in the queue when the GPU is full. Stopped after 2 hours.
+    framework: PyTorch
+    status: beta
+    namePrefix: dev
+    values:
+      image: { repository: dp.apps.rancher.io/containers/pytorch, tag: 2.14.0-nvidia-2.1 }
+      imagePullSecrets: [{ name: suse-ai-pull-combined }]
+      job: { kind: job, mode: torchrun, nodes: 1, gpusPerNode: 1 }
+      gpu: { sharedMemoryMiB: 4096 }
+      resources:
+        requests: { cpu: 500m, memory: 2Gi, ephemeral-storage: 5Gi }
+      storage:
+        # outputs: a new volume per run, kept after it; scratch: a per-pod Longhorn volume
+        checkpointCreate: { enabled: true, size: 5Gi, storageClass: longhorn, keep: true }
+        scratchSize: 10Gi
+        scratchMedium: volume
+        scratchStorageClass: longhorn
+      env:
+        - { name: PYTHONUNBUFFERED, value: "1" }
+    editable: [image, tag, script, configMap, env, datasetPVC, checkpointPVC, runtimeLimitHours, gpuShareMiB]
+    limits:
+      nodes: { min: 1, max: 1 }
+      registries: [dp.apps.rancher.io/containers/, nvcr.io/nvidia/, pytorch/]
+      maxRuntimeHours: 2

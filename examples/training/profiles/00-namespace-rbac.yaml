@@ -1,0 +1,34 @@
+# Where training profiles are published, and who can read them.
+#
+# Profiles are ConfigMaps in this one namespace (see ui/pkg/aif-ui/training/profiles.ts).
+# Every signed-in user needs to read them to see the Profiles page, so read access goes to
+# system:authenticated. Profiles hold no secrets; writing them stays with cluster admins, who
+# manage them with kubectl or GitOps like any other platform config.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-profiles
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ai-profile-reader
+  namespace: ai-profiles
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ai-profile-reader
+  namespace: ai-profiles
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ai-profile-reader
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:authenticated

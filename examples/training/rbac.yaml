@@ -1,0 +1,266 @@
+# Rancher RoleTemplates for AI Factory training workloads.
+#
+# Installing these makes four roles appear in Rancher's own member pickers -- Cluster -> Members and
+# Project -> Members -- so granting someone the ability to submit training runs is a dropdown, not a
+# hand-written ClusterRole: training reuses Rancher's RBAC rather than inventing a parallel one.
+#
+# RoleTemplates are management.cattle.io/v3 and live only in the Rancher *local* cluster. Rancher
+# projects them down into real RBAC in each downstream cluster when someone is actually bound. Apply
+# this once, centrally (kubectl apply -f), and the roles are available for every cluster Rancher
+# manages.
+#
+# helm.sh/resource-policy: keep is not decoration. Uninstalling a chart that ships them would otherwise
+# delete these RoleTemplates, and deleting a RoleTemplate that bindings still reference revokes access for
+# every user bound to it -- an uninstall would silently lock people out of namespaces. Removing
+# them is a deliberate `kubectl delete`, after checking nothing is bound.
+#
+# ---------------------------------------------------------------------------------------------
+# Which role to give whom
+#
+#   submit runs in one namespace   -> AI Job Submitter   (project)  + AI Scheduler Cluster Read
+#   watch runs, read logs          -> AI Job Viewer      (project)  + AI Scheduler Cluster Read
+#   run the platform itself        -> AI Platform Admin  (cluster)
+#
+# The two project roles need the cluster-context companion, and that is not an oversight. GPU
+# inventory lives on Node objects and the scratch-volume picker reads StorageClasses; both are
+# cluster-scoped, so no project-context role can grant them. Without it the Submit page still loads
+# but reports zero GPUs, which looks like a broken cluster rather than a missing binding.
+#
+# Rancher's built-in Cluster Member already covers nodes, storageclasses and clusterrepos. The
+# companion role below repeats those few rules on purpose, so it stands on its own for sites that
+# do not want to hand out Cluster Member.
+# ---------------------------------------------------------------------------------------------
+---
+apiVersion: management.cattle.io/v3
+kind: RoleTemplate
+metadata:
+  name: ai-job-submitter
+  annotations:
+    helm.sh/resource-policy: keep
+context: project
+displayName: AI Job Submitter
+description: >-
+  Submit, monitor and delete GPU training runs in this project. Can read the project's GPU quota but
+  not change it. Pair with AI Scheduler Cluster Read.
+builtin: false
+external: false
+hidden: false
+rules:
+  # The run itself. jobs/status so the Jobs page can tell running from complete.
+  - apiGroups: ["batch"]
+    resources: ["jobs", "jobs/status"]
+    verbs: ["create", "delete", "deletecollection", "get", "list", "patch", "update", "watch"]
+  # Multi-node runs when the Training Operator is installed. Absent CRDs simply mean these rules
+  # match nothing; they are harmless on a cluster without Kubeflow.
+  - apiGroups: ["kubeflow.org"]
+    resources: ["pytorchjobs", "pytorchjobs/status"]
+    verbs: ["create", "delete", "deletecollection", "get", "list", "patch", "update", "watch"]
+  # The chart's headless Service is what torchrun rendezvous resolves against, so a submitter who
+  # cannot create Services cannot run a distributed job at all.
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "persistentvolumeclaims"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  # Read-only: watching your own run and reading its logs.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status", "events"]
+    verbs: ["get", "list", "watch"]
+  # Deliberately read-only. A submitter must be able to see the GPU cap the Submit page checks
+  # against -- otherwise pre-flight cannot tell them why a job will not fit -- but must not be able
+  # to raise it. Read here, write in AI Platform Admin, is the entire Tier-1 quota model.
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list", "watch"]
+  # Helm keeps release state in a Secret in the target namespace, so installing the job chart is
+  # impossible without this. It is the widest grant in this role: it is namespace-scoped, but it
+  # does mean a submitter can read every Secret in their own project. Split the project if that
+  # matters, or use the Kubernetes manifest tab, which installs no chart and needs none of this.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  # The Helm release as Rancher models it: what the Jobs page lists and what its uninstall button
+  # acts on. Without delete, a run can be started and never cleaned up.
+  - apiGroups: ["catalog.cattle.io"]
+    resources: ["apps"]
+    verbs: ["get", "list", "watch", "delete"]
+  # The install itself runs as an Operation; its log is what surfaces a failed chart render.
+  - apiGroups: ["catalog.cattle.io"]
+    resources: ["operations", "operations/log"]
+    verbs: ["get", "list", "watch"]
+  # DRA mode: the chart renders a ResourceClaimTemplate instead of a nvidia.com/gpu request.
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims", "resourceclaimtemplates"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  # Multi-node NVLink domains on DRA clusters.
+  - apiGroups: ["resource.nvidia.com"]
+    resources: ["computedomains"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  # Inference endpoints: deploying an inference profile creates a SUSE AI Factory AIWorkload in the
+  # project namespace, and the Endpoints page lists and deletes them. The AI Factory operator does
+  # the install, under its own service account.
+  - apiGroups: ["ai-factory.suse.com"]
+    resources: ["aiworkloads"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  # training runs are AIJobs; cancel is a patch of spec.cancel
+  - apiGroups: ["ai-factory.suse.com"]
+    resources: ["aijobs"]
+    verbs: ["create", "delete", "get", "list", "patch", "watch"]
+  # Calling the project's own endpoints from outside the cluster (the rancher-ai SDK's chat()):
+  # the API server's service proxy, for Services in this project only.
+  - apiGroups: [""]
+    resources: ["services/proxy"]
+    verbs: ["get", "create"]
+  # Picking a queue, and seeing where the job sits in it. Read-only: queue shape is a platform
+  # decision, not a submitter's.
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["localqueues", "workloads"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: management.cattle.io/v3
+kind: RoleTemplate
+metadata:
+  name: ai-job-viewer
+  annotations:
+    helm.sh/resource-policy: keep
+context: project
+displayName: AI Job Viewer
+description: >-
+  Watch GPU training runs and read their logs in this project, without being able to submit or
+  delete anything. Pair with AI Scheduler Cluster Read.
+builtin: false
+external: false
+hidden: false
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs", "jobs/status"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kubeflow.org"]
+    resources: ["pytorchjobs", "pytorchjobs/status"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["ai-factory.suse.com"]
+    resources: ["aijobs"]
+    verbs: ["get", "list", "watch"]
+  # pods/log is the reason this role exists rather than telling people to use Rancher's Read-only:
+  # a training run is judged almost entirely from its log.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/status", "events", "services", "configmaps",
+                "persistentvolumeclaims", "resourcequotas"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["catalog.cattle.io"]
+    resources: ["apps", "operations", "operations/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims", "resourceclaimtemplates"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["resource.nvidia.com"]
+    resources: ["computedomains"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["localqueues", "workloads"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: management.cattle.io/v3
+kind: RoleTemplate
+metadata:
+  name: ai-scheduler-cluster-read
+  annotations:
+    helm.sh/resource-policy: keep
+context: cluster
+displayName: AI Scheduler Cluster Read
+description: >-
+  Read-only cluster facts the Submit page needs: GPU inventory, storage classes, chart repositories
+  and scheduler queues. Grants no access to any workload. Bind alongside a project role.
+builtin: false
+external: false
+hidden: false
+rules:
+  # The GPU inventory. Every "available vs quota" number on the Submit and Projects pages is
+  # computed from Node allocatable, so without this the extension reports a cluster with no GPUs.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # The scratch-volume StorageClass picker, and the pre-flight check for a default class -- the one
+  # that catches "pod stuck Pending because nothing can provision the ephemeral PVC".
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  # Finding the job chart. Read-only, so this role cannot add a repo; that is Platform Admin.
+  - apiGroups: ["catalog.cattle.io"]
+    resources: ["clusterrepos"]
+    verbs: ["get", "list", "watch"]
+  # GPU mode detection. Their absence is how the extension decides the cluster is device-plugin
+  # rather than DRA, so being unable to read them is not the same as them not existing.
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["deviceclasses", "resourceslices"]
+    verbs: ["get", "list", "watch"]
+  # Which GPUs DRA has already handed out, and to which namespace. Kueue does not count claims made
+  # outside its queues, so without this the pre-flight can only see this user's own namespaces.
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["resourceclaims"]
+    verbs: ["get", "list", "watch"]
+  # SUSE AI Factory Blueprints are cluster-scoped: an inference profile names one, and the Profiles
+  # and Deploy pages read it for the model, GPUs and replicas it installs.
+  - apiGroups: ["ai-factory.suse.com"]
+    resources: ["blueprints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["resource.nvidia.com"]
+    resources: ["computedomains"]
+    verbs: ["get", "list", "watch"]
+  # KAI Queues are cluster-scoped, which is why the queue dropdown needs a cluster-context role even
+  # though picking a queue feels like a project-level act.
+  - apiGroups: ["scheduling.run.ai"]
+    resources: ["queues"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["clusterqueues", "resourceflavors"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: management.cattle.io/v3
+kind: RoleTemplate
+metadata:
+  name: ai-platform-admin
+  annotations:
+    helm.sh/resource-policy: keep
+context: cluster
+displayName: AI Platform Admin
+description: >-
+  Run the AI Factory Scheduler in this cluster: add the job chart repository, create AI projects and
+  their namespaces, and set GPU quota. Inherits Create Projects.
+builtin: false
+external: false
+hidden: false
+# Rancher projects are management objects rather than cluster ones, so rather than restating that
+# rule here this inherits the built-in that already means exactly "may create projects".
+roleTemplateNames:
+  - projects-create
+rules:
+  # Everything AI Scheduler Cluster Read grants, so a platform admin needs only this one binding.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["resource.k8s.io"]
+    resources: ["deviceclasses", "resourceslices", "resourceclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["ai-factory.suse.com"]
+    resources: ["blueprints"]
+    verbs: ["get", "list", "watch"]
+  # The "Add to this cluster" button on the Submit and AI Projects pages. ClusterRepo is
+  # cluster-scoped, which is exactly why the button checks for this and shows a kubectl command
+  # instead of 403-ing when it is missing.
+  - apiGroups: ["catalog.cattle.io"]
+    resources: ["clusterrepos"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  # Creating an AI project: the namespace, and the ResourceQuota that is the GPU cap. Write access
+  # to resourcequotas is the line between this role and AI Job Submitter.
+  - apiGroups: [""]
+    resources: ["namespaces", "resourcequotas"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  # Queue shape on clusters that have a queueing scheduler installed.
+  - apiGroups: ["scheduling.run.ai"]
+    resources: ["queues"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["clusterqueues", "resourceflavors", "localqueues"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]

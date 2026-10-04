@@ -1,0 +1,26 @@
+# The SUSE Inference Endpoint on 5 GiB of a shared GPU, from blueprint
+# suse-inference-endpoint-shared 1.0.0 (../blueprints/): vLLM on a KAI GPU-memory share, beside
+# other workloads on the same card (13-shared-gpu-dev). Needs KAI with GPU sharing and
+# litellm-credentials in the project.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: suse-inference-endpoint-qwen-shared
+  namespace: ai-profiles
+  labels:
+    trainingjobs/profile: inference
+data:
+  profile.yaml: |
+    displayName: SUSE Inference Endpoint · Qwen2.5 1.5B (shared GPU)
+    description: LLM gateway with API keys, budgets and guardrails, in front of vLLM using 5 GiB of a shared GPU, queued by KAI.
+    framework: vLLM + LiteLLM
+    gpu: A2000
+    status: beta
+    blueprint: { name: suse-inference-endpoint-shared, version: 1.0.0 }
+    requiredSecrets:
+      - name: litellm-credentials
+        hint: >-
+          kubectl -n <project-namespace> create secret generic litellm-credentials
+          --from-literal=PROXY_MASTER_KEY="sk-$(openssl rand -hex 24)"
+          --from-literal=LITELLM_SALT_KEY="sk-$(openssl rand -hex 24)"
+          --from-literal=UI_USERNAME=admin
