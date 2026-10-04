@@ -1,0 +1,80 @@
+# A Jupyter notebook in a project namespace that can use the rancher-ai SDK, rendered and applied by
+# notebook.sh (which fills in NAMESPACE and creates the rancher-ai-sdk and token objects).
+#
+# Identity: the notebook's ServiceAccount, bound to the same rules as the AI Job Submitter project
+# role and the AI Scheduler Cluster Read cluster role (copied from examples/training/rbac.yaml),
+# so the notebook can do what a submitter can in the UI, in this namespace only. To act as yourself
+# instead, put a Rancher API token in RANCHER_TOKEN (see the env below).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rancher-ai-notebook
+  namespace: NAMESPACE
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rancher-ai-notebook
+  namespace: NAMESPACE
+spec:
+  selector: { app: rancher-ai-notebook }
+  ports: [{ name: http, port: 8888, targetPort: 8888 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rancher-ai-notebook
+  namespace: NAMESPACE
+  labels: { app: rancher-ai-notebook }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: rancher-ai-notebook } }
+  template:
+    metadata:
+      labels: { app: rancher-ai-notebook }
+    spec:
+      serviceAccountName: rancher-ai-notebook
+      initContainers:
+        # helm, for installing training runs from inside the cluster (no Rancher token needed)
+        - name: helm
+          image: registry.suse.com/suse/helm:3.21.3
+          command: ["cp", "/usr/bin/helm", "/tools/helm"]
+          volumeMounts: [{ name: tools, mountPath: /tools }]
+      containers:
+        # Project Jupyter's image: neither the SUSE Application Collection nor the SUSE registry
+        # ships JupyterLab. Point it at a mirror for an air-gapped cluster.
+        - name: jupyter
+          image: quay.io/jupyter/minimal-notebook:python-3.12
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -e
+              pip install --quiet --no-cache-dir /sdk/*.whl pandas
+              mkdir -p /home/jovyan/work && cp -n /examples/*.ipynb /home/jovyan/work/ 2>/dev/null || true
+              exec start-notebook.py --ServerApp.root_dir=/home/jovyan/work --IdentityProvider.token="$JUPYTER_TOKEN"
+          env:
+            - { name: PATH, value: "/tools:/opt/conda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" }
+            - { name: RANCHER_AI_PROJECT, value: NAMESPACE }
+            - name: JUPYTER_TOKEN
+              valueFrom: { secretKeyRef: { name: rancher-ai-notebook, key: jupyter-token } }
+            # Optional: act as yourself through Rancher instead of as the ServiceAccount.
+            # kubectl -n NAMESPACE create secret generic rancher-ai-token --from-literal=url=https://rancher.example.com --from-literal=token=token-xxxxx:yyyy
+            - name: RANCHER_URL
+              valueFrom: { secretKeyRef: { name: rancher-ai-token, key: url, optional: true } }
+            - name: RANCHER_TOKEN
+              valueFrom: { secretKeyRef: { name: rancher-ai-token, key: token, optional: true } }
+          ports: [{ containerPort: 8888 }]
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { memory: 2Gi }
+          volumeMounts:
+            - { name: tools, mountPath: /tools }
+            - { name: sdk, mountPath: /sdk }
+            - { name: examples, mountPath: /examples }
+            - { name: work, mountPath: /home/jovyan/work }
+      volumes:
+        - { name: tools, emptyDir: {} }
+        - { name: sdk, configMap: { name: rancher-ai-sdk } }
+        - { name: examples, configMap: { name: rancher-ai-examples } }
+        - { name: work, emptyDir: {} }

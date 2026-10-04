@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rancher-ai"
+version = "0.1.0"
+description = "CLI and Python SDK for the AI Factory Scheduler: list profiles, run training jobs, deploy inference endpoints"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = ["kubernetes>=29", "PyYAML>=6"]
+
+[project.optional-dependencies]
+pandas = ["pandas>=2"]
+test = ["pytest>=8"]
+
+[project.scripts]
+rancher-ai = "rancher_ai.cli:main"
+
+[tool.setuptools]
+packages = ["rancher_ai"]
