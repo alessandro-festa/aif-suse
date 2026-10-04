@@ -565,3 +565,47 @@ suseai:
     helmValues:
       invalidYaml: Invalid YAML format
       warning: 'Be careful when overriding {key}'
+
+# Training workloads, profiles and projects
+trainingjobs:
+  nav:
+    projects: Projects
+    profiles: Profiles
+    submit: Submit a Job
+    endpoints: Deployments
+  projects:
+    title: Projects
+    lede: Manage how AI Factory GPU capacity is allocated across teams.
+    # Avoid ASCII quotes and apostrophes in l10n strings: t() HTML-escapes, then the template
+    # escapes the result again, so a " renders literally as &quot;. Typographic quotes are untouched.
+    subtitle: >-
+      A project is a Rancher project for membership and roles, a GPU quota, and a namespace joining
+      the two. “Can start now” is what the quota and the free hardware both allow.
+  profiles:
+    title: Profiles
+    subtitle: >-
+      Environments your platform team has set up. Pick one, supply your code and scale, and the
+      profile fills in the GPUs, scheduler, storage and limits.
+  submit:
+    title: Submit a Job
+    subtitle: Pre-flight checks run against this cluster as you type. Submit is enabled once nothing fails.
+    profileSubtitle: >-
+      Name the profile, configure the job it runs, set the guardrails (what users may change and the
+      limits), then check it against this cluster and save. Saving publishes the profile; nothing is
+      submitted.
+    submit: Submit job
+    submitting: Submitting…
+    submitted: Submitted
+    preflight: Pre-flight
+    sections:
+      job: Job
+      gpu: GPUs and resources
+      storage: Storage
+      scheduling: Scheduling
+      network: Networking
+      fabric: RDMA fabric
+  endpoints:
+    title: Deployments
+    subtitle: >-
+      Manage and monitor all training runs and inference endpoints. Open a row for its pods, logs
+      and YAML.
