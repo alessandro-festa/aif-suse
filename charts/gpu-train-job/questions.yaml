@@ -1,0 +1,230 @@
+# Rancher Apps form definition. Field order here is the order in the UI.
+categories:
+  - AI/ML
+questions:
+  # ---- Job ---------------------------------------------------------------
+  - variable: image.repository
+    label: Container image
+    description: Image with your training code (must include torch for torchrun mode).
+    type: string
+    required: true
+    default: registry.suse.com/bci/bci-base
+    group: Job
+  - variable: image.tag
+    label: Image tag
+    type: string
+    required: true
+    default: "15.7"
+    group: Job
+  - variable: job.kind
+    label: Workload kind
+    description: >-
+      job = one Indexed Job, no operator needed. pytorchjob = a Kubeflow PyTorchJob (Master +
+      Workers), which requires the Kubeflow Training Operator to be installed on this cluster.
+    type: enum
+    options: [job, pytorchjob]
+    default: job
+    required: true
+    group: Job
+  - variable: job.mode
+    label: Run mode
+    description: smoke = nvidia-smi only; torchrun = distributed PyTorch; custom = your own command.
+    type: enum
+    options: [smoke, torchrun, custom]
+    default: smoke
+    required: true
+    group: Job
+  - variable: job.nodes
+    label: Nodes
+    description: Number of pods. One pod per node.
+    type: int
+    min: 1
+    max: 48
+    default: 1
+    required: true
+    group: Job
+  - variable: job.gpusPerNode
+    label: GPUs per node
+    type: int
+    min: 1
+    max: 8
+    default: 1
+    required: true
+    group: Job
+  - variable: job.script
+    label: Training script (train.py)
+    description: Inline Python. Leave empty for the built-in all-reduce demo.
+    type: multiline
+    show_if: "job.mode=torchrun"
+    group: Job
+  - variable: job.command
+    label: Command
+    description: Container command as a list, e.g. ["python","/app/train.py"].
+    type: string
+    show_if: "job.mode=custom"
+    group: Job
+  - variable: job.smokeHoldSeconds
+    label: Hold seconds after nvidia-smi
+    type: int
+    default: 60
+    show_if: "job.mode=smoke"
+    group: Job
+  - variable: job.activeDeadlineSeconds
+    label: Max runtime (seconds, 0 = unlimited)
+    type: int
+    default: 0
+    group: Job
+
+  # ---- GPU ---------------------------------------------------------------
+  - variable: gpu.mode
+    label: GPU request mode
+    description: auto detects how this cluster exposes GPUs; override only if you know you need device-plugin (nvidia.com/gpu) or dra (ResourceClaim).
+    type: enum
+    options: [auto, device-plugin, dra]
+    default: auto
+    group: GPU
+  - variable: gpu.deviceClassName
+    label: DRA DeviceClass
+    type: string
+    default: gpu.nvidia.com
+    show_if: "gpu.mode=dra"
+    group: GPU
+  - variable: gpu.productName
+    label: GPU type
+    description: GPU model the run must get, as the cluster names it (e.g. NVIDIA RTX A2000 12GB). Empty = any GPU. Enforced by a DRA device selector, or under the device plugin by GPU Feature Discovery's nvidia.com/gpu.product node label.
+    type: string
+    default: ""
+    group: GPU
+
+  - variable: computeDomain.enabled
+    label: Multi-node NVLink domain (ComputeDomain / IMEX)
+    description: For systems whose NVLink fabric spans nodes (rack-scale NVL systems). Creates a ComputeDomain sized to Nodes and gives every pod a channel claim. Requires DRA.
+    type: boolean
+    default: false
+    show_if: "gpu.mode=dra||gpu.mode=auto"
+    group: GPU
+
+  # ---- Scheduling ---------------------------------------------------------
+  - variable: scheduler.type
+    label: Scheduler
+    description: none = kube-scheduler; kueue = queue admission (needs a LocalQueue in the target namespace); kai = KAI scheduler (only if KAI is installed on this cluster).
+    type: enum
+    options: [none, kueue, kai]
+    default: none
+    group: Scheduling
+  - variable: scheduler.queue
+    label: Queue name
+    description: "Kueue: a LocalQueue in the target namespace. KAI: a Queue CR (KAI ships default-queue)."
+    type: string
+    required: true
+    default: default-queue
+    show_if: "scheduler.type=kueue||scheduler.type=kai"
+    group: Scheduling
+  - variable: scheduler.priorityClassName
+    label: Priority class
+    description: KAI ships train / build / inference. Kueue uses standard PriorityClasses.
+    type: string
+    show_if: "scheduler.type=kueue||scheduler.type=kai"
+    group: Scheduling
+
+  # ---- Networking ---------------------------------------------------------
+  - variable: network.multusNetwork
+    label: NCCL secondary network (NetworkAttachmentDefinition)
+    description: e.g. nccl-macvlan. Empty = pod network only.
+    type: string
+    group: Networking
+  - variable: network.ncclSocketIfname
+    label: NCCL_SOCKET_IFNAME
+    description: net1 when a Multus network is attached.
+    type: string
+    show_if: "job.mode=torchrun"
+    group: Networking
+  - variable: network.hostNetwork
+    label: Host network
+    description: >-
+      Pods share the node's network namespace and see its NICs. Required to reach an RDMA rail that
+      has no pod-network presence; costs the pod its own IP, and two runs on one node collide.
+    type: boolean
+    default: false
+    group: Networking
+  - variable: network.rdma.enabled
+    label: RDMA / RoCE fabric
+    description: >-
+      Mount /dev/infiniband, run the trainer privileged and enable NCCL's IB transport. Needs host
+      network as well.
+    type: boolean
+    default: false
+    group: Networking
+  - variable: network.ncclIbHca
+    label: NCCL_IB_HCA
+    description: 'HCA ports NCCL may use, e.g. mlx5_0:1,mlx5_1:1. Empty lets NCCL pick one device, which is half of a dual-rail fabric.'
+    type: string
+    show_if: "network.rdma.enabled=true"
+    group: Networking
+  - variable: network.ncclIbGidIndex
+    label: NCCL_IB_GID_INDEX
+    description: RoCEv2 GID index, usually 3.
+    type: string
+    show_if: "network.rdma.enabled=true"
+    group: Networking
+  - variable: rendezvous.backend
+    label: Rendezvous backend
+    type: enum
+    options: [c10d, etcd-v2]
+    default: c10d
+    show_if: "job.mode=torchrun"
+    group: Networking
+  - variable: rendezvous.endpoint
+    label: etcd endpoint (host:port)
+    type: string
+    default: etcd.ai-training.svc.cluster.local:2379
+    show_if: "rendezvous.backend=etcd-v2&&job.mode=torchrun"
+    group: Networking
+
+  # ---- Storage ------------------------------------------------------------
+  - variable: storage.scratchSize
+    label: Scratch volume size (optional)
+    description: Ephemeral PVC mounted at /scratch for datasets/downloads; keeps data off the node disk. e.g. 20Gi
+    type: string
+    group: Storage
+  - variable: storage.configMap
+    label: Config ConfigMap (optional)
+    description: Existing ConfigMap with configs/code, mounted read-only at /mnt/config. For "torchrun" mode, a "train.py" key here runs instead of the inline script above - pass its parameters via Environment variables instead of arguments.
+    type: configmap
+    group: Storage
+  - variable: storage.datasetPVC
+    label: Dataset PVC (optional)
+    description: >-
+      Existing PVC mounted read-only at /mnt/dataset, exported as $DATASET_DIR. Multi-node runs
+      need an RWX volume (CephFS/NFS) so every pod can mount it at once.
+    type: pvc
+    group: Storage
+  - variable: storage.checkpointPVC
+    label: Checkpoint PVC (optional)
+    description: >-
+      Existing PVC mounted read-write at /mnt/checkpoints, exported as $CHECKPOINT_DIR. Multi-node
+      runs need an RWX volume so all ranks can write checkpoints.
+    type: pvc
+    group: Storage
+  - variable: storage.shmSizeLimit
+    label: /dev/shm size
+    type: string
+    default: 8Gi
+    group: Storage
+
+  # ---- Resources ----------------------------------------------------------
+  - variable: resources.requests.cpu
+    label: CPU request (per pod)
+    type: string
+    default: "1"
+    group: Resources
+  - variable: resources.requests.memory
+    label: Memory request (per pod)
+    type: string
+    default: 2Gi
+    group: Resources
+  - variable: resources.limits.memory
+    label: Memory limit (per pod)
+    type: string
+    default: 8Gi
+    group: Resources

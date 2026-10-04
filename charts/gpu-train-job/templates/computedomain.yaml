@@ -1,0 +1,17 @@
+{{- if .Values.computeDomain.enabled }}
+{{- $full := include "gpu-train-job.fullname" . -}}
+# One ComputeDomain per run. The DRA driver materialises the channel ResourceClaimTemplate named
+# below in this namespace; pods reference it next to their GPU claim.
+apiVersion: resource.nvidia.com/v1beta1
+kind: ComputeDomain
+metadata:
+  name: {{ $full }}-cd
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gpu-train-job.labels" . | nindent 4 }}
+spec:
+  numNodes: {{ .Values.job.nodes }}
+  channel:
+    resourceClaimTemplate:
+      name: {{ $full }}-cd-channel
+{{- end }}

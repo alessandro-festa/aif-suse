@@ -1,0 +1,24 @@
+{{- /*
+The ClusterRepo AIJobs install the training chart (gpu-train-job) from, released with this chart
+at the same version. The name is the one the operator's allow-list, the training pages and the SDK
+look for. Rendered when trainingChart.clusterRepo.create is set and no ClusterRepo of that name
+exists outside this release: one an administrator created (a mirror, an air-gapped registry) is
+left alone. Kept on uninstall, so finished AIJobs can still be inspected and new ones resubmitted.
+*/ -}}
+{{- with .Values.trainingChart.clusterRepo }}
+{{- if .create }}
+{{- $existing := lookup "catalog.cattle.io/v1" "ClusterRepo" "" .name }}
+{{- if or (not $existing) (eq (dig "metadata" "annotations" "meta.helm.sh/release-name" "" $existing) $.Release.Name) }}
+apiVersion: catalog.cattle.io/v1
+kind: ClusterRepo
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "aif-operator.labels" $ | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  url: {{ .url | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,28 @@
+{{- /*
+A checkpoint/output volume for this run, dynamically provisioned from a StorageClass. With keep (the
+default) Helm leaves it when the release is uninstalled, so outputs outlive the run and its cleanup;
+delete it by hand when done. ReadWriteMany for a multi-node run so every rank can write.
+*/ -}}
+{{- if and .Values.storage.checkpointCreate.enabled (not .Values.storage.checkpointPVC) }}
+{{- $c := .Values.storage.checkpointCreate }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gpu-train-job.fullname" . }}-checkpoints
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gpu-train-job.labels" . | nindent 4 }}
+  {{- if $c.keep }}
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  accessModes:
+    - {{ $c.accessMode | default (ternary "ReadWriteOnce" "ReadWriteMany" (le (int .Values.job.nodes) 1)) }}
+  {{- with $c.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ required "storage.checkpointCreate.size is required" $c.size }}
+{{- end }}

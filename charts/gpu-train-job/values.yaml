@@ -1,0 +1,215 @@
+# gpu-train-job — one Indexed Job per training run. Each pod is one node, torchrun
+# starts one process per GPU. Rendezvous runs over the pod network (eth0); NCCL
+# traffic can be pinned to a Multus secondary interface (net1).
+
+# The profile this run was deployed from (Profiles in the AI Factory Scheduler, the rancher-ai CLI
+# and SDK). Labels the Job, so the Workloads page shows it however the run was installed.
+profile: ""
+
+# Labels added to every object the chart creates, pods and their claims included. The AI Factory
+# operator sets ai-factory.suse.com/job-id here when it installs a release for an AIJob.
+commonLabels: {}
+
+# SUSE's BCI base image: enough for the smoke mode, whose nvidia-smi the NVIDIA container toolkit
+# mounts into any container that gets a GPU, and public. torchrun mode needs an image with PyTorch,
+# e.g. dp.apps.rancher.io/containers/pytorch (SUSE Application Collection), which profiles set.
+image:
+  repository: registry.suse.com/bci/bci-base
+  tag: "15.7"
+  pullPolicy: IfNotPresent
+
+# Secrets the kubelet pulls the image with, e.g. [{ name: suse-ai-pull-combined }] for SUSE
+# Application Collection (dp.apps.rancher.io) or registry.suse.com images. Empty = whatever the
+# namespace's default ServiceAccount carries: AI Factory adds suse-ai-pull-combined there in the
+# namespaces it deploys into, so those pull without this; other namespaces need it.
+imagePullSecrets: []
+
+job:
+  # Workload kind.
+  # job        — one Indexed batch/v1 Job; ranks come from JOB_COMPLETION_INDEX, rendezvous via the
+  #              chart's headless Service. No operator required.
+  # pytorchjob — one kubeflow.org/v1 PyTorchJob (Master + nodes-1 Workers); the training-operator
+  #              injects RANK/WORLD_SIZE/MASTER_ADDR/MASTER_PORT and owns restarts per replica role.
+  #              Requires the Kubeflow Training Operator to be installed.
+  kind: job
+  # Number of nodes (pods). Each pod gets gpusPerNode GPUs.
+  # With kind=pytorchjob this is 1 Master + (nodes - 1) Workers.
+  nodes: 1
+  gpusPerNode: 1
+  # smoke    — nvidia-smi + hold; proves scheduling, GPU attach, queueing (no torch needed)
+  # torchrun — torchrun <script> with rendezvous; script from job.script or the built-in all-reduce demo
+  # custom   — run job.command / job.args verbatim
+  mode: smoke
+  smokeHoldSeconds: 60
+  # Inline Python training script for torchrun mode (leave empty for the built-in demo).
+  script: ""
+  # Extra args appended to the training script (torchrun mode) or used as-is (custom mode).
+  args: []
+  command: []
+  backoffLimitPerIndex: 3
+  # Exit codes that end the run at once rather than being retried: the script says it cannot succeed
+  # (a check refused, the configuration is wrong, it ran out of GPU memory). 3 is the convention the
+  # test profiles and example scripts follow. [] retries every failure.
+  failFastExitCodes: [3]
+  activeDeadlineSeconds: 0
+  ttlSecondsAfterFinished: 3600
+  terminationGracePeriodSeconds: 120
+
+gpu:
+  # auto          — device-plugin if any node advertises nvidia.com/gpu, else dra (resolved at install)
+  # device-plugin — request nvidia.com/gpu (the NVIDIA GPU Operator's device plugin)
+  # dra           — request a ResourceClaim against a DeviceClass (e.g. gpu.nvidia.com)
+  mode: auto
+  resourceName: nvidia.com/gpu
+  deviceClassName: gpu.nvidia.com
+  # GPU model the run must get, as the cluster names it (e.g. "NVIDIA RTX A2000 12GB"); "" = any.
+  # dra:           a CEL selector on the claim: device.attributes["gpu.nvidia.com"].productName
+  # device-plugin: a nodeSelector on nvidia.com/gpu.product, the label GPU Feature Discovery sets
+  #                (spaces become dashes). Without GPU Feature Discovery no node has it, and the pod
+  #                stays Pending; the extension's pre-flight says so before submit.
+  productName: ""
+  # A GPU-memory share: part of one GPU per pod, sized in MiB, beside other workloads. Two ways:
+  #   scheduler.type=kai (and no sharedClaim): KAI GPU sharing. The pod carries KAI's gpu-memory
+  #     annotation, requests no whole GPU, and waits in its KAI queue until the memory is free; the
+  #     cap is enforced by HAMi-core or NvFractions, whichever KAI is installed with. One per pod.
+  #   sharedClaim (dra only): the name of an existing ResourceClaim in the namespace, configured for
+  #     MPS, that every pod attaches to; sharedMemoryMiB caps the run per process
+  #     (CUDA_MPS_PINNED_DEVICE_MEM_LIMIT). Not queued: Kueue cannot admit pods on an existing claim.
+  # 0 = whole GPUs.
+  sharedClaim: ""
+  sharedMemoryMiB: 0
+
+# Multi-node NVLink domain (systems whose NVLink fabric spans nodes, e.g. GB200/GB300 NVL72 racks):
+# one ComputeDomain per run, sized to job.nodes. The NVIDIA DRA
+# driver creates a channel ResourceClaimTemplate for it; every pod then holds two claims (GPUs +
+# channel) and the driver runs the IMEX daemons that let GPUs on different nodes talk over NVLink.
+# Requires gpu.mode=dra and the resource.nvidia.com ComputeDomain CRD (k8s-dra-driver-gpu).
+computeDomain:
+  enabled: false
+  channelDeviceClass: compute-domain-default-channel.nvidia.com
+  # Kueue only: the resource name the channel DeviceClass is mapped to in Kueue's
+  # resources.deviceClassMappings (and covered by the ClusterQueue). Kueue refuses admission for a
+  # pod claim whose DeviceClass is unmapped, so the preflight checks the ClusterQueue covers this.
+  kueueResourceName: compute-domain-channel
+
+scheduler:
+  # none  — default kube-scheduler
+  # kueue — label the Job for a LocalQueue; Kueue admits it all-or-nothing
+  # kai   — schedulerName kai-scheduler + KAI queue label; KAI gang-schedules the Job
+  # runai — NVIDIA Run:AI. Same queues.scheduling.run.ai CRD as KAI, which is the open-source
+  #         scheduler Run:AI is built on, but the deployment names differ: schedulerName is
+  #         runai-scheduler and the queue is selected by the `project` pod label, not
+  #         kai.scheduler/queue. Picking kai on a Run:AI cluster leaves every pod Pending with no
+  #         event, because nothing is running under the name kai-scheduler to claim it.
+  #         The namespace must also carry the label runai/queue: <queue>; Run:AI's pod webhooks are
+  #         scoped to namespaces that have it, and without it the pod is admitted unqueued.
+  type: none
+  queue: ""
+  priorityClassName: ""
+
+rendezvous:
+  # c10d    — TCPStore on rank 0 (pod index 0, resolved through the headless Service)
+  # etcd-v2 — external etcd (survives loss of the rank-0 node); set endpoint host:port
+  backend: c10d
+  endpoint: ""
+  port: 29400
+
+network:
+  # NetworkAttachmentDefinition for the NCCL secondary interface (e.g. nccl-macvlan). Empty = none.
+  multusNetwork: ""
+  # Interface NCCL binds to (net1 with Multus). Empty = let NCCL choose.
+  ncclSocketIfname: ""
+  ncclIbDisable: "1"
+  ncclDebug: WARN
+  # Share the node's network namespace. The pod then sees the host NICs -- which is the only way
+  # NCCL can reach an RDMA rail that has no pod-network presence -- at the cost of the pod's own IP
+  # and of port collisions between two runs on one node. dnsPolicy follows automatically.
+  hostNetwork: false
+  # RDMA / RoCE. Mounts the verbs character devices and runs the container privileged, which is what
+  # libibverbs needs to open the HCA; also flips NCCL_IB_DISABLE to 0. Set ncclIbHca to the ports to
+  # use -- without it NCCL picks one device and a dual-rail fabric runs at half its width.
+  rdma:
+    enabled: false
+    devicePath: /dev/infiniband
+    # Node path holding libibverbs/librdmacm/libmlx5, prepended to LD_LIBRARY_PATH. Leave empty for
+    # images that already ship them (NGC PyTorch does); set it for a bare CUDA or Ubuntu image,
+    # e.g. /usr/lib/aarch64-linux-gnu.
+    hostLibPath: ""
+    hostLibMountPath: /host-rdma-libs
+  # NCCL RDMA tuning, each applied only when non-empty.
+  ncclIbHca: ""        # HCA ports, e.g. "mlx5_0:1,mlx5_1:1" to stripe across both rails
+  ncclIbGidIndex: ""   # RoCEv2 GID index, usually 3
+  ncclNetGdrLevel: ""  # 0 = host staging, no GPUDirect RDMA
+  ncclCrossNic: ""     # 1 = a ring may span more than one NIC
+
+storage:
+  # Scratch volume for datasets/downloads, mounted at /scratch. A generic ephemeral PVC: created with
+  # the pod, deleted with it, lives on the storage class (not on the node's disks). "" = none.
+  scratchSize: ""
+  # volume: a generic ephemeral PVC from scratchStorageClass (the storage backend, deleted with the pod).
+  # node:   an emptyDir on the node's disk, capped at scratchSize (fast and simple, gone with the pod;
+  #         counts against the node's ephemeral storage).
+  scratchMedium: volume
+  scratchStorageClass: ""          # "" = cluster default
+  scratchMountPath: /scratch
+  # Existing ConfigMap with training configs/code (e.g. deepspeed.json, hparams.yaml, train.py).
+  # Mounted read-only; the chart never creates ConfigMaps itself. job.mode=torchrun: if set, the
+  # ConfigMap must have a "train.py" key - torchrun runs it directly instead of the inline
+  # job.script, so the script becomes a reusable/versioned object and reads run parameters from
+  # env (job.env / the Submit UI's Environment variables) instead of job.args, which the torchrun
+  # UI form never exposes.
+  configMap: ""
+  configMountPath: /mnt/config
+  # Existing PVC holding the training data, mounted read-only. For a multi-node run this must be
+  # RWX (CephFS/NFS) so every pod can mount it at once; RWO only works for nodes: 1.
+  # Exported to the container as $DATASET_DIR.
+  datasetPVC: ""
+  datasetMountPath: /mnt/dataset
+  # Existing PVC for checkpoints/outputs, mounted read-write. Must be RWX for multi-node.
+  # Exported to the container as $CHECKPOINT_DIR.
+  checkpointPVC: ""
+  # Or a new volume for this run, dynamically provisioned from a StorageClass ("" = the cluster
+  # default) and named <release>-checkpoints. keep: Helm leaves it at uninstall, so outputs outlive the
+  # run. accessMode "" = ReadWriteOnce for one node, ReadWriteMany for more. Ignored if checkpointPVC.
+  checkpointCreate:
+    enabled: false
+    size: 20Gi
+    storageClass: ""
+    accessMode: ""
+    keep: true
+  checkpointMountPath: /mnt/checkpoints
+  # Existing Secrets mounted read-only -- object-store credentials, an .s3cfg, a HF token file. The
+  # chart never creates them. Files land under mountPath with the Secret's own keys as names.
+  #   secretMounts:
+  #     - name: s3cfg
+  #       mountPath: /secrets
+  secretMounts: []
+  shmSizeLimit: 8Gi
+
+resources:
+  requests:
+    cpu: "1"
+    memory: 2Gi
+    ephemeral-storage: 2Gi        # container writable layer + logs; lets the scheduler account for node disk
+  limits:
+    cpu: "4"
+    memory: 8Gi
+    ephemeral-storage: 20Gi       # kubelet evicts the pod (not its neighbours) if it exceeds this
+
+# Install-time checks: scheduler installed, queue exists, GPUs exposed the way gpu.mode expects.
+preflight:
+  enabled: true
+  # Fail if no GPU node has free CPU/memory for resources.requests. Needs cluster-wide pod read
+  # permission for whoever runs the install (Rancher runs Helm as the submitting user), so it is
+  # opt-in; the UI extension enables it automatically when the user has that permission.
+  checkHeadroom: false
+  # Fail if every GPU node reports DiskPressure (runs there lose logs and get evicted). Needs only nodes/get.
+  checkDiskPressure: true
+  debug: false           # true = abort with the computed headroom numbers (troubleshooting)
+
+nodeSelector: {}
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+env: []

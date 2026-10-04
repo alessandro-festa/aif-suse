@@ -138,7 +138,9 @@ manager:
   # anything those permissions allow. E.g.:
   #   aijobAllowedCharts:
   #     - gpu-train-charts/gpu-train-job
-  aijobAllowedCharts: []
+  # The default allows only the training chart released with this operator (see trainingChart).
+  aijobAllowedCharts:
+    - gpu-train-charts/gpu-train-job
 
   env: []
 
@@ -258,6 +260,16 @@ aiExtension:
 # CRs under files/blueprints/ are created on install and reconciled on upgrade.
 # Disable to manage blueprints exclusively through other means without the
 # chart re-creating its defaults.
+# The training chart AIJobs install (charts/gpu-train-job), released with this chart at the same
+# version. The operator's allow-list, the training pages and the SDK find it in the ClusterRepo
+# named here. Set create to false to manage that ClusterRepo yourself, e.g. pointing at a mirror;
+# an existing ClusterRepo of that name is never replaced.
+trainingChart:
+  clusterRepo:
+    create: true
+    name: gpu-train-charts
+    url: oci://ghcr.io/suse/chart/gpu-train-job
+
 defaultBlueprints:
   enabled: true
   # When true, the default blueprints (and their catalog) are synced by Fleet

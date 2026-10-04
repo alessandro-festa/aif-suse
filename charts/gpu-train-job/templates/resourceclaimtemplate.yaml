@@ -1,0 +1,27 @@
+{{- if and (eq (include "gpu-train-job.gpuMode" .) "dra") (not .Values.gpu.sharedClaim) }}
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: {{ include "gpu-train-job.fullname" . }}-gpu
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gpu-train-job.labels" . | nindent 4 }}
+spec:
+  metadata:
+    labels:
+      {{- include "gpu-train-job.podLabels" . | nindent 6 }}
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: {{ .Values.gpu.deviceClassName }}
+            allocationMode: ExactCount
+            count: {{ .Values.job.gpusPerNode }}
+            {{- with .Values.gpu.productName }}
+            {{- /* attributes are keyed by the DRA driver (gpu.nvidia.com), whatever the DeviceClass is called */}}
+            selectors:
+              - cel:
+                  expression: {{ printf "device.attributes[%q].productName == %q" "gpu.nvidia.com" . | quote }}
+            {{- end }}
+{{- end }}

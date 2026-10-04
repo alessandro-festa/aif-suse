@@ -1,0 +1,52 @@
+{{- if eq .Values.job.kind "pytorchjob" }}
+{{- $full := include "gpu-train-job.fullname" . -}}
+{{- include "gpu-train-job.preflight" . -}}
+{{- /*
+One PyTorchJob instead of one Indexed Job. The Kubeflow training-operator owns the replica pods,
+injects RANK/WORLD_SIZE/MASTER_ADDR/MASTER_PORT, and creates the master Service — so the chart's
+own headless Service and JOB_COMPLETION_INDEX rank plumbing are not used on this path.
+
+job.nodes counts *nodes*, so one Master plus (nodes - 1) Workers. A single-node run is a Master
+with no Worker replica spec at all, which the operator accepts.
+
+KAI gang-schedules this without extra configuration: its PodGrouper recognises PyTorchJob as a
+known distributed kind and groups the replicas by owner, so all of them are admitted together or
+none are. That is why only the queue label and schedulerName are set here.
+*/ -}}
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: {{ $full }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gpu-train-job.labels" . | nindent 4 }}
+    {{- if eq .Values.scheduler.type "kueue" }}
+    kueue.x-k8s.io/queue-name: {{ required "scheduler.queue is required when scheduler.type=kueue" .Values.scheduler.queue | quote }}
+    {{- end }}
+spec:
+  runPolicy:
+    cleanPodPolicy: None
+    {{- if eq .Values.scheduler.type "kueue" }}
+    {{- /* Kueue admits the PyTorchJob by clearing this, the same way it unsuspends a Job */}}
+    suspend: true
+    {{- end }}
+    {{- if gt (int .Values.job.activeDeadlineSeconds) 0 }}
+    activeDeadlineSeconds: {{ .Values.job.activeDeadlineSeconds }}
+    {{- end }}
+    {{- if gt (int .Values.job.ttlSecondsAfterFinished) 0 }}
+    ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+    {{- end }}
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: Never
+      template:
+        {{- include "gpu-train-job.pytorchReplicaTemplate" . | trim | nindent 8 }}
+    {{- if gt (int .Values.job.nodes) 1 }}
+    Worker:
+      replicas: {{ sub (int .Values.job.nodes) 1 }}
+      restartPolicy: Never
+      template:
+        {{- include "gpu-train-job.pytorchReplicaTemplate" . | trim | nindent 8 }}
+    {{- end }}
+{{- end }}

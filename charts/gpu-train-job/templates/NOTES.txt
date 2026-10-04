@@ -1,0 +1,22 @@
+gpu-train-job "{{ include "gpu-train-job.fullname" . }}" submitted to namespace {{ .Release.Namespace }}.
+
+  kind={{ .Values.job.kind }}  mode={{ .Values.job.mode }}  nodes={{ .Values.job.nodes }}  gpus/node={{ .Values.job.gpusPerNode }}  gpu={{ include "gpu-train-job.gpuMode" . }}  scheduler={{ .Values.scheduler.type }}{{ if .Values.scheduler.queue }} queue={{ .Values.scheduler.queue }}{{ end }}
+{{- if or .Values.storage.datasetPVC .Values.storage.checkpointPVC }}
+  storage:{{ if .Values.storage.datasetPVC }} {{ .Values.storage.datasetPVC }}->{{ .Values.storage.datasetMountPath }} (ro){{ end }}{{ if .Values.storage.checkpointPVC }} {{ .Values.storage.checkpointPVC }}->{{ .Values.storage.checkpointMountPath }} (rw){{ end }}
+{{- end }}
+
+Watch it:
+{{- if eq .Values.job.kind "pytorchjob" }}
+  kubectl -n {{ .Release.Namespace }} get pytorchjob,pods -l app.kubernetes.io/instance={{ .Release.Name }} -w
+  kubectl -n {{ .Release.Namespace }} logs -f {{ include "gpu-train-job.fullname" . }}-master-0
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} get job,pods -l app.kubernetes.io/instance={{ .Release.Name }} -w
+  kubectl -n {{ .Release.Namespace }} logs -f job/{{ include "gpu-train-job.fullname" . }} --all-pods --prefix
+{{- end }}
+{{- if eq .Values.scheduler.type "kueue" }}
+  kubectl -n {{ .Release.Namespace }} get workloads     # why it is waiting, if it is
+{{- end }}
+{{- if or (eq .Values.scheduler.type "kai") (eq .Values.scheduler.type "runai") }}
+  kubectl -n {{ .Release.Namespace }} get podgroups     # gang state and preemption events
+  kubectl get queues.scheduling.run.ai {{ .Values.scheduler.queue }}   # what the queue is allowed
+{{- end }}

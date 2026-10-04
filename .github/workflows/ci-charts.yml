@@ -33,7 +33,7 @@ jobs:
             --version v1.1.2 --verify=false
 
       - name: Lint charts
-        run: helm lint charts/aif-ui charts/aif-operator
+        run: helm lint charts/aif-ui charts/aif-operator charts/gpu-train-job
 
       - name: Run chart unit tests
         run: |
@@ -43,7 +43,7 @@ jobs:
           # A chart with no suites exits 0, so a deleted tests/ directory would
           # pass silently. Require the expected suite count so removals fail CI.
           # When adding new suites, update EXPECTED_SUITES below.
-          EXPECTED_SUITES=7
+          EXPECTED_SUITES=8
           suites=$(sed -nE 's/^Test Suites:.*[, ]([0-9]+) total$/\1/p' unittest.out)
           if [ -z "$suites" ] || [ "$suites" -lt "$EXPECTED_SUITES" ]; then
             echo "::error::expected ${EXPECTED_SUITES} helm-unittest suites, got ${suites:-0} — suite files may be missing"
@@ -57,6 +57,14 @@ jobs:
           helm template charts/aif-ui > /dev/null
           helm template charts/aif-ui --set standalone=true > /dev/null
           helm template charts/aif-operator > /dev/null
+          helm template charts/gpu-train-job > /dev/null
+
+      # The training chart has no helm-unittest suites: its checks render the combinations AIJobs and
+      # profiles use (Job and PyTorchJob, each scheduler, DRA, shares) and assert the structure.
+      - name: Render checks for the training chart
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          charts/gpu-train-job/verify-render.sh
 
       - name: Guard the image annotation against appVersion drift
         run: |

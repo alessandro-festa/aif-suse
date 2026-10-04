@@ -1,0 +1,21 @@
+{{- if eq .Values.job.kind "job" }}
+# Headless Service: gives every pod a stable DNS name <job>-<index>.<job>.<ns>.svc,
+# which is what the c10d rendezvous endpoint (rank 0) resolves through.
+# Not rendered for job.kind=pytorchjob: the training-operator creates its own master Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gpu-train-job.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gpu-train-job.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    job-name: {{ include "gpu-train-job.fullname" . }}
+  ports:
+    - name: rdzv
+      port: {{ .Values.rendezvous.port }}
+      targetPort: {{ .Values.rendezvous.port }}
+{{- end }}

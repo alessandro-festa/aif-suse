@@ -192,3 +192,11 @@ jobs:
         run: |
           chart_package=$(helm package $CHART_PATH --destination . | awk '{print $NF}')
           helm push "$chart_package" $CHART_REGISTRY
+
+      # The training chart AIJobs install ships with the operator, at the same version, so the
+      # operator's chart allow-list and the UI's defaults always name a chart that exists.
+      - name: Package and push the training chart
+        run: |
+          yq -i '.version = "${{ needs.prepare.outputs.VERSION }}" | .appVersion = "${{ needs.prepare.outputs.VERSION }}"' charts/gpu-train-job/Chart.yaml
+          chart_package=$(helm package charts/gpu-train-job --destination . | awk '{print $NF}')
+          helm push "$chart_package" $CHART_REGISTRY
