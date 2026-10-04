@@ -1,0 +1,22 @@
+#!/bin/sh
+# GPU Smoke Test: is a GPU attached, and does the driver answer? No PyTorch needed: nvidia-smi
+# from the CUDA image. Prints each check, then one AIF_RESULT line. Exits non-zero on a failure.
+ok=true; checks=""
+add() { [ -n "$checks" ] && checks="$checks,"; checks="$checks{\"name\":\"$1\",\"ok\":$2,\"detail\":\"$3\"}"; [ "$2" = true ] && echo "PASS  $1  $3" || { echo "FAIL  $1  $3"; ok=false; }; }
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+  add "NVIDIA driver answers" true "nvidia-smi ran"
+  q=$(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | head -1)
+  name=$(echo "$q" | cut -d, -f1 | sed 's/^ *//'); mem=$(echo "$q" | cut -d, -f2 | sed 's/^ *//'); drv=$(echo "$q" | cut -d, -f3 | sed 's/^ *//')
+  n=$(nvidia-smi -L | wc -l)
+  cuda=$(nvidia-smi | sed -n 's/.*CUDA Version: *\([0-9.]*\).*/\1/p' | head -1)
+  [ "$n" -ge 1 ] && add "GPU allocated" true "$n GPU(s): $name" || add "GPU allocated" false "no GPU visible"
+  [ -n "$cuda" ] && add "CUDA runtime" true "driver supports CUDA $cuda" || add "CUDA runtime" false "no CUDA version reported"
+  echo "$mem" | grep -q MiB && add "Device memory" true "$mem" || add "Device memory" false "memory not reported"
+  env="{\"gpu\":\"$name\",\"gpu memory\":\"$mem\",\"driver\":\"$drv\",\"cuda (driver)\":\"$cuda\",\"node\":\"${NODE_NAME:-$(hostname)}\"}"
+else
+  add "NVIDIA driver answers" false "nvidia-smi missing or failed: no GPU attached, or the runtime class is wrong"
+  env="{}"
+fi
+$ok && st=pass || st=fail
+echo "AIF_RESULT {\"test\":\"GPU Smoke Test\",\"status\":\"$st\",\"checks\":[$checks],\"metrics\":{},\"env\":$env}"
+$ok

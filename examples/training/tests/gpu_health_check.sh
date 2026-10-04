@@ -1,0 +1,43 @@
+#!/bin/sh
+# GPU Health Check: NVIDIA DCGM's diagnostics on the GPU. Level 1 (about 30 seconds) checks the
+# deployment: driver, libraries, permissions, the GPU's own state. Level 2 (a few minutes) adds
+# PCIe bandwidth, memory and a short compute stress. Level from DCGM_LEVEL (default 1).
+# Prints each DCGM test, then one AIF_RESULT line. Exits non-zero if a test fails.
+level=${DCGM_LEVEL:-1}
+nv-hostengine -n >/tmp/hostengine.log 2>&1 &
+for i in 1 2 3 4 5 6 7 8 9 10; do dcgmi discovery -l >/tmp/discovery.txt 2>&1 && break; sleep 1; done
+cat /tmp/discovery.txt
+echo "running dcgmi diag -r $level ..."
+dcgmi diag -r "$level" >/tmp/diag.txt 2>&1; rc=$?
+cat /tmp/diag.txt
+# Rows of the result table: | <test> | Pass/Fail/Warn/Skip |, then rows with an empty name or a
+# "Warning:" name that carry the reason; those join the test's detail. A failure whose only reason
+# is persistence mode being off is a host setting, not a fault in the GPU: a warning.
+checks=$(awk -F'|' '
+  function flush() {
+    if (cur == "") return
+    ok = (res == "Fail") ? "false" : "true"; warn = ""
+    if (res == "Fail" && detail ~ /[Pp]ersistence mode/ && detail !~ /Error|error/) { ok = "true"; warn = ",\"warn\":true"
+      detail = detail " (a host setting: enable it with nvidia-smi -pm 1 as root, or the nvidia-persistenced service)" }
+    if (res == "Warn") warn = ",\"warn\":true"
+    gsub(/"/, "", detail)
+    printf "%s{\"name\":\"%s\",\"ok\":%s%s,\"detail\":\"%s\"}", (n++ ? "," : ""), cur, ok, warn, detail
+    cur = ""
+  }
+  /^\|/ && NF >= 3 {
+    name = $2; val = $3; gsub(/^ +| +$/, "", name); gsub(/^ +| +$/, "", val)
+    if (val ~ /^(Pass|Fail|Warn|Skip)/ && name != "" && name !~ /^Warning/) {
+      flush(); cur = name; split(val, w, " "); res = w[1]; detail = val; full = 0; next
+    }
+    # DCGM wraps text at its column width, mid-word: a row that filled its column joins the next directly
+    if (cur != "" && val != "" && val !~ /^GPU[0-9]+: (Pass|Fail|Skip|Warn)$/) { detail = detail ((full && val ~ /^[a-z]/) ? "" : " ") val; full = (length(val) >= 45 && val ~ /[a-z]$/) }
+  }
+  END { flush() }' /tmp/diag.txt)
+meta() { awk -F'|' -v k="$1" '$2 ~ k { v=$3; gsub(/^ +| +$/, "", v); print v; exit }' /tmp/diag.txt; }
+if [ -z "$checks" ]; then
+  checks="{\"name\":\"DCGM diagnostics ran\",\"ok\":false,\"detail\":\"no results (exit $rc): $(tail -3 /tmp/diag.txt | tr '\n"' '  ')\"}"
+fi
+# DCGM's own verdict where our reading of it has a failure; persistence-mode-only is a warning
+st=pass; echo "$checks" | grep -q '"ok":false' && st=fail
+echo "AIF_RESULT {\"test\":\"GPU Health Check\",\"status\":\"$st\",\"checks\":[$checks],\"metrics\":{\"DCGM level\":\"$level\"},\"env\":{\"DCGM\":\"$(meta 'DCGM Version')\",\"driver\":\"$(meta 'Driver Version')\",\"GPU device IDs\":\"$(meta 'GPU Device IDs')\",\"node\":\"${NODE_NAME:-$(hostname)}\"}}"
+[ "$st" = pass ]

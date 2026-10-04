@@ -1,0 +1,86 @@
+"""PyTorch Distributed Test: do torchrun, rendezvous and NCCL work across the workers?
+
+Every rank joins the NCCL process group, checks an all-reduce gives the right answer, and runs a
+few DistributedDataParallel steps whose gradients must agree across ranks. Rank 0 prints the
+checks and one AIF_RESULT line. Needs one GPU per rank: NCCL refuses two ranks on one GPU."""
+import datetime
+import json
+import os
+import socket
+import time
+
+import torch
+import torch.distributed as dist
+
+rank, world = int(os.environ.get("RANK", 0)), int(os.environ.get("WORLD_SIZE", 1))
+local = int(os.environ.get("LOCAL_RANK", 0))
+checks, metrics, env = [], {}, {}
+
+
+def check(name, fn):
+    try:
+        detail = fn() or ""
+        checks.append({"name": name, "ok": True, "detail": detail})
+        if rank == 0:
+            print(f"PASS  {name}  {detail}", flush=True)
+    except Exception as e:
+        checks.append({"name": name, "ok": False, "detail": str(e)[:300]})
+        print(f"FAIL  [rank {rank}] {name}  {e}", flush=True)
+
+
+def require(cond, msg):
+    if not cond:
+        raise RuntimeError(msg)
+
+
+torch.cuda.set_device(local)
+dev = torch.device("cuda", local)
+t0 = time.time()
+check("Rendezvous and NCCL init", lambda: (dist.init_process_group("nccl", timeout=datetime.timedelta(minutes=5)), f"{world} ranks in {time.time() - t0:.1f}s")[1])
+env["world size"] = world
+env["nodes"] = os.environ.get("NNODES", "?")
+env["torch"] = torch.__version__
+env["nccl"] = ".".join(map(str, torch.cuda.nccl.version()))
+
+hosts = [None] * world
+dist.all_gather_object(hosts, f"{socket.gethostname()}:{torch.cuda.get_device_name(dev)}")
+check("Every rank on its own GPU", lambda: (require(len(set(hosts)) == world or len({h.split(':')[0] for h in hosts}) == world or world == 1, f"ranks share a GPU: {hosts}"), f"{len({h.split(':')[0] for h in hosts})} host(s)")[1])
+
+
+def allreduce():
+    x = torch.full((1024,), float(rank + 1), device=dev)
+    dist.all_reduce(x)
+    want = world * (world + 1) / 2
+    require(torch.allclose(x, torch.full_like(x, want)), f"got {x[0].item()}, want {want}")
+    return f"sum over {world} ranks = {want:g}"
+check("AllReduce correct", allreduce)
+
+
+def ddp():
+    model = torch.nn.parallel.DistributedDataParallel(torch.nn.Linear(512, 512).to(dev), device_ids=[local])
+    opt = torch.optim.SGD(model.parameters(), lr=0.1)
+    torch.manual_seed(1234 + rank)
+    for _ in range(5):
+        loss = model(torch.randn(64, 512, device=dev)).pow(2).mean()
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    w = model.module.weight.detach().clone()
+    ws = [torch.empty_like(w) for _ in range(world)]
+    dist.all_gather(ws, w)
+    require(all(torch.allclose(ws[0], o) for o in ws), "weights differ across ranks after DDP steps")
+    return "5 steps, weights identical on every rank"
+check("DDP forward and backward", ddp)
+
+oks = [None] * world
+dist.all_gather_object(oks, checks)
+dist.destroy_process_group()
+if rank == 0:
+    # a check passes only if it passed on every rank
+    merged = []
+    for i, c in enumerate(checks):
+        failed = [r for r, cs in enumerate(oks) if i < len(cs) and not cs[i]["ok"]]
+        merged.append({**c, "ok": not failed, "detail": c["detail"] if not failed else f"failed on rank(s) {failed}: " + next(cs[i]["detail"] for r, cs in enumerate(oks) if r in failed)})
+    result = {"test": "PyTorch Distributed Test", "status": "pass" if all(c["ok"] for c in merged) else "fail", "checks": merged, "metrics": metrics, "env": env}
+    print("AIF_RESULT " + json.dumps(result), flush=True)
+    raise SystemExit(0 if result["status"] == "pass" else 1)
