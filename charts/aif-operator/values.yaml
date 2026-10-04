@@ -131,6 +131,15 @@ manager:
   #     - ghcr.io
   allowedRegistryHosts: []
 
+  # aijobAllowedCharts lists the charts an AIJob may install, as
+  # "<clusterRepo>/<chart>" or "<clusterRepo>/*". The operator installs an
+  # AIJob's release with its own service account, so leaving this empty (allow
+  # any chart from any ClusterRepo) lets anyone who can create an AIJob install
+  # anything those permissions allow. E.g.:
+  #   aijobAllowedCharts:
+  #     - gpu-train-charts/gpu-train-job
+  aijobAllowedCharts: []
+
   env: []
 
   podAnnotations: {}

@@ -41,6 +41,9 @@ spec:
           {{- with .Values.manager.allowedRegistryHosts }}
             - --allowed-registry-hosts={{ join "," . }}
           {{- end }}
+          {{- with .Values.manager.aijobAllowedCharts }}
+            - --aijob-allowed-charts={{ join "," . }}
+          {{- end }}
             - --api-bind-address=:{{ .Values.api.port }}
           ports:
             - name: http

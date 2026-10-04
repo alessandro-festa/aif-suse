@@ -45,6 +45,7 @@ import (
 	aiplatformv1alpha1 "github.com/SUSE/aif-operator/api/v1alpha1"
 	"github.com/SUSE/aif-operator/internal/api"
 	"github.com/SUSE/aif-operator/internal/config"
+	aijobctrl "github.com/SUSE/aif-operator/internal/controller/aijob"
 	aiworkloadctrl "github.com/SUSE/aif-operator/internal/controller/aiworkload"
 	aiextensionctrl "github.com/SUSE/aif-operator/internal/controller/installaiextension"
 	settingsctrl "github.com/SUSE/aif-operator/internal/controller/settings"
@@ -225,6 +226,16 @@ func main() {
 			"extension chart pulls, e.g. \"harbor.example.com,ghcr.io\". Empty (default) allows all hosts.")
 	var apiBindAddr string
 	flag.StringVar(&apiBindAddr, "api-bind-address", ":8080", "The address the operator API binds to.")
+	var aijobAllowedCharts, aijobRepoURLOverrides, onlyControllers string
+	flag.StringVar(&aijobAllowedCharts, "aijob-allowed-charts", "",
+		"Comma-separated <clusterRepo>/<chart> (or <clusterRepo>/*) that an AIJob may install. AIJobs are "+
+			"installed with the operator's service account, so set this to bound them. Empty (default) allows all.")
+	flag.StringVar(&aijobRepoURLOverrides, "aijob-repo-url-overrides", "",
+		"Development only: comma-separated <clusterRepo>=<url> used instead of the ClusterRepo's spec.url, for "+
+			"running the operator outside the cluster where an in-cluster repository Service does not resolve.")
+	flag.StringVar(&onlyControllers, "controllers", "",
+		"Development only: comma-separated controllers to run (installaiextension, settings, aiworkload, aijob). "+
+			"Empty (default) runs all of them.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -330,41 +341,88 @@ func main() {
 			"Set --allowed-registry-hosts / manager.allowedRegistryHosts to bound them.")
 	}
 
-	if err := (&aiextensionctrl.InstallAIExtensionReconciler{
-		Client:                   mgr.GetClient(),
-		Scheme:                   mgr.GetScheme(),
-		ExtensionNamespace:       config.GetExtensionNamespace(),
-		ReadinessTimeout:         deploymentReadinessTimeout,
-		AllowInsecureRegistryTLS: allowInsecureRegistryTLS,
-		AllowedRegistryHosts:     allowedHosts,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "InstallAIExtension")
-		os.Exit(1)
+	enabled := func(name string) bool {
+		if onlyControllers == "" {
+			return true
+		}
+		for _, c := range strings.Split(onlyControllers, ",") {
+			if strings.TrimSpace(c) == name {
+				return true
+			}
+		}
+		return false
+	}
+
+	if enabled("installaiextension") {
+		if err := (&aiextensionctrl.InstallAIExtensionReconciler{
+			Client:                   mgr.GetClient(),
+			Scheme:                   mgr.GetScheme(),
+			ExtensionNamespace:       config.GetExtensionNamespace(),
+			ReadinessTimeout:         deploymentReadinessTimeout,
+			AllowInsecureRegistryTLS: allowInsecureRegistryTLS,
+			AllowedRegistryHosts:     allowedHosts,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "InstallAIExtension")
+			os.Exit(1)
+		}
 	}
 	// Shared holder: the Settings controller builds the Rancher catalog client
 	// from Settings.Spec.RancherCatalog and swaps it in here; the AIWorkload
 	// reconciler reads it to fetch charts from git-backed ClusterRepos.
 	catalogHolder := rancher.NewHolder()
 
-	if err := (&settingsctrl.SettingsReconciler{
-		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
-		OperatorNamespace: operatorNamespace,
-		CatalogHolder:     catalogHolder,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Settings")
-		os.Exit(1)
+	if enabled("settings") {
+		if err := (&settingsctrl.SettingsReconciler{
+			Client:            mgr.GetClient(),
+			Scheme:            mgr.GetScheme(),
+			OperatorNamespace: operatorNamespace,
+			CatalogHolder:     catalogHolder,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "Settings")
+			os.Exit(1)
+		}
 	}
-	if err := (&aiworkloadctrl.AIWorkloadReconciler{
-		Client: mgr.GetClient(),
-		// APIReader is wired by SetupWithManager (mgr.GetAPIReader()); see there.
-		Scheme:            mgr.GetScheme(),
-		OperatorNamespace: operatorNamespace,
-		CatalogClient:     catalogHolder,
-		Recorder:          mgr.GetEventRecorderFor("aiworkload-controller"),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "AIWorkload")
-		os.Exit(1)
+	if enabled("aiworkload") {
+		if err := (&aiworkloadctrl.AIWorkloadReconciler{
+			Client: mgr.GetClient(),
+			// APIReader is wired by SetupWithManager (mgr.GetAPIReader()); see there.
+			Scheme:            mgr.GetScheme(),
+			OperatorNamespace: operatorNamespace,
+			CatalogClient:     catalogHolder,
+			Recorder:          mgr.GetEventRecorderFor("aiworkload-controller"),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "AIWorkload")
+			os.Exit(1)
+		}
+	}
+	if enabled("aijob") {
+		var allowedCharts []string
+		for _, c := range strings.Split(aijobAllowedCharts, ",") {
+			if c = strings.TrimSpace(c); c != "" {
+				allowedCharts = append(allowedCharts, c)
+			}
+		}
+		if len(allowedCharts) == 0 {
+			setupLog.Info("WARNING: --aijob-allowed-charts is empty (allow-all): an AIJob can install any chart " +
+				"from any ClusterRepo with the operator's service account.")
+		}
+		overrides := map[string]string{}
+		for _, kv := range strings.Split(aijobRepoURLOverrides, ",") {
+			if k, v, ok := strings.Cut(strings.TrimSpace(kv), "="); ok {
+				overrides[k] = v
+			}
+		}
+		if err := (&aijobctrl.AIJobReconciler{
+			Client:                   mgr.GetClient(),
+			Scheme:                   mgr.GetScheme(),
+			Recorder:                 mgr.GetEventRecorderFor("aijob-controller"),
+			AllowedCharts:            allowedCharts,
+			RepoURLOverrides:         overrides,
+			AllowInsecureRegistryTLS: allowInsecureRegistryTLS,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "AIJob")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 

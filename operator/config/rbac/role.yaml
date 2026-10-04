@@ -9,10 +9,16 @@ rules:
   resources:
   - configmaps
   - persistentvolumeclaims
+  - secrets
+  - services
   verbs:
+  - create
   - delete
   - get
   - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -27,28 +33,24 @@ rules:
   verbs:
   - create
   - get
+  - list
   - patch
 - apiGroups:
   - ""
   resources:
-  - pods
-  - services
+  - nodes
   verbs:
-  - delete
   - get
   - list
   - watch
 - apiGroups:
   - ""
   resources:
-  - secrets
+  - pods
   verbs:
-  - create
   - delete
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - ""
@@ -60,6 +62,35 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - ai-factory.suse.com
+  resources:
+  - aijobs
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ai-factory.suse.com
+  resources:
+  - aijobs/finalizers
+  - aiworkloads/finalizers
+  - installaiextensions/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - ai-factory.suse.com
+  resources:
+  - aijobs/status
+  - aiworkloads/status
+  - installaiextensions/status
+  - settings/status
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - ai-factory.suse.com
   resources:
@@ -75,23 +106,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - ai-factory.suse.com
-  resources:
-  - aiworkloads/finalizers
-  - installaiextensions/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - ai-factory.suse.com
-  resources:
-  - aiworkloads/status
-  - installaiextensions/status
-  - settings/status
-  verbs:
-  - get
-  - patch
-  - update
 - apiGroups:
   - ai-factory.suse.com
   resources:
@@ -126,6 +140,18 @@ rules:
   - delete
   - get
   - list
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - catalog.cattle.io
@@ -180,11 +206,86 @@ rules:
   - patch
   - watch
 - apiGroups:
+  - kubeflow.org
+  resources:
+  - pytorchjobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kueue.x-k8s.io
+  resources:
+  - clusterqueues
+  - localqueues
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - kueue.x-k8s.io
+  resources:
+  - workloads
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - rolebindings
   - roles
   verbs:
   - delete
+  - get
+  - list
+- apiGroups:
+  - resource.k8s.io
+  resources:
+  - deviceclasses
+  - resourceslices
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - resource.k8s.io
+  resources:
+  - resourceclaims
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - resource.k8s.io
+  resources:
+  - resourceclaimtemplates
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - resource.nvidia.com
+  resources:
+  - computedomains
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - scheduling.run.ai
+  resources:
+  - queues
+  verbs:
   - get
   - list

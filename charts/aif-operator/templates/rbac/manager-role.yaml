@@ -252,6 +252,153 @@ rules:
       - list
       - patch
       - watch
+  # AIJob (internal/controller/aijob): the record itself, and what installing a
+  # finite execution's chart needs. The operator installs the release with this
+  # service account, which is why --aijob-allowed-charts bounds the charts.
+  - apiGroups:
+      - ai-factory.suse.com
+    resources:
+      - aijobs
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+  - apiGroups:
+      - ai-factory.suse.com
+    resources:
+      - aijobs/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - ai-factory.suse.com
+    resources:
+      - aijobs/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - batch
+    resources:
+      - jobs
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - kubeflow.org
+    resources:
+      - pytorchjobs
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - kueue.x-k8s.io
+    resources:
+      - workloads
+    verbs:
+      - get
+      - list
+      - watch
+  # A training chart's install-time pre-flight looks these up (the queue it
+  # names exists, GPUs and DRA devices are there); read-only.
+  - apiGroups:
+      - kueue.x-k8s.io
+    resources:
+      - localqueues
+      - clusterqueues
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - scheduling.run.ai
+    resources:
+      - queues
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - resource.k8s.io
+    resources:
+      - deviceclasses
+      - resourceslices
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+      - pods
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - services
+      - configmaps
+      - secrets
+      - persistentvolumeclaims
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - resource.k8s.io
+    resources:
+      - resourceclaims
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - resource.k8s.io
+    resources:
+      - resourceclaimtemplates
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - resource.nvidia.com
+    resources:
+      - computedomains
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
 
 ---
 
