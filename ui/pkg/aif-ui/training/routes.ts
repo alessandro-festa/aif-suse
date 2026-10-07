@@ -10,7 +10,7 @@ const page = (name: string, component: () => Promise<any>) => ({
 });
 
 export const trainingRoutes = [
-  // Training Jobs, Queues & Quotas and Compute Profiles are entries of the Workloads sub-menu
+  // Jobs, Projects and Compute Profiles are entries of the Workloads sub-menu
   page(JOBS_PAGE, () => import('./pages/Workloads.vue')),
   page(PROJECTS_PAGE, () => import('./pages/Projects.vue')),
   page(AIPROJECTS_PAGE, () => import('./pages/AIProjects.vue')),
@@ -19,7 +19,7 @@ export const trainingRoutes = [
   page(DEPLOY_PAGE, () => import('./pages/Deploy.vue')),
   page(ENDPOINT_PAGE, () => import('./pages/DeployEndpoint.vue')),
   page(SUBMIT_PAGE, () => import('./pages/Submit.vue')),
-  // Links to the old combined list land on Deployments for inference, Training Jobs otherwise
+  // Links to the old combined list land on Deployments for inference, Jobs otherwise
   {
     name:     `c-cluster-${ PRODUCT_NAME }-${ ENDPOINTS_PAGE }`,
     path:     `/c/:cluster/${ PRODUCT_NAME }/${ ENDPOINTS_PAGE }`,

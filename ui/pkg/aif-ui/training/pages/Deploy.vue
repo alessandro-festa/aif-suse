@@ -332,7 +332,7 @@ export default defineComponent({
       <Banner
         v-if="submitted"
         color="success"
-        :label="`Deployed job ${form.releaseName}. Redirecting to Training Jobs…`"
+        :label="`Deployed job ${form.releaseName}. Redirecting to Jobs…`"
       />
 
       <div class="tj-grid">

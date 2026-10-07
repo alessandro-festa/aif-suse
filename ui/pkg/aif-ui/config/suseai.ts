@@ -115,7 +115,7 @@ export const VIRTUAL_TYPES: VirtualTypeConfig[] = [
   },
   {
     name:  PAGE_TYPES.TRAINING_JOBS,
-    label: 'Training Jobs',
+    label: 'Jobs',
     route: {
       name:   `c-cluster-${ PRODUCT }-jobs`,
       params: { product: PRODUCT, cluster: MANAGEMENT_CLUSTER },

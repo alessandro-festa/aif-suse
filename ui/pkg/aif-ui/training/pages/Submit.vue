@@ -1339,7 +1339,7 @@ export default defineComponent({
     <Banner
       v-if="submitted"
       color="success"
-      :label="`Submitted job ${form.releaseName}. Redirecting to Training Jobs…`"
+      :label="`Submitted job ${form.releaseName}. Redirecting to Jobs…`"
     />
 
     <div

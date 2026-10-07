@@ -38,7 +38,7 @@ Overview
 Apps
 Blueprints
 Workloads ▸ Deployments        (existing AIWorkloads.vue — inference / apps / blueprints)
-            Training Jobs      (training/pages/Workloads.vue)
+            Jobs               (training/pages/Workloads.vue)
             Projects           (training/pages/Projects.vue — Rancher project + queue/quota)
             Compute Profiles   (training/pages/Profiles.vue — browse + Deploy; Edit for writers)
             Compute Pools      (pages/ComputePools.vue — new)

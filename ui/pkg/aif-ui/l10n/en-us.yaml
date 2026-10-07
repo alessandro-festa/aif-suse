@@ -629,7 +629,7 @@ trainingjobs:
       network: Networking
       fabric: RDMA fabric
   endpoints:
-    title: Deployments
+    title: Jobs
     subtitle: >-
       Manage and monitor all training runs and inference endpoints. Open a row for its pods, logs
       and YAML.

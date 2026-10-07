@@ -127,7 +127,7 @@ export default [
     meta:      { product: PRODUCT, category: 'about' }
   },
 
-  // Training Jobs, Queues & Quotas, Compute Profiles, and the submit/deploy flows
+  // Jobs, Projects, Compute Profiles, and the submit/deploy flows
   ...trainingRoutes,
 
   // Legacy routes (kept for compatibility during transition)
