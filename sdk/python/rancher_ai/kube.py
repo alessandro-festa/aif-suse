@@ -163,9 +163,30 @@ class Connection:
                 where = f" in {namespace}" if namespace else " (cluster-wide)"
                 raise PermissionError(f"not allowed to list {plural}.{group}{where}: {self.whoami()['user']} needs a role "
                                       f"that grants it (see docs/rbac.md)") from None
+            if e.status == 404:
+                self._check_reachable()
             if e.status in (403, 404):
                 return []
             raise
+
+    def _check_reachable(self) -> None:
+        """A 404 means "no such type" only from a Kubernetes API. From anything else (Rancher reached by
+        its IP, which routes by hostname; a wrong cluster id; another web server) every path is 404, and
+        lists would read as empty: say so instead. Checked once per connection."""
+        if getattr(self, "_reachable", False):
+            return
+        try:
+            version = self.call("GET", "/version")
+        except client.ApiException as e:
+            version = {"status": e.status}
+        if isinstance(version, dict) and version.get("gitVersion"):
+            self._reachable = True
+            return
+        hint = ""
+        if self.rancher:
+            hint = (f" Use the URL you open Rancher with (Rancher routes by hostname, so its IP answers 404), "
+                    f"and a cluster id that exists ({self.rancher.cluster_id!r} here).")
+        raise ConnectionError(f"{self.server} does not answer as a Kubernetes API.{hint}")
 
     def for_cluster(self, cluster_id: str) -> "Connection":
         """The same identity on another Rancher cluster (Rancher's proxy, /k8s/clusters/<id>): where a run

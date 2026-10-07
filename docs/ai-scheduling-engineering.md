@@ -1069,7 +1069,7 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | O-36 | TrainJob on Trainer's shipped ClusterTrainingRuntimes (JAX, DeepSpeed, MPI from 2.3.0) instead of the run's own torch runtime; KAI gang over a JobSet and Kueue's TrainJob integration not tried on the lab | chart / operator | later |
 | O-37 | Ray beyond training: Ray Tune (HPO), RayService / vLLM multi-node serving; Ray autoscaling vs placement (size at max workers) and idle reclaim of long-lived RayClusters | Ray | later |
 | O-38 | GPU Ray Train profile (rayproject/ray-ml or a CUDA image), untested on the simulated GPUs | profiles | with a GPU cluster |
-| O-39 | SDK: a wrong RANCHER_URL host (e.g. the IP) yields empty lists instead of an error; GPU variants of the dev profiles | SDK | later |
+| O-39 | ~~SDK: a wrong RANCHER_URL host yields empty lists~~ done: a 404 list checks `/version` once and raises ConnectionError with the hostname hint; GPU variants of the dev profiles | SDK | done |
 | O-17 | The UI's 3c flows (pool picker → cluster switch → submit; Projects on a downstream cluster) are covered by unit tests of their logic, not by component tests; try them in the browser | UI | now |
 
 ---

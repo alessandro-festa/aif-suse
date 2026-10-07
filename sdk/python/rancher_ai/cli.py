@@ -295,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print("would delete (run again with --yes): " + ", ".join(names))
 
-    except (ProfileError, LookupError, PermissionError, RuntimeError, TimeoutError) as e:
+    except (ProfileError, LookupError, PermissionError, RuntimeError, TimeoutError, ConnectionError) as e:
         print(f"{paint('error:', '31')} {e}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
