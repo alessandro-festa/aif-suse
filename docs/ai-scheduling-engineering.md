@@ -462,6 +462,17 @@ whose pod has no `/dev/nvidia*` fails at once (exit 3) with an AIF_RESULT saying
 falling back to CPU and passing. Profiles 51–55 are the GPU variants (one whole GPU per pod, room
 for the CUDA wheels); the Ray one uses `rayproject/ray:2.49.2-gpu`.
 
+**D-60 Ray Serve is an inference engine, not a run.** A RayService never ends, so it is not an
+AIJob: it is a third Inference Engines App, `ray-serve`, beside llama.cpp and SGLang, with a
+blueprint (`inference-rayserve`) and an inference profile, deployed as an AIWorkload like any engine.
+The chart renders a RayService (head with no replica, one worker pod per Serve replica) and its own
+Service named after the release (selecting Serve's proxy pods by `ray.io/serve`), because KubeRay's
+serve Service is named after a Ray cluster that changes on every update. Replicas are fixed (min =
+max, no Serve autoscaling): AI Factory places a workload by its requests. `mode: app` runs the
+chart's own transformers app (`files/serve_app.py`, OpenAI's `/v1/models` and non-streaming
+`/v1/chat/completions`) on CPU or a GPU; `mode: llm` is Ray Serve LLM on vLLM for GPUs. The deploy
+page fails the check when the cluster has no KubeRay. Ray Tune needed nothing new: a RayJob profile.
+
 ---
 
 ## 3. Findings
@@ -869,6 +880,17 @@ DeepSpeed ranks fitted different targets.
     cluster on its pool for an hour. With `ray.shutdownAfterSeconds` the head and workers left
     ~60–75 s after the job ended.
 
+**F-76 [fact] Ray Tune and Ray Serve on the lab (O-37):**
+- `ray-tune-test` (profile 56, automatic placement → c-xvstz-cpu): 12 trials over 2 worker pods,
+  ASHA stopped 8 early, best lr=0.2 momentum=0.0 (checked against the analytic run of the grid).
+- `ray-serve` chart, installed by hand then as AIWorkload `rayserve-chat` (blueprint
+  inference-rayserve, target c-xvstz, namespace vision): Serve application RUNNING about 100 s after
+  install (torch 2.8 CPU and transformers installed by Ray), `/v1/models` lists the model, a chat
+  completion on CPU answers in about 8.5 s through `ray-serve.vision.svc:8000`. The AIWorkload
+  reported Running/Ready a little after the RayService.
+- The inference-engines branch was re-published (`851bf188`) and the aif-engines ClusterRepo
+  refreshed to it.
+
 **F-75 [fact] Lab checks for the backlog (O-35/O-36/O-38):**
 - The five CPU framework tests still pass after the `DEVICE` change (JAX, TensorFlow, DeepSpeed,
   Ray Train, TrainJob, all on c-xvstz-cpu). On the simulated L40S pool the GPU variants of JAX,
@@ -1099,9 +1121,10 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | O-34 | Add-ons are pinned versions in the UI; upgrading one means editing `services/addons.ts` | add-ons | later |
 | O-35 | ~~GPU variants~~ done: profiles 51–55 (D-59), render-checked and scheduled on the simulated L40S pool; they fail there with "no /dev/nvidia*" as designed. Not yet run on a real GPU | profiles | real GPU cluster |
 | O-36 | KAI gangs a TrainJob (F-75) ✓. Kueue + TrainJob needs Trainer ≥ 2.2 (`spec.runtimePatches`), so Kubernetes ≥ 1.32: Submit warns. Trainer's shipped JAX/DeepSpeed runtimes also need 2.3.0 / 1.32. Both wait for a 1.32 cluster | chart / lab | k8s ≥ 1.32 |
-| O-37 | Ray beyond training: Ray Tune (HPO), RayService / vLLM multi-node serving; Ray autoscaling vs placement (size at max workers) and idle reclaim of long-lived RayClusters | Ray | later |
+| O-37 | ~~Ray beyond training~~ done: Ray Tune test profile 56; Ray Serve as an Inference Engines App (D-60). Left: Ray Serve LLM (`mode: llm`, vLLM) only render-checked, needs real GPUs; Ray autoscaling stays off by design | Ray | GPU cluster |
 | O-38 | ~~GPU variants~~ done: profiles 51–55 (D-59), render-checked and scheduled on the simulated L40S pool; they fail there with "no /dev/nvidia*" as designed. Not yet run on a real GPU | profiles | real GPU cluster |
 | O-39 | ~~SDK: a wrong RANCHER_URL host yields empty lists~~ done: a 404 list checks `/version` once and raises ConnectionError with the hostname hint; GPU variants of the dev profiles | SDK | done |
+| O-40 | SDK `endpoints.create` has no `pool=`: endpoints into a chosen compute pool are UI-only (the deploy page sets the AIWorkload's target cluster) | SDK | later |
 | O-17 | The UI's 3c flows (pool picker → cluster switch → submit; Projects on a downstream cluster) are covered by unit tests of their logic, not by component tests; try them in the browser | UI | now |
 
 ---

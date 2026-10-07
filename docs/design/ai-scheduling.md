@@ -250,6 +250,7 @@ the local scheduler (KAI, Kueue, Volcano, Run:ai).
 | 9 | Generic `AIJob.status.queue`; Trainer v2 `TrainJob` template + observer (engineering notes D-56, D-57) | ✅ a TrainJob trains on the lab; the queue reads the same under Volcano |
 | 10 | **Exploration: training frameworks beyond PyTorch** — JAX, TensorFlow, DeepSpeed (§8.1) | a findings section, and per framework a smoke-test profile that runs on the lab or a reason it cannot |
 | 11 | **Ray / KubeRay** as a training runtime: add-on, `job.kind=rayjob`, Ray Train test profile (engineering notes D-54) | ✅ a RayJob trains on the lab and its cluster is removed after |
+| 11b | Ray beyond training: Ray Tune test profile; **Ray Serve** as an Inference Engines App (RayService, engineering notes D-60) | ✅ a Tune search and a Serve endpoint run on the lab |
 
 ### 8.1 Phase 10: frameworks beyond PyTorch (exploration)
 
