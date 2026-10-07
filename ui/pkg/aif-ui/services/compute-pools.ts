@@ -1,5 +1,6 @@
 import type { Dispatchable } from '../types/rancher-types';
 import { fmtMem, parseCpu, parseMem } from '../training/preflight';
+import { IDLE_DURATION } from '../training/reclaim';
 import { getAllClusters } from './rancher-apps';
 
 // The compute pools the AI Factory operator discovers on every downstream cluster Rancher manages
@@ -32,6 +33,100 @@ export interface ComputePoolRow {
   schedulers:    string[];
   sharing:       string[];
   training:      string[];
+  /** The pool's idle reclaim settings; null = nothing on it is reclaimed. */
+  reclaim:       PoolReclaim | null;
+}
+
+/** ComputePool.spec.reclaim. Durations are a number and m, h or d ("30m", "2h", "3d"). */
+export interface PoolReclaim {
+  idleTimeout:        string;
+  maxIdleTimeout?:    string;
+  idleThreshold?:     number;
+  onlyWhenContended?: boolean;
+}
+
+const UNITS: Record<string, string> = { m: 'min', h: 'h', d: 'd' };
+
+/** "30m" -> "30 min", "2h" -> "2 h". */
+export function idleDurationText(d: string): string {
+  const m = String(d || '').match(IDLE_DURATION);
+
+  return m ? `${ d.slice(0, -1) } ${ UNITS[m[1]] }` : String(d || '');
+}
+
+/** How a pool's reclaim settings read in its row. */
+export function reclaimText(r: PoolReclaim | null): string {
+  if (!r) {
+    return 'Off';
+  }
+  const parts = [`after ${ idleDurationText(r.idleTimeout) } under ${ r.idleThreshold || 5 }%`];
+
+  if (r.maxIdleTimeout) {
+    parts.push(`runs may ask up to ${ idleDurationText(r.maxIdleTimeout) }`);
+  }
+  if (r.onlyWhenContended === false) {
+    parts.push('even with no run waiting');
+  }
+
+  return parts.join(' · ');
+}
+
+/** What the reclaim editor works on. */
+export interface ReclaimDraft {
+  enabled:           boolean;
+  idleTimeout:       string;
+  maxIdleTimeout:    string;
+  idleThreshold:     number;
+  onlyWhenContended: boolean;
+}
+
+export function reclaimDraft(r: PoolReclaim | null): ReclaimDraft {
+  return {
+    enabled:           !!r,
+    idleTimeout:       r?.idleTimeout || '2h',
+    maxIdleTimeout:    r?.maxIdleTimeout || '',
+    idleThreshold:     r?.idleThreshold || 5,
+    onlyWhenContended: r?.onlyWhenContended !== false,
+  };
+}
+
+/** What is wrong with a draft, by field; empty when it can be saved. */
+export function reclaimErrors(d: ReclaimDraft): Record<string, string> {
+  const out: Record<string, string> = {};
+
+  if (!d.enabled) {
+    return out;
+  }
+  if (!IDLE_DURATION.test(d.idleTimeout)) {
+    out.idleTimeout = 'A number and m, h or d, e.g. 30m, 2h, 3d';
+  }
+  if (d.maxIdleTimeout && !IDLE_DURATION.test(d.maxIdleTimeout)) {
+    out.maxIdleTimeout = 'A number and m, h or d, or empty';
+  }
+  const t = Number(d.idleThreshold);
+
+  if (!Number.isInteger(t) || t < 1 || t > 100) {
+    out.idleThreshold = 'A whole percentage from 1 to 100';
+  }
+
+  return out;
+}
+
+/** The spec.reclaim a draft saves as; null turns reclaim off. */
+export function reclaimSpec(d: ReclaimDraft): PoolReclaim | null {
+  if (!d.enabled) {
+    return null;
+  }
+  const out: PoolReclaim = { idleTimeout: d.idleTimeout, idleThreshold: Number(d.idleThreshold) };
+
+  if (d.maxIdleTimeout) {
+    out.maxIdleTimeout = d.maxIdleTimeout;
+  }
+  if (!d.onlyWhenContended) {
+    out.onlyWhenContended = false;
+  }
+
+  return out;
 }
 
 /** A ComputePool object as the page shows it. */
@@ -63,6 +158,7 @@ export function poolRow(p: any, clusterNames: Record<string, string> = {}): Comp
     schedulers:    st.schedulers || [],
     sharing:       st.sharing || [],
     training:      st.training || [],
+    reclaim:       spec.reclaim?.idleTimeout ? { ...spec.reclaim } : null,
   };
 }
 
@@ -70,6 +166,8 @@ export interface ComputePools {
   /** false when the operator on this Rancher does not serve ComputePool yet (an older AI Factory). */
   installed:    boolean;
   rows:         ComputePoolRow[];
+  /** The ComputePool objects, by name, for saving changes. */
+  objects:      Record<string, any>;
   /**
    * Downstream clusters with no pool at all: the operator has not been able to read them yet,
    * usually for want of a Rancher token, and they would otherwise not appear anywhere.
@@ -87,7 +185,9 @@ export function undiscoveredClusters(clusters: { id: string; name: string }[], r
 /** Every ComputePool, by cluster then name, and the clusters that have none yet. */
 export async function listComputePools(store: Dispatchable & { getters: any }): Promise<ComputePools> {
   if (!store.getters['cluster/schemaFor']?.(COMPUTE_POOL_TYPE)) {
-    return { installed: false, rows: [], undiscovered: [] };
+    return {
+      installed: false, rows: [], objects: {}, undiscovered: []
+    };
   }
   const [pools, clusters] = await Promise.all([
     store.dispatch('cluster/findAll', { type: COMPUTE_POOL_TYPE, opt: { force: true } }),
@@ -98,5 +198,7 @@ export async function listComputePools(store: Dispatchable & { getters: any }): 
 
   rows.sort((a: ComputePoolRow, b: ComputePoolRow) => a.clusterName.localeCompare(b.clusterName) || a.displayName.localeCompare(b.displayName));
 
-  return { installed: true, rows, undiscovered: undiscoveredClusters(clusters, rows) };
+  return {
+    installed: true, rows, objects: Object.fromEntries((pools || []).map((p: any) => [p.metadata?.name, p])), undiscovered: undiscoveredClusters(clusters, rows)
+  };
 }

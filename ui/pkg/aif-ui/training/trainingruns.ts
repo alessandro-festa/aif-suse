@@ -146,7 +146,7 @@ function pytorchRows(i: TrainingInput): TrainingRun[] {
 
 // An AIJob's phase in the vocabulary of the rows built from Jobs.
 const AIJOB_PHASE: Record<string, string> = {
-  Pending: 'Pending', Queued: 'Queued', Admitted: 'Scheduling', Running: 'Running', Succeeded: 'Complete', Failed: 'Failed', Cancelled: 'Cancelled'
+  Pending: 'Pending', Queued: 'Queued', Admitted: 'Scheduling', Running: 'Running', Succeeded: 'Complete', Failed: 'Failed', Cancelled: 'Cancelled', Reclaimed: 'Reclaimed'
 };
 
 const key = (o: any) => `${ o?.metadata?.namespace }/${ o?.metadata?.name }`;

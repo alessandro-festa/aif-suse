@@ -11,7 +11,7 @@ metadata:
 data:
   profile.yaml: |
     displayName: Single GPU Development
-    description: One worker with one GPU for development and small fine-tunes. Stopped after 4 hours.
+    description: One worker with one GPU for development and small fine-tunes. Stopped after 4 hours; requeued after 1 hour idle when another run needs the pool.
     framework: PyTorch
     status: ready
     values:
@@ -30,3 +30,5 @@ data:
       nodes: { min: 1, max: 1 }
       registries: [dp.apps.rancher.io/containers/, nvcr.io/nvidia/, pytorch/]
       maxRuntimeHours: 4
+    # In a compute pool that reclaims idle runs: back to the queue after 1 hour idle, if someone waits.
+    reclaim: { policy: Suspend, idleTimeout: 1h }

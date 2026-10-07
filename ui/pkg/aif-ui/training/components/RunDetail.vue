@@ -12,6 +12,7 @@ import type { CheckpointVolume } from '../checkpoints';
 import { parseResult, reportResult, RunResult } from '../results';
 import { readPodLog } from '../podlog';
 import { describeLatest, isStarting, podEvents } from '../podevents';
+import { reclaimView, ReclaimView } from '../reclaim';
 
 export default defineComponent({
   name:       'RunDetail',
@@ -57,6 +58,10 @@ export default defineComponent({
     // the result the run's AIJob kept when it finished; it outlives the pods
     kept(): RunResult | null {
       return reportResult(this.run.obj); // only an AIJob has status.report
+    },
+    // idle reclaim: the run's activity in its pool, and when it was reclaimed
+    reclaim(): ReclaimView | null {
+      return this.run.type === 'training' ? reclaimView(this.run.obj) : null;
     },
   },
 
@@ -347,6 +352,42 @@ export default defineComponent({
       </table>
     </template>
 
+    <section
+      v-if="reclaim"
+      class="tj-reclaim"
+    >
+      <header>
+        <strong>Idle reclaim</strong>
+        <span
+          v-if="reclaim.requeued"
+          class="text-muted"
+        > · reclaimed while idle, waiting in the queue for a compute pool</span>
+      </header>
+      <p v-if="reclaim.activity">
+        {{ reclaim.activity }}<span
+          v-if="reclaim.status"
+          class="text-muted"
+        > — {{ reclaim.status }}</span>
+      </p>
+      <p
+        v-else-if="reclaim.status"
+        class="text-muted"
+      >
+        {{ reclaim.status }}
+      </p>
+      <ul
+        v-if="reclaim.history.length"
+        class="tj-reclaim-history"
+      >
+        <li
+          v-for="h in reclaim.history"
+          :key="h.at"
+        >
+          <span class="text-muted">{{ new Date(h.at).toLocaleString() }}</span> {{ h.text }}
+        </li>
+      </ul>
+    </section>
+
     <!-- A test or benchmark's own report: the AIF_RESULT line its script prints last. -->
     <section
       v-if="result"
@@ -475,4 +516,8 @@ export default defineComponent({
   dt { color: var(--muted); }
   dd { margin: 0; font-weight: 500; }
 }
+.tj-reclaim { border: 1px solid var(--border); border-radius: var(--border-radius); padding: 8px 12px; margin: 8px 0;
+  p { margin: 4px 0 0; }
+}
+.tj-reclaim-history { margin: 6px 0 0; padding-left: 16px; font-size: 12px; }
 </style>

@@ -34,6 +34,7 @@ import { aiJobFor, AIJOB_TYPE } from '../aijob';
 import {
   createAIJob, fetchPools, fetchProjects, LOCAL_CLUSTER, localProfileConfigMaps, poolLabel, projectClusterNamespace, projectNamespace
 } from '../placement';
+import { IDLE_DURATION, RECLAIM_POLICIES, RECLAIM_POLICY_HELP } from '../reclaim';
 import { getAllClusters } from '../../services/rancher-apps';
 import { backendOf, placesGpuMemoryShares, usesQueueTree } from '../schedulers';
 import { groupOf, readiness } from '../readiness';
@@ -126,6 +127,8 @@ export default defineComponent({
       // AI projects and compute pools, read from local whatever cluster this page is on.
       projects:        [] as any[],
       pools:           [] as any[],
+      // what happens when the run sits idle in a pool that reclaims (AIJob.spec.reclaim); '' = the default
+      reclaim:         { policy: '', idleTimeout: '' } as { policy: string; idleTimeout: string },
       allSecrets:      [] as any[],
       allPvcs:         [] as any[],
       namespaceQueues: {} as Record<string, string>,
@@ -663,6 +666,15 @@ export default defineComponent({
     automatic(): boolean {
       return !!this.projectName && !this.poolName;
     },
+    reclaimOptions(): { label: string; value: string }[] {
+      return [
+        { label: 'Default (Suspend)', value: '' },
+        ...RECLAIM_POLICIES.map((p) => ({ label: `${ p } — ${ RECLAIM_POLICY_HELP[p] }`, value: p })),
+      ];
+    },
+    reclaimTimeoutError(): string {
+      return this.reclaim.idleTimeout && !IDLE_DURATION.test(this.reclaim.idleTimeout) ? 'A number and m, h or d, e.g. 30m, 2h, 3d' : '';
+    },
     /** Automatic, or one of the pools on the clusters the project spans. */
     poolOptions(): { label: string; value: string }[] {
       const spans = new Set((this.selectedProject?.spec?.clusters || []).map((c: any) => c.clusterId));
@@ -674,6 +686,9 @@ export default defineComponent({
     },
 
     submitDisabled(): boolean {
+      if (this.reclaimTimeoutError) {
+        return true;
+      }
       if (this.entryMode === 'yaml') {
         if (this.yamlError) {
           return true;
@@ -1286,6 +1301,7 @@ export default defineComponent({
             targetNamespace: this.poolName ? this.form.namespace : undefined,
             source:          this.facts.chart,
             values:          this.effectiveValues,
+            reclaim:         this.reclaim,
           }));
         } else {
           await this.$store.dispatch('cluster/create', aiJobFor({
@@ -1360,6 +1376,24 @@ export default defineComponent({
         label="Compute pool"
         @update:value="choosePool"
       />
+      <div
+        v-if="projectName && !poolName"
+        class="tj-reclaim-row"
+      >
+        <LabeledSelect
+          v-model:value="reclaim.policy"
+          :options="reclaimOptions"
+          label="When idle"
+          tooltip="In a pool that reclaims idle runs: what happens to this run once it has been idle past its timeout and another run is waiting for the pool."
+        />
+        <LabeledInput
+          v-model:value="reclaim.idleTimeout"
+          label="Idle timeout"
+          placeholder="the pool's"
+          :sub-label="reclaimTimeoutError || 'A number and m, h or d, up to the pool\'s ceiling'"
+          :status="reclaimTimeoutError ? 'error' : null"
+        />
+      </div>
       <Banner
         v-if="!projects.length"
         color="info"
@@ -2441,6 +2475,7 @@ export default defineComponent({
 .tj-submit { padding: 0 20px 20px; }
 .tj-header { margin-bottom: 10px; h1 { margin-bottom: 4px; } }
 .tj-pool { max-width: 520px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
+.tj-reclaim-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .tj-custom-chart { margin-bottom: 12px; summary { cursor: pointer; color: var(--muted); } }
 .tj-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: 24px; align-items: start; }
 @media (max-width: 1100px) { .tj-grid { grid-template-columns: 1fr; } }

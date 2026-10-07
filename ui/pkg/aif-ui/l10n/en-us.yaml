@@ -44,7 +44,20 @@ suseai:
         schedulers: Schedulers
         sharing: GPU sharing
         training: Training runtime
+        reclaim: Idle reclaim
         status: Status
+      reclaim:
+        edit: Edit
+        cancel: Cancel
+        help: Free the pool from training runs that hold it without using it. A run under the threshold for the whole idle timeout is reclaimed, by its profile's policy (Suspend puts it back in the queue, Terminate ends it, Never leaves it), and the run waiting for the pool takes its place. Only runs AI Factory placed from the queue are reclaimed.
+        enabled: Reclaim idle runs in this pool
+        idleTimeout: Idle timeout
+        durationHint: A number and m, h or d, e.g. 30m, 2h, 3d
+        idleThreshold: Idle threshold (%)
+        thresholdHint: Of the run's GPUs on a GPU pool, of its CPU request on a CPU pool
+        maxIdleTimeout: Longest a run may ask for
+        maxHint: Empty = the idle timeout
+        onlyWhenContended: Only when a run is waiting for the pool
     about:
       title: About
       sections:

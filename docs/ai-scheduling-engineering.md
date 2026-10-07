@@ -30,7 +30,7 @@ Branch: `aijob-scheduling` on the alessandro-festa fork (`origin`), based on SUS
 | 4c | UI: AI Projects page; project picker + "Automatic" pool in Submit/Deploy | built; requests verified through Rancher; to try in the browser | — |
 | IE | Inference engines: vLLM, Ollama (App Collection), llama.cpp, SGLang ("Inference Engines Apps" custom repo) as inference profiles; inference deploy in an AI project's pool | done; llama.cpp verified end to end on downstream-1; Apps page and deploy page to try in the browser | `50499978`, `06769b24`, `bd31a1cd` |
 | 5a | Idle reclaim, operator: activity sampled through the proxy (kubelet CPU, DCGM GPU), pool reclaim settings, Suspend/Terminate/Never per run, hand-off to the waiting run | done, verified on the lab (CPU) | — |
-| 5b | Idle reclaim, UI: pool reclaim settings, run activity and reclaims, reclaim policy in profiles/Submit | — | — |
+| 5b | Idle reclaim, UI: pool reclaim settings, run activity and reclaims, reclaim policy in profiles/Submit | built; unit-tested; to try in the browser | — |
 | 6 | Volcano backend | — | — |
 | 7 | HAMi on the GPU-sharing axis | — | — |
 | 8 | Catalog entries (KAI, Kueue, Volcano, HAMi; Kubeflow training-only preset) + "install a scheduler here" | — | — |
@@ -309,6 +309,16 @@ contender's pods wait in Kubernetes until the idle run's are gone.
 **D-45 A run reclaimed for idling is no contender** until it is installed again (condition
 `Reclaimed` True → False "Resumed"). Found live (F-51): two idle runs took the pool from each
 other in turn. It resumes when room frees, not by displacing another run.
+
+**D-46 Who sets what, in the UI.**
+- An admin turns reclaim on per pool: the Compute Pools "Idle reclaim" column has an inline editor,
+  shown when the user may update the ComputePool.
+- A training profile says what happens to its runs: `reclaim: { policy, idleTimeout }` in
+  `profile.yaml`. Deploy takes it from the profile and shows it under Limits.
+- Submit (the full form) offers "When idle" and "Idle timeout", only for a run AI Factory places
+  automatically: a run sent to a named pool is never reclaimed (D-41).
+- The run's detail shows its activity, what reclaim waits for, and its reclaims, newest first. A
+  run ended by Terminate shows the state Reclaimed.
 
 ---
 
@@ -711,6 +721,7 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | Activity sampling | `operator/internal/controller/placement/activity.go` | `Probe` / `ProxyProbe`, `cpuUtilisation`, `gpuUtilisation`, `sample`, `parseIdleDuration` |
 | Idle reclaim | `operator/internal/controller/placement/reclaim.go` | `Reclaimer` (a manager Runnable, 1 min), `nextActivity`, `decide`, `contender`, `fitsIfFreed`; `queueState` shared with placement |
 | Reclaim action | `operator/internal/controller/aijob/aijob_controller.go` `reclaim` | on `ai-factory.suse.com/reclaim`; Suspend / Terminate |
+| Reclaim UI | `ui/pkg/aif-ui/training/reclaim.ts`, `services/compute-pools.ts` (`reclaimText`, `reclaimDraft`, `reclaimErrors`, `reclaimSpec`), `pages/ComputePools.vue`, `training/components/RunDetail.vue`, `training/pages/Submit.vue` / `Deploy.vue` | profile key `reclaim`; `aiJobFor(…reclaim)` |
 
 ---
 

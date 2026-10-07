@@ -20,6 +20,8 @@ export interface AIJobInput {
   targetNamespace?: string;
   values: any;
   displayName?: string;
+  /** What happens when the run sits idle in a pool that reclaims (AIJob.spec.reclaim). */
+  reclaim?: { policy?: string; idleTimeout?: string } | null;
 }
 
 /**
@@ -46,6 +48,12 @@ export function aiJobFor(i: AIJobInput): any {
       ...(i.source ? { source: { repoName: i.source.repoName, chartName: i.source.chartName, version: i.source.version } } : {}),
       ...(i.pool ? { pool: i.pool } : {}),
       ...(i.targetNamespace ? { targetNamespace: i.targetNamespace } : {}),
+      ...(i.reclaim?.policy || i.reclaim?.idleTimeout ? {
+        reclaim: {
+          ...(i.reclaim.policy ? { policy: i.reclaim.policy } : {}),
+          ...(i.reclaim.idleTimeout ? { idleTimeout: i.reclaim.idleTimeout } : {}),
+        }
+      } : {}),
       values,
     },
   };

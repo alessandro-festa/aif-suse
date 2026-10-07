@@ -14,7 +14,7 @@ import { TrainingRun } from './trainingruns';
 
 export type RunType = 'training' | 'inference';
 // One set of states for both kinds, so the State filter and colours mean the same thing everywhere.
-export type RunState = 'Running' | 'Queued' | 'Pending' | 'Deploying' | 'Degraded' | 'Completed' | 'Failed' | 'Suspended' | 'Cancelled';
+export type RunState = 'Running' | 'Queued' | 'Pending' | 'Deploying' | 'Degraded' | 'Completed' | 'Failed' | 'Suspended' | 'Cancelled' | 'Reclaimed';
 
 export interface Run {
   key: string; // "<type>/<namespace>/<name>"
@@ -36,7 +36,7 @@ export interface Run {
 }
 
 const TRAINING_STATE: Record<string, RunState> = {
-  Running: 'Running', Scheduling: 'Pending', Pending: 'Pending', Queued: 'Queued', Suspended: 'Suspended', Complete: 'Completed', Finished: 'Completed', Failed: 'Failed', Cancelled: 'Cancelled'
+  Running: 'Running', Scheduling: 'Pending', Pending: 'Pending', Queued: 'Queued', Suspended: 'Suspended', Complete: 'Completed', Finished: 'Completed', Failed: 'Failed', Cancelled: 'Cancelled', Reclaimed: 'Reclaimed'
 };
 
 const INFERENCE_STATE: Record<string, RunState> = {

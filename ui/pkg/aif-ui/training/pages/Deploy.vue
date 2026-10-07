@@ -63,6 +63,8 @@ export default defineComponent({
     if (this.profile) {
       this.form = resolveForm(this.profile, {});
       this.codeSource = initialCodeSource(this.form);
+      // the profile decides what happens when the run sits idle in a pool that reclaims
+      this.reclaim = { policy: this.profile.reclaim?.policy || '', idleTimeout: this.profile.reclaim?.idleTimeout || '' };
     }
     await this.loadFacts();
     // Suggest a name that already satisfies the profile's prefix; the user can change the rest.
@@ -776,6 +778,10 @@ export default defineComponent({
               <tr>
                 <th>Image registries</th>
                 <td>{{ (profile.limits.registries || []).join(', ') || 'any registry' }}</td>
+              </tr>
+              <tr>
+                <th>When idle</th>
+                <td>{{ profile.reclaim?.policy || 'Suspend' }}{{ profile.reclaim?.idleTimeout ? ` after ${ profile.reclaim.idleTimeout }` : ' after the pool\'s idle timeout' }} <span class="text-muted">(in a pool that reclaims idle runs)</span></td>
               </tr>
             </table>
           </div>

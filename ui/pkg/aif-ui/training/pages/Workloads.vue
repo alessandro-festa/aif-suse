@@ -21,7 +21,7 @@ import {
 import { CheckpointVolume, checkpointVolumes } from '../checkpoints';
 import { trainingRuns } from '../trainingruns';
 
-const STATES: RunState[] = ['Running', 'Deploying', 'Pending', 'Queued', 'Degraded', 'Suspended', 'Completed', 'Failed', 'Cancelled'];
+const STATES: RunState[] = ['Running', 'Deploying', 'Pending', 'Queued', 'Degraded', 'Suspended', 'Completed', 'Failed', 'Cancelled', 'Reclaimed'];
 const COLUMNS: { key: RunSortKey; label: string }[] = [
   { key: 'name', label: 'Name' },
   { key: 'type', label: 'Type' },
@@ -246,7 +246,7 @@ export default defineComponent({
 
     stateClass(s: RunState): string {
       return ({
-        Running: 'ok', Completed: 'done', Failed: 'bad', Degraded: 'warn', Queued: 'info', Pending: 'info', Deploying: 'info', Suspended: 'muted'
+        Running: 'ok', Completed: 'done', Failed: 'bad', Degraded: 'warn', Queued: 'info', Pending: 'info', Deploying: 'info', Suspended: 'muted', Reclaimed: 'muted'
       } as Record<string, string>)[s] || 'muted';
     },
 

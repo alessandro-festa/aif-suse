@@ -19,6 +19,7 @@
 
 import { gpuShort } from './gputypes';
 import { Check, DEFAULT_FORM, Form, formFromValues } from './preflight';
+import { IDLE_DURATION, RECLAIM_POLICIES, ReclaimPolicy } from './reclaim';
 
 export const PROFILE_NAMESPACE = 'ai-profiles';
 export const PROFILE_LABEL = 'trainingjobs/profile';
@@ -70,6 +71,9 @@ export interface Profile {
   requiredSecrets: { name: string; hint: string }[];
   // Runs from this profile are named <prefix>-<something>; '' = any name. The user still picks the name.
   namePrefix: string;
+  // Training profiles: what happens to a run that sits idle in a compute pool that reclaims idle
+  // runs (AIJob.spec.reclaim). null = the operator's default (Suspend, the pool's timeout).
+  reclaim: { policy: ReclaimPolicy | ''; idleTimeout: string } | null;
   form: Form; // DEFAULT_FORM with the profile's values applied
   fixed: (keyof Form)[]; // fields the profile's values set explicitly
   editable: EditableField[];
@@ -181,12 +185,28 @@ export function profileFromConfigMap(cm: any, parseYaml: (s: string) => any): Pr
     problems.push(`namePrefix "${ doc.namePrefix }" must be lowercase letters, numbers and hyphens (max 22)`);
   }
 
+  let reclaim: Profile['reclaim'] = null;
+
+  if (doc.reclaim && typeof doc.reclaim === 'object') {
+    const policy = (RECLAIM_POLICIES as readonly string[]).includes(doc.reclaim.policy) ? doc.reclaim.policy as ReclaimPolicy : '';
+    const idleTimeout = IDLE_DURATION.test(String(doc.reclaim.idleTimeout || '')) ? String(doc.reclaim.idleTimeout) : '';
+
+    if (doc.reclaim.policy && !policy) {
+      problems.push(`reclaim.policy "${ doc.reclaim.policy }" must be ${ RECLAIM_POLICIES.join(', ') }`);
+    }
+    if (doc.reclaim.idleTimeout && !idleTimeout) {
+      problems.push(`reclaim.idleTimeout "${ doc.reclaim.idleTimeout }" must be a number and m, h or d`);
+    }
+    reclaim = policy || idleTimeout ? { policy, idleTimeout } : null;
+  }
+
   return {
     name:        cm.metadata.name,
     type,
     blueprint,
     requiredSecrets,
     namePrefix,
+    reclaim,
     displayName: String(doc.displayName || cm.metadata.name),
     description: String(doc.description || ''),
     framework:   String(doc.framework || ''),

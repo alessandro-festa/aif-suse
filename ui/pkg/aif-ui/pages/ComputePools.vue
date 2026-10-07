@@ -1,25 +1,37 @@
 <script>
 import Banner from '@components/Banner/Banner.vue';
-import { listComputePools } from '../services/compute-pools';
+import { LabeledInput } from '@components/Form/LabeledInput';
+import { Checkbox } from '@components/Form/Checkbox';
+import AsyncButton from '@shell/components/AsyncButton.vue';
+import {
+  listComputePools, reclaimDraft, reclaimErrors, reclaimSpec, reclaimText
+} from '../services/compute-pools';
 import { MANAGEMENT_CLUSTER, PRODUCT } from '../config/suseai';
 
 export default {
   name: 'ComputePoolsPage',
 
-  components: { Banner },
+  components: {
+    Banner, LabeledInput, Checkbox, AsyncButton
+  },
 
   data() {
     return {
-      pools: [], undiscovered: [], installed: true, loading: true, error: ''
+      pools: [], objects: {}, undiscovered: [], installed: true, loading: true, error: '',
+      // the pool whose idle reclaim is being edited, and the edit
+      editing: '', draft: null, saveError: ''
     };
   },
 
   async fetch() {
     try {
-      const { installed, rows, undiscovered } = await listComputePools(this.$store);
+      const {
+        installed, rows, objects, undiscovered
+      } = await listComputePools(this.$store);
 
       this.installed = installed;
       this.pools = rows;
+      this.objects = objects;
       this.undiscovered = undiscovered;
     } catch (e) {
       this.error = e?.message || String(e);
@@ -39,9 +51,50 @@ export default {
       return this.pools.some((p) => p.reason === 'NoRancherToken') || this.undiscovered.length > 0;
     },
     settingsRoute: () => ({ name: `c-cluster-${ PRODUCT }-settings`, params: { cluster: MANAGEMENT_CLUSTER } }),
+    draftErrors() {
+      return this.draft ? reclaimErrors(this.draft) : {};
+    },
   },
 
   methods: {
+    reclaimText,
+    canEdit(p) {
+      return !!this.objects[p.name]?.canUpdate;
+    },
+    edit(p) {
+      this.editing = p.name;
+      this.draft = reclaimDraft(p.reclaim);
+      this.saveError = '';
+    },
+    cancelEdit() {
+      this.editing = '';
+      this.draft = null;
+    },
+    async save(done) {
+      const obj = this.objects[this.editing];
+
+      if (!obj || Object.keys(this.draftErrors).length) {
+        done(false);
+
+        return;
+      }
+      try {
+        const spec = reclaimSpec(this.draft);
+
+        if (spec) {
+          obj.spec.reclaim = spec;
+        } else {
+          delete obj.spec.reclaim;
+        }
+        await obj.save();
+        done(true);
+        this.cancelEdit();
+        await this.$fetch();
+      } catch (e) {
+        this.saveError = e?.message || e?._statusText || String(e);
+        done(false);
+      }
+    },
     stackLabels(keys, labels) {
       return keys.map((k) => labels[k] || k);
     },
@@ -115,15 +168,16 @@ export default {
           <th>{{ t('suseai.pages.computePools.cols.schedulers') }}</th>
           <th>{{ t('suseai.pages.computePools.cols.sharing') }}</th>
           <th>{{ t('suseai.pages.computePools.cols.training') }}</th>
+          <th>{{ t('suseai.pages.computePools.cols.reclaim') }}</th>
           <th>{{ t('suseai.pages.computePools.cols.status') }}</th>
         </tr>
       </thead>
       <tbody>
-        <tr
+        <template
           v-for="p in pools"
           :key="p.name"
-          :class="{ 'text-muted': p.disabled || p.connected === false }"
         >
+        <tr :class="{ 'text-muted': p.disabled || p.connected === false }">
           <td>{{ p.displayName }}</td>
           <td>
             <span :class="['pool-tag', { 'pool-tag--gpu': p.kind === 'gpu' }]">{{ p.kind === 'gpu' ? 'GPU' : 'CPU' }}</span>
@@ -181,6 +235,15 @@ export default {
             >—</span>
           </td>
           <td>
+            <span :class="{ 'text-muted': !p.reclaim }">{{ reclaimText(p.reclaim) }}</span>
+            <a
+              v-if="canEdit(p) && editing !== p.name"
+              href="#"
+              class="pool-edit"
+              @click.prevent="edit(p)"
+            >{{ t('suseai.pages.computePools.reclaim.edit') }}</a>
+          </td>
+          <td>
             <span
               v-clean-tooltip="p.message"
               :class="['pool-status', `pool-status--${ statusOf(p).tone }`]"
@@ -188,12 +251,73 @@ export default {
           </td>
         </tr>
         <tr
+          v-if="editing === p.name && draft"
+          class="pool-editor"
+        >
+          <td colspan="11">
+            <p class="text-muted">
+              {{ t('suseai.pages.computePools.reclaim.help') }}
+            </p>
+            <Checkbox
+              v-model:value="draft.enabled"
+              :label="t('suseai.pages.computePools.reclaim.enabled')"
+            />
+            <div
+              v-if="draft.enabled"
+              class="pool-editor-fields"
+            >
+              <LabeledInput
+                v-model:value="draft.idleTimeout"
+                :label="t('suseai.pages.computePools.reclaim.idleTimeout')"
+                :sub-label="draftErrors.idleTimeout || t('suseai.pages.computePools.reclaim.durationHint')"
+                :status="draftErrors.idleTimeout ? 'error' : null"
+              />
+              <LabeledInput
+                v-model:value="draft.idleThreshold"
+                type="number"
+                :label="t('suseai.pages.computePools.reclaim.idleThreshold')"
+                :sub-label="draftErrors.idleThreshold || t('suseai.pages.computePools.reclaim.thresholdHint')"
+                :status="draftErrors.idleThreshold ? 'error' : null"
+              />
+              <LabeledInput
+                v-model:value="draft.maxIdleTimeout"
+                :label="t('suseai.pages.computePools.reclaim.maxIdleTimeout')"
+                :sub-label="draftErrors.maxIdleTimeout || t('suseai.pages.computePools.reclaim.maxHint')"
+                :status="draftErrors.maxIdleTimeout ? 'error' : null"
+              />
+              <Checkbox
+                v-model:value="draft.onlyWhenContended"
+                :label="t('suseai.pages.computePools.reclaim.onlyWhenContended')"
+              />
+            </div>
+            <Banner
+              v-if="saveError"
+              color="error"
+              :label="saveError"
+            />
+            <div class="pool-editor-actions">
+              <button
+                class="btn role-secondary"
+                @click="cancelEdit"
+              >
+                {{ t('suseai.pages.computePools.reclaim.cancel') }}
+              </button>
+              <AsyncButton
+                mode="edit"
+                :disabled="Object.keys(draftErrors).length > 0"
+                @click="save"
+              />
+            </div>
+          </td>
+        </tr>
+        </template>
+        <tr
           v-for="c in undiscovered"
           :key="`undiscovered-${ c.id }`"
           class="text-muted"
         >
           <td>{{ c.name }}</td>
-          <td colspan="8">
+          <td colspan="9">
             {{ t('suseai.pages.computePools.undiscovered') }}
           </td>
           <td>
@@ -228,6 +352,12 @@ export default {
     color: var(--primary);
   }
 }
+
+.pool-edit { margin-left: 8px; white-space: nowrap; }
+
+.pool-editor td { background: var(--body-bg); border-top: 1px solid var(--border); }
+.pool-editor-fields { display: grid; grid-template-columns: repeat(3, minmax(160px, 240px)); gap: 12px; margin: 12px 0; align-items: start; }
+.pool-editor-actions { display: flex; gap: 8px; margin-top: 12px; }
 
 // Status: a coloured dot and plain text.
 .pool-status {
