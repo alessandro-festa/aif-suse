@@ -1,0 +1,11 @@
+Ray Serve serves {{ include "ray-serve.servedName" . }} with OpenAI's API at
+  http://{{ include "ray-serve.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/v1
+
+{{ if eq .Values.mode "app" }}The first start installs torch and transformers and downloads the model{{ else }}The first start downloads the model{{ end }}; the RayService
+is Ready once Serve reports the application RUNNING:
+  kubectl -n {{ .Release.Namespace }} get rayservice {{ include "ray-serve.fullname" . }}
+
+Try it:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "ray-serve.fullname" . }} {{ .Values.service.port }}
+  curl localhost:{{ .Values.service.port }}/v1/chat/completions -H 'Content-Type: application/json' \
+    -d '{"model":"{{ include "ray-serve.servedName" . }}","messages":[{"role":"user","content":"Hello"}]}'

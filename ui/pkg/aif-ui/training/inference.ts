@@ -30,8 +30,8 @@ export const WORKLOAD_PROFILE_LABEL = 'trainingjobs/profile';
 
 export interface BlueprintRef { name: string; version: string }
 
-/** The model servers a blueprint can be read for: vLLM and Ollama from the Application Collection, llama.cpp and SGLang from the Inference Engines Apps. */
-export type InferenceEngine = 'vllm' | 'ollama' | 'llamacpp' | 'sglang';
+/** The model servers a blueprint can be read for: vLLM and Ollama from the Application Collection, llama.cpp, SGLang and Ray Serve from the Inference Engines Apps. */
+export type InferenceEngine = 'vllm' | 'ollama' | 'llamacpp' | 'sglang' | 'rayserve';
 
 /** What one blueprint serves, read from its model server component. Empty fields = no model server found. */
 export interface BlueprintSummary {
@@ -57,7 +57,7 @@ export interface BlueprintSummary {
   mpsLimitMiB: number | null; // the engine's GPU memory cap on a shared GPU
   kaiMemoryMiB: number | null; // the engine's KAI GPU-memory share (its gpu-memory annotation)
   kaiQueue: string; // the KAI queue the engine is labelled for
-  // The model server's own Service, for engines without a router (Ollama, llama.cpp, SGLang).
+  // The model server's own Service, for engines without a router (Ollama, llama.cpp, SGLang, Ray Serve).
   service: { name: string; port: number } | null;
 }
 
@@ -115,11 +115,12 @@ function vllmSummary(bp: any, ref: BlueprintRef, comps: any[], vllm: any): Bluep
 }
 
 /**
- * Ollama (the Application Collection chart), llama.cpp or SGLang (the Inference Engines Apps): one
- * model server behind its own Service, sized by its resources. null when the blueprint has neither.
+ * Ollama (the Application Collection chart), llama.cpp, SGLang or Ray Serve (the Inference Engines
+ * Apps): one model server behind its own Service, sized by its resources. null when the blueprint has
+ * none of them.
  */
 function otherEngineSummary(bp: any, ref: BlueprintRef, comps: any[]): BlueprintSummary | null {
-  const i = comps.findIndex((c) => ['ollama', 'llama-cpp', 'sglang'].includes(c?.chartName));
+  const i = comps.findIndex((c) => ['ollama', 'llama-cpp', 'sglang', 'ray-serve'].includes(c?.chartName));
 
   if (i < 0) {
     return null;
@@ -141,6 +142,14 @@ function otherEngineSummary(bp: any, ref: BlueprintRef, comps: any[]): Blueprint
     service = { name: String(v.fullnameOverride || release), port: Number(v.service?.port) || 11434 };
     cacheSize = v.persistentVolume?.enabled ? String(v.persistentVolume.size || '') : '';
     storageClass = String(v.persistentVolume?.storageClass || '');
+  } else if (c.chartName === 'ray-serve') {
+    // a RayService: `replicas` Serve replicas on as many Ray worker pods, models downloaded on start
+    engine = 'rayserve';
+    model = String(v.model?.id || 'Qwen/Qwen2.5-0.5B-Instruct');
+    gpus = Number(v.gpu?.count) || 0;
+    service = { name: release, port: Number(v.service?.port) || 8000 };
+    cacheSize = '';
+    storageClass = '';
   } else {
     engine = c.chartName === 'sglang' ? 'sglang' : 'llamacpp';
     model = String(engine === 'sglang' ? v.model?.id || 'Qwen/Qwen2.5-1.5B-Instruct' : v.model?.hfRepo || 'Qwen/Qwen2.5-0.5B-Instruct-GGUF');
@@ -240,6 +249,13 @@ export function inferenceChecks(input: InferenceInput, ref: BlueprintRef | null,
   const s = summarizeBlueprint(bp, ref);
 
   add('blueprint', 'pass', `Blueprint ${ s.displayName } ${ ref.version }`, s.components.join(', '));
+  if (s.engine === 'rayserve') {
+    if (f.kuberayInstalled) {
+      add('kuberay', 'pass', 'KubeRay is installed', 'Ray Serve runs as a RayService: a Ray head and one worker pod per replica.');
+    } else {
+      add('kuberay', 'fail', 'KubeRay is not installed on this cluster', 'Ray Serve runs as a KubeRay RayService. Install KubeRay (Compute Pools → Cluster add-ons), or pick a pool on a cluster that has it.');
+    }
+  }
 
   // project and name
   if (!input.namespace) {

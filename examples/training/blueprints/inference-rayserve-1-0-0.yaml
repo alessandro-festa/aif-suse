@@ -1,0 +1,40 @@
+# Inference engine: Ray Serve 1.0.0, the ray-serve chart (charts/inference-engines/ray-serve), Qwen2.5-0.5B on CPU.
+# Its inference profile is ../profiles/57-engine-rayserve.yaml.
+#
+# Needs the "Inference Engines Apps" git custom repo (ClusterRepo aif-engines) in AI Factory Settings,
+# and the KubeRay add-on on the cluster it deploys to.
+{
+  "apiVersion": "ai-factory.suse.com/v1alpha1",
+  "kind": "Blueprint",
+  "metadata": {
+    "name": "inference-rayserve-1-0-0",
+    "labels": {
+      "ai-factory.suse.com/blueprint-name": "inference-rayserve",
+      "ai-factory.suse.com/blueprint-version": "1.0.0",
+      "ai-factory.suse.com/source": "custom"
+    }
+  },
+  "spec": {
+    "displayName": "Ray Serve",
+    "version": "1.0.0",
+    "source": "Custom",
+    "description": "Ray Serve on a KubeRay RayService, serving Qwen2.5-0.5B-Instruct with OpenAI's API on CPU:\na Ray head and one worker pod per replica.\n\nNEEDS the ray-serve chart from the \"Inference Engines Apps\" git custom repository\n(ClusterRepo aif-engines) in AI Factory Settings, and KubeRay on the cluster.",
+    "components": [
+      {
+        "chartName": "ray-serve",
+        "chartRepo": "aif-engines",
+        "chartVersion": "0.1.0",
+        "values": {
+          "mode": "app",
+          "model": { "id": "Qwen/Qwen2.5-0.5B-Instruct", "maxTokens": 256 },
+          "replicas": 1,
+          "gpu": { "count": 0 },
+          "resources": {
+            "requests": { "cpu": "2", "memory": "4Gi" },
+            "limits": { "cpu": "4", "memory": "8Gi" }
+          }
+        }
+      }
+    ]
+  }
+}

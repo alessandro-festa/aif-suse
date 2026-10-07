@@ -1,0 +1,94 @@
+# Ray Tune Test (CPU): A KubeRay RayJob running a Ray Tune hyperparameter search: 12 trials spread over two or more CPU worker pods, ASHA stopping the weak ones early, the best configuration checked. Nothing to install. Needs the KubeRay add-on.
+# Built by ../tests/build_profiles.py from ../tests/; edit the script there and rebuild.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ray-tune-test
+  namespace: ai-profiles
+  labels:
+    trainingjobs/profile: training
+data:
+  profile.yaml: |
+    displayName: Ray Tune Test (CPU)
+    purpose: test
+    framework: Ray
+    gpu: CPU
+    status: beta
+    description: 'A KubeRay RayJob running a Ray Tune hyperparameter search: 12 trials spread over two or more CPU worker pods, ASHA stopping the weak ones early, the best configuration checked. Nothing to install. Needs the KubeRay add-on.'
+    values:
+      image:
+        repository: rayproject/ray
+        tag: 2.49.2
+      job:
+        kind: rayjob
+        mode: custom
+        nodes: 2
+        gpusPerNode: 0
+        command:
+        - python
+        - -c
+        - |
+          # Ray Tune Test (CPU): the Ray driver, run by KubeRay on the head. A hyperparameter search over a
+          # learning rate and a momentum: 12 trials, one CPU each, spread by Ray over the worker pods, with
+          # ASHA stopping the weak ones early. The objective is plain Python (SGD on a quadratic), so nothing
+          # is installed; the driver checks every trial ran, trials ran on several workers, ASHA stopped some,
+          # and the best configuration is the one that converges fastest.
+          import json, os, socket, sys, time
+          import ray
+          from ray import tune
+          from ray.tune.schedulers import ASHAScheduler
+
+          t0 = time.time()
+          ray.init()
+          checks = []
+          def add(name, ok, detail):
+              checks.append({"name": name, "ok": bool(ok), "detail": detail})
+              print(("PASS " if ok else "FAIL ") + f" {name}  {detail}", flush=True)
+
+          nodes = [n for n in ray.nodes() if n["Alive"]]
+          add("Ray cluster up", len(nodes) >= 2, f"{len(nodes)} nodes (head + {len(nodes) - 1} workers), Ray {ray.__version__}")
+
+          def trainable(config):
+              # SGD with momentum on f(x) = x^2 from x = 10: the loss after each step is reported
+              x, v = 10.0, 0.0
+              for step in range(60):
+                  v = config["momentum"] * v - config["lr"] * 2 * x
+                  x += v
+                  time.sleep(0.05)  # long enough for trials to overlap across workers
+                  tune.report({"loss": x * x, "host": socket.gethostname()})
+
+          space = {"lr": tune.grid_search([0.001, 0.01, 0.05, 0.2]), "momentum": tune.grid_search([0.0, 0.5, 0.9])}
+          tuner = tune.Tuner(tune.with_resources(trainable, {"cpu": 1}), param_space=space,
+                             tune_config=tune.TuneConfig(metric="loss", mode="min", scheduler=ASHAScheduler(max_t=60, grace_period=5)),
+                             run_config=tune.RunConfig(name="aif-ray-tune-test", storage_path="/tmp/ray-results", verbose=0))
+          results = tuner.fit()
+          trials = [r for r in results if r.metrics]
+          add("Every trial ran", len(trials) == 12 and not results.errors, f"{len(trials)} of 12 trials, {len(results.errors)} errors")
+          hosts = {r.metrics.get("host") for r in trials}
+          add("Trials spread over the workers", len(hosts) > 1, f"{len(hosts)} pods: {', '.join(sorted(h for h in hosts if h))}")
+          stopped = sum(1 for r in trials if r.metrics.get("training_iteration", 0) < 60)
+          add("ASHA stopped weak trials early", stopped > 0, f"{stopped} of {len(trials)} stopped before 60 steps")
+          best = results.get_best_result()
+          # without momentum x shrinks by |1 - 2 lr| per step: lr=0.2 (x0.6 a step) ends lowest of the grid
+          add("Best configuration found", best.config == {"lr": 0.2, "momentum": 0.0}, f"lr={best.config['lr']} momentum={best.config['momentum']} loss={best.metrics['loss']:.2e}")
+
+          ok = all(c["ok"] for c in checks)
+          print("AIF_RESULT " + json.dumps({"test": "Ray Tune Test", "status": "pass" if ok else "fail", "checks": checks,
+                "metrics": {"trials": str(len(trials)), "seconds": f"{time.time() - t0:.1f}"},
+                "env": {"ray": ray.__version__, "nodes": str(len(nodes))}}), flush=True)
+          sys.exit(0 if ok else 1)
+      resources:
+        requests:
+          cpu: '1'
+          memory: 2Gi
+      ray: {}
+    editable:
+    - nodes
+    limits:
+      nodes:
+        min: 1
+        max: 4
+      registries:
+      - rayproject/
+      - docker.io/rayproject/
+      maxRuntimeHours: 1

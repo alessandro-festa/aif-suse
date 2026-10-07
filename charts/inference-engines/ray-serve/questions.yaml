@@ -1,0 +1,48 @@
+questions:
+  - variable: mode
+    label: Mode
+    description: "app = the chart's Serve app (transformers), CPU or GPU, small models. llm = Ray Serve LLM (vLLM), NVIDIA GPUs."
+    type: enum
+    options: [app, llm]
+    default: app
+    group: Model
+  - variable: model.id
+    label: Model ID
+    description: "Hugging Face model ID."
+    type: string
+    default: Qwen/Qwen2.5-0.5B-Instruct
+    group: Model
+  - variable: model.servedName
+    label: Served model name
+    description: "Name clients use in /v1/chat/completions. Empty: the model ID."
+    type: string
+    default: ""
+    group: Model
+  - variable: hfTokenSecret
+    label: Hugging Face token Secret
+    description: "Secret with an HF_TOKEN key, for gated or private models."
+    type: string
+    default: ""
+    group: Model
+  - variable: replicas
+    label: Replicas
+    description: "Serve replicas, one Ray worker pod each. Fixed: not autoscaled."
+    type: int
+    default: 1
+    group: Resources
+  - variable: gpu.count
+    label: GPUs per replica
+    description: "0 runs on CPU (app mode). llm mode needs 1 or more."
+    type: int
+    default: 0
+    group: Resources
+  - variable: resources.requests.cpu
+    label: CPU request per replica
+    type: string
+    default: "2"
+    group: Resources
+  - variable: resources.requests.memory
+    label: Memory request per replica
+    type: string
+    default: 4Gi
+    group: Resources

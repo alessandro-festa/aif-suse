@@ -1,0 +1,44 @@
+{{- $gpus := int .Values.gpu.count -}}
+{{- if and (eq .Values.mode "llm") (lt $gpus 1) }}
+{{- fail "Ray Serve LLM (mode llm) runs on NVIDIA GPUs: set gpu.count to 1 or more, or use mode app on CPU" }}
+{{- end }}
+{{- if not (has .Values.mode (list "app" "llm")) }}
+{{- fail "mode is app or llm" }}
+{{- end }}
+{{- /* only when the cluster can be seen: under `helm template` lookup returns nothing */}}
+{{- if and (lookup "v1" "Namespace" "" .Release.Namespace) (not (.Capabilities.APIVersions.Has "ray.io/v1/RayService")) }}
+{{- fail "Ray Serve needs the KubeRay operator on this cluster (no rayservices.ray.io): install it from Compute Pools → Cluster add-ons → KubeRay" }}
+{{- end }}
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: {{ include "ray-serve.fullname" . }}
+  labels:
+    {{- include "ray-serve.labels" . | nindent 4 }}
+spec:
+  serveConfigV2: |
+    {{- include "ray-serve.serveConfig" . | nindent 4 }}
+  rayClusterConfig:
+    rayVersion: "2.49.2"
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        {{- /* the head runs Serve's controller and proxy, no replica */}}
+        num-cpus: "0"
+      template:
+        {{- include "ray-serve.pod" (dict "ctx" . "role" "head") | nindent 8 }}
+    workerGroupSpecs:
+      - groupName: replicas
+        {{- /* fixed: one worker pod per Serve replica, all asked for up front */}}
+        replicas: {{ int .Values.replicas }}
+        minReplicas: {{ int .Values.replicas }}
+        maxReplicas: {{ int .Values.replicas }}
+        rayStartParams:
+          {{- if eq .Values.mode "app" }}
+          {{- /* one Serve replica (num_cpus 1) per worker pod; torch uses the pod's cores */}}
+          num-cpus: "1"
+          {{- else }}
+          {}
+          {{- end }}
+        template:
+          {{- include "ray-serve.pod" (dict "ctx" . "role" "worker") | nindent 10 }}

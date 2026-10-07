@@ -110,6 +110,11 @@ PROFILES = [
         "values": {**framework_test("trainjob_torch_test.sh", "3.12-slim", "2Gi", [{"name": "TORCH_VERSION", "value": "2.8.0"}]),
                    "job": {"kind": "trainjob", "mode": "custom", "nodes": 2, "gpusPerNode": 0, "command": ["sh", "-c", script("trainjob_torch_test.sh")]}},
         "editable": ["nodes", "env"], "limits": FRAMEWORK_LIMITS}),
+    ("56-ray-tune-test", "ray-tune-test", {
+        "displayName": "Ray Tune Test (CPU)", "purpose": "test", "framework": "Ray", "gpu": "CPU", "status": "beta",
+        "description": "A KubeRay RayJob running a Ray Tune hyperparameter search: 12 trials spread over two or more CPU worker pods, ASHA stopping the weak ones early, the best configuration checked. Nothing to install. Needs the KubeRay add-on.",
+        "values": {**RAY_TRAIN, "job": {**RAY_TRAIN["job"], "command": ["python", "-c", script("ray_tune_test.py")]}, "ray": {}},
+        "editable": ["nodes"], "limits": {"nodes": {"min": 1, "max": 4}, "registries": ["rayproject/", "docker.io/rayproject/"], "maxRuntimeHours": 1}}),
     ("51-jax-distributed-test-gpu", "jax-distributed-test-gpu", {
         "displayName": "JAX Distributed Test (GPU)", "purpose": "test", "framework": "JAX", "status": "beta",
         "description": "The JAX distributed test on GPUs: jax[cuda12], two or more pods join through jax.distributed, gather every rank and train with gradients averaged across processes." + GPU_NOTE,

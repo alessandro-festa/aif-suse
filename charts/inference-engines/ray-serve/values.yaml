@@ -1,0 +1,68 @@
+# Ray Serve on a KubeRay RayService: a Ray head, `replicas` worker pods, one Serve replica on each.
+# Needs the KubeRay operator on the cluster (Compute Pools → Cluster add-ons → KubeRay).
+
+# app — the chart's own Serve app: the model through Hugging Face transformers, on CPU or a GPU.
+#       Small models; installs torch and transformers on start (Ray's runtime environment).
+# llm — Ray Serve LLM (vLLM) on NVIDIA GPUs, Ray's ray-llm image.
+mode: app
+
+model:
+  # A Hugging Face model ID.
+  id: Qwen/Qwen2.5-0.5B-Instruct
+  # The name clients use in /v1/chat/completions and see in /v1/models. Empty: the model ID.
+  servedName: ""
+  # app: the most tokens one answer may generate.
+  maxTokens: 256
+  # llm: maximum context length in tokens.
+  contextLength: 4096
+
+# Serve replicas, each on its own Ray worker pod. Fixed, not autoscaled: AI Factory places the
+# workload by what it asks for, so it asks for all of it.
+replicas: 1
+
+# GPUs per replica. 0 runs on CPU (app mode only); llm mode needs at least 1 and splits the model
+# across them (tensor parallel).
+gpu:
+  count: 0
+  resourceName: nvidia.com/gpu
+
+# A Secret with an HF_TOKEN key, for gated or private models. Empty: anonymous downloads.
+hfTokenSecret: ""
+
+# Each worker pod (one replica).
+resources:
+  requests:
+    cpu: "2"
+    memory: 4Gi
+  limits:
+    cpu: "4"
+    memory: 8Gi
+
+# The Ray head: the cluster's control store, Serve's controller and its HTTP proxy. No replica.
+head:
+  resources:
+    requests: { cpu: "1", memory: 2Gi }
+    limits: { cpu: "2", memory: 4Gi }
+
+# app mode: the packages Ray installs on every node before the app starts.
+app:
+  torchVersion: "2.8.0"
+  transformersVersion: "4.56.2"
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# Empty: rayproject/ray:2.49.2 (app on CPU), rayproject/ray:2.49.2-gpu (app on GPU),
+# rayproject/ray-llm:2.49.2-py311-cu128 (llm).
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podLabels: {}
+podAnnotations: {}

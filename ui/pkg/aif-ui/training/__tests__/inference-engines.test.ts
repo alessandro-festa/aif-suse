@@ -47,6 +47,19 @@ describe('engine blueprints', () => {
     expect(endpointUrl(g, 'team-a')).toBe('http://sglang.team-a.svc:8000/v1');
   });
 
+  it('reads Ray Serve from its chart, and needs KubeRay', () => {
+    const r = summary('inference-rayserve');
+
+    expect(r).toMatchObject({ engine: 'rayserve', model: 'Qwen/Qwen2.5-0.5B-Instruct', gpusPerReplica: 0, replicas: 1, cpu: '2', memory: '4Gi' });
+    expect(endpointUrl(r, 'team-a')).toBe('http://ray-serve.team-a.svc:8000/v1');
+    const check = (kuberayInstalled: boolean) => inferenceChecks({ namespace: 'team-a', name: 'chat' }, ref('inference-rayserve'), { ...cpuFacts, kuberayInstalled } as Facts, {
+      aifInstalled: true, blueprints: [load('inference-rayserve')], workloads: [], gpuDeviceMemory: 0
+    }).find((c) => c.id === 'kuberay')?.severity;
+
+    expect(check(true)).toBe('pass');
+    expect(check(false)).toBe('fail');
+  });
+
   it('asks a CPU engine no GPU questions', () => {
     const fails = inferenceChecks({ namespace: 'team-a', name: 'chat' }, ref('inference-llamacpp'), cpuFacts, {
       aifInstalled: true, blueprints: [load('inference-llamacpp')], workloads: [], gpuDeviceMemory: 0

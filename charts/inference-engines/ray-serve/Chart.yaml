@@ -1,0 +1,12 @@
+apiVersion: v2
+name: ray-serve
+description: "Ray Serve on a KubeRay RayService: a Hugging Face model with OpenAI's API, on CPU or NVIDIA GPUs, for SUSE AI Factory."
+type: application
+version: 0.1.0
+appVersion: "2.49.2"
+home: https://docs.ray.io/en/latest/serve/index.html
+keywords: [llm, inference, ray, ray-serve, kuberay, openai]
+icon: file://ray-serve/icon.png
+annotations:
+  catalog.cattle.io/display-name: Ray Serve
+  catalog.cattle.io/kube-version: ">=1.27.0-0"

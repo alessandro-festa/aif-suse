@@ -1,0 +1,17 @@
+# Inference profile: Ray Serve · Qwen2.5 0.5B (CPU). Deploys the inference-rayserve blueprint
+# (../blueprints/inference-rayserve-1-0-0.yaml) as an AIWorkload in the project's namespace.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: engine-rayserve
+  namespace: ai-profiles
+  labels:
+    trainingjobs/profile: inference
+data:
+  profile.yaml: |
+    displayName: Ray Serve · Qwen2.5 0.5B (CPU)
+    description: Ray Serve on a KubeRay RayService, serving Qwen2.5-0.5B-Instruct with OpenAI's API on CPU. Needs the KubeRay add-on.
+    framework: Ray Serve
+    gpu: CPU
+    status: beta
+    blueprint: { name: inference-rayserve, version: 1.0.0 }
