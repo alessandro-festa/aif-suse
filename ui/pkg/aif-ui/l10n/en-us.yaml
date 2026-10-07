@@ -47,6 +47,12 @@ suseai:
         reclaim: Idle reclaim
         status: Status
       free: free
+      builtin:
+        scheduler: Kubernetes default
+        schedulerTip: No add-on scheduler (KAI, Kueue, Volcano, Run:ai) is installed. AI Factory's queue chooses the pool; the Kubernetes scheduler places the pods.
+        sharing: Whole GPUs
+        training: Kubernetes Job
+        trainingTip: Every cluster runs training as plain Kubernetes Jobs. A Kubeflow runtime, when installed, is listed beside it.
       consumers:
         toggle: Who uses this pool
         none: Nothing runs on this pool's nodes.
@@ -60,15 +66,15 @@ suseai:
       reclaim:
         edit: Edit
         cancel: Cancel
-        help: Free the pool from training runs that hold it without using it. A run under the threshold for the whole idle timeout is reclaimed, by its profile's policy (Suspend puts it back in the queue, Terminate ends it, Never leaves it), and the run waiting for the pool takes its place. Only runs AI Factory placed from the queue are reclaimed.
+        help: A queued run under the threshold for the whole idle time is reclaimed by its profile's policy (Suspend requeues it, Terminate ends it, Never leaves it), and the waiting run takes its place.
         enabled: Reclaim idle runs in this pool
-        idleTimeout: Idle timeout
+        idleTimeout: Idle after
         durationHint: A number and m, h or d, e.g. 30m, 2h, 3d
-        idleThreshold: Idle threshold (%)
-        thresholdHint: Of the run's GPUs on a GPU pool, of its CPU request on a CPU pool
-        maxIdleTimeout: Longest a run may ask for
-        maxHint: Empty = the idle timeout
-        onlyWhenContended: Only when a run is waiting for the pool
+        idleThreshold: Under %
+        thresholdHint: Utilisation under which a run is idle — of its GPUs on a GPU pool, of its CPU request on a CPU pool
+        maxIdleTimeout: Runs may ask up to
+        maxHint: The longest idle timeout a profile may set; empty = the idle timeout
+        onlyWhenContended: Only when a run is waiting
     about:
       title: About
       sections:

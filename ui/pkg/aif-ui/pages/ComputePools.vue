@@ -1,6 +1,5 @@
 <script>
 import Banner from '@components/Banner/Banner.vue';
-import { LabeledInput } from '@components/Form/LabeledInput';
 import { Checkbox } from '@components/Form/Checkbox';
 import AsyncButton from '@shell/components/AsyncButton.vue';
 import {
@@ -15,7 +14,7 @@ export default {
   name: 'ComputePoolsPage',
 
   components: {
-    Banner, LabeledInput, Checkbox, AsyncButton
+    Banner, Checkbox, AsyncButton
   },
 
   data() {
@@ -247,8 +246,9 @@ export default {
             >{{ l }}</span>
             <span
               v-if="!p.schedulers.length"
-              class="text-muted"
-            >—</span>
+              v-clean-tooltip="t('suseai.pages.computePools.builtin.schedulerTip')"
+              class="pool-tag pool-tag--builtin"
+            >{{ t('suseai.pages.computePools.builtin.scheduler') }}</span>
           </td>
           <td>
             <span
@@ -257,20 +257,24 @@ export default {
               class="pool-tag"
             >{{ l }}</span>
             <span
-              v-if="!p.sharing.length"
+              v-if="!p.sharing.length && p.kind === 'gpu'"
+              class="pool-tag pool-tag--builtin"
+            >{{ t('suseai.pages.computePools.builtin.sharing') }}</span>
+            <span
+              v-else-if="!p.sharing.length"
               class="text-muted"
             >—</span>
           </td>
           <td>
             <span
+              v-clean-tooltip="t('suseai.pages.computePools.builtin.trainingTip')"
+              class="pool-tag pool-tag--builtin"
+            >{{ t('suseai.pages.computePools.builtin.training') }}</span>
+            <span
               v-for="l in stackLabels(p.training, trainingLabels)"
               :key="l"
               class="pool-tag"
             >{{ l }}</span>
-            <span
-              v-if="!p.training.length"
-              class="text-muted"
-            >—</span>
           </td>
           <td>
             <span :class="{ 'text-muted': !p.reclaim }">{{ reclaimText(p.reclaim) }}</span>
@@ -351,59 +355,80 @@ export default {
           class="pool-editor"
         >
           <td colspan="11">
-            <p class="text-muted">
+            <div class="pool-editor-line">
+              <Checkbox
+                v-model:value="draft.enabled"
+                :label="t('suseai.pages.computePools.reclaim.enabled')"
+              />
+              <template v-if="draft.enabled">
+                <label
+                  v-clean-tooltip="t('suseai.pages.computePools.reclaim.durationHint')"
+                  :class="['pool-field', { 'pool-field--error': draftErrors.idleTimeout }]"
+                >{{ t('suseai.pages.computePools.reclaim.idleTimeout') }}
+                  <input
+                    v-model="draft.idleTimeout"
+                    type="text"
+                    placeholder="2h"
+                  >
+                </label>
+                <label
+                  v-clean-tooltip="t('suseai.pages.computePools.reclaim.thresholdHint')"
+                  :class="['pool-field', { 'pool-field--error': draftErrors.idleThreshold }]"
+                >{{ t('suseai.pages.computePools.reclaim.idleThreshold') }}
+                  <input
+                    v-model.number="draft.idleThreshold"
+                    type="number"
+                    min="1"
+                    max="100"
+                  >
+                </label>
+                <label
+                  v-clean-tooltip="t('suseai.pages.computePools.reclaim.maxHint')"
+                  :class="['pool-field', { 'pool-field--error': draftErrors.maxIdleTimeout }]"
+                >{{ t('suseai.pages.computePools.reclaim.maxIdleTimeout') }}
+                  <input
+                    v-model="draft.maxIdleTimeout"
+                    type="text"
+                    :placeholder="draft.idleTimeout"
+                  >
+                </label>
+                <Checkbox
+                  v-model:value="draft.onlyWhenContended"
+                  :label="t('suseai.pages.computePools.reclaim.onlyWhenContended')"
+                />
+              </template>
+              <span class="pool-editor-actions">
+                <button
+                  class="btn btn-sm role-secondary"
+                  @click="cancelEdit"
+                >
+                  {{ t('suseai.pages.computePools.reclaim.cancel') }}
+                </button>
+                <AsyncButton
+                  mode="edit"
+                  size="sm"
+                  :disabled="Object.keys(draftErrors).length > 0"
+                  @click="save"
+                />
+              </span>
+            </div>
+            <p
+              v-if="Object.keys(draftErrors).length"
+              class="pool-editor-error"
+            >
+              {{ Object.values(draftErrors).join(' · ') }}
+            </p>
+            <p
+              v-else
+              class="text-muted pool-editor-help"
+            >
               {{ t('suseai.pages.computePools.reclaim.help') }}
             </p>
-            <Checkbox
-              v-model:value="draft.enabled"
-              :label="t('suseai.pages.computePools.reclaim.enabled')"
-            />
-            <div
-              v-if="draft.enabled"
-              class="pool-editor-fields"
-            >
-              <LabeledInput
-                v-model:value="draft.idleTimeout"
-                :label="t('suseai.pages.computePools.reclaim.idleTimeout')"
-                :sub-label="draftErrors.idleTimeout || t('suseai.pages.computePools.reclaim.durationHint')"
-                :status="draftErrors.idleTimeout ? 'error' : null"
-              />
-              <LabeledInput
-                v-model:value="draft.idleThreshold"
-                type="number"
-                :label="t('suseai.pages.computePools.reclaim.idleThreshold')"
-                :sub-label="draftErrors.idleThreshold || t('suseai.pages.computePools.reclaim.thresholdHint')"
-                :status="draftErrors.idleThreshold ? 'error' : null"
-              />
-              <LabeledInput
-                v-model:value="draft.maxIdleTimeout"
-                :label="t('suseai.pages.computePools.reclaim.maxIdleTimeout')"
-                :sub-label="draftErrors.maxIdleTimeout || t('suseai.pages.computePools.reclaim.maxHint')"
-                :status="draftErrors.maxIdleTimeout ? 'error' : null"
-              />
-              <Checkbox
-                v-model:value="draft.onlyWhenContended"
-                :label="t('suseai.pages.computePools.reclaim.onlyWhenContended')"
-              />
-            </div>
             <Banner
               v-if="saveError"
               color="error"
               :label="saveError"
             />
-            <div class="pool-editor-actions">
-              <button
-                class="btn role-secondary"
-                @click="cancelEdit"
-              >
-                {{ t('suseai.pages.computePools.reclaim.cancel') }}
-              </button>
-              <AsyncButton
-                mode="edit"
-                :disabled="Object.keys(draftErrors).length > 0"
-                @click="save"
-              />
-            </div>
           </td>
         </tr>
         </template>
@@ -447,6 +472,12 @@ export default {
     border-color: var(--primary);
     color: var(--primary);
   }
+
+  // what every cluster has without an add-on
+  &--builtin {
+    border-style: dashed;
+    color: var(--muted);
+  }
 }
 
 .pool-edit { margin-left: 8px; white-space: nowrap; }
@@ -455,8 +486,14 @@ export default {
 .pool-consumers table { width: 100%; th, td { padding: 4px 10px 4px 0; text-align: left; font-size: 13px; background: none; border: none; } }
 
 .pool-editor td { background: var(--body-bg); border-top: 1px solid var(--border); }
-.pool-editor-fields { display: grid; grid-template-columns: repeat(3, minmax(160px, 240px)); gap: 12px; margin: 12px 0; align-items: start; }
-.pool-editor-actions { display: flex; gap: 8px; margin-top: 12px; }
+.pool-editor-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
+.pool-field { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--muted);
+  input { width: 72px; height: 30px; padding: 0 8px; }
+  &--error input { border-color: var(--error); }
+}
+.pool-editor-actions { display: inline-flex; gap: 8px; margin-left: auto; }
+.pool-editor-help, .pool-editor-error { margin: 8px 0 0; font-size: 12px; }
+.pool-editor-error { color: var(--error); }
 
 // Status: a coloured dot and plain text.
 .pool-status {

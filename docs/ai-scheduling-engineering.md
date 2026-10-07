@@ -610,6 +610,12 @@ share now passes the GPU-exposure check ("CPU only"). Found by the CPU smoke pro
 c-xvstz-cpu, passed all checks (482k loop steps/s), then held idle. The pool's consumers listed it
 as a run (1 CPU, 256Mi) beside the llama.cpp endpoint (`vision`, 2 CPU) and the system namespaces.
 
+**F-57 [fact] The pools' Schedulers / GPU sharing / Training runtime columns were empty on the lab
+because nothing is installed there**: no KAI, Kueue, Volcano, HAMi or Kubeflow on either downstream.
+Runs used the built-ins (kube-scheduler after AI Factory's queue; plain Kubernetes Jobs). The
+page now names the built-ins with dashed tags ("Kubernetes default", "Whole GPUs", "Kubernetes
+Job") instead of "—". Installing an add-on per cluster is Phase 8.
+
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator
 namespace. Discovery reuses it (D-15).
