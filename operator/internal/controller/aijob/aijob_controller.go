@@ -56,6 +56,7 @@ import (
 
 	"github.com/SUSE/aif-operator/api/v1alpha1"
 	helmClient "github.com/SUSE/aif-operator/internal/infra/helm"
+	"github.com/SUSE/aif-operator/internal/trainchart"
 )
 
 const (
@@ -111,9 +112,10 @@ type AIJobReconciler struct {
 	// APIReader reads the execution objects uncached (see activeRequeue).
 	APIReader ctrl.Reader
 	Recorder  record.EventRecorder
-	// AllowedCharts limits what an AIJob may install, as "<clusterRepo>/<chart>"
-	// entries. The operator installs with its own service account, so this is
-	// what stops an AIJob from installing an arbitrary chart. Empty allows any.
+	// AllowedCharts lists the custom charts (spec.source) an AIJob may install, as
+	// "<clusterRepo>/<chart>" entries. The operator installs with its own service
+	// account, so this is what stops an AIJob from installing an arbitrary chart.
+	// Empty allows none: only the built-in training chart.
 	AllowedCharts []string
 	// RepoURLOverrides maps a ClusterRepo name to a URL to use instead of its
 	// spec.url. For running the operator outside the cluster, where an in-cluster
@@ -425,11 +427,12 @@ func (r *AIJobReconciler) finalize(ctx context.Context, job *v1alpha1.AIJob, hel
 // permanentError marks a source problem that retrying cannot fix.
 type permanentError struct{ error }
 
-// releaseSpec resolves the chart from the ClusterRepo and builds the install:
-// the submitted values with the job-id label added as a common label.
+// releaseSpec builds the install: the built-in training chart, or a custom chart
+// resolved from its ClusterRepo, with the submitted values and the job-id label
+// added as a common label.
 func (r *AIJobReconciler) releaseSpec(ctx context.Context, job *v1alpha1.AIJob) (helmClient.ReleaseSpec, error) {
 	src := job.Spec.Source
-	if !r.chartAllowed(src) {
+	if src != nil && !r.chartAllowed(*src) {
 		return helmClient.ReleaseSpec{}, permanentError{fmt.Errorf("chart %s/%s is not allowed for AIJobs (operator --aijob-allowed-charts)", src.RepoName, src.ChartName)}
 	}
 	values := map[string]interface{}{}
@@ -444,6 +447,10 @@ func (r *AIJobReconciler) releaseSpec(ctx context.Context, job *v1alpha1.AIJob) 
 	}
 	common[v1alpha1.AIJobJobIDLabel] = job.Name
 	values["commonLabels"] = common
+
+	if src == nil {
+		return helmClient.ReleaseSpec{Name: job.Name, Namespace: job.Namespace, Values: values, ChartArchive: trainchart.Archive()}, nil
+	}
 
 	url := r.RepoURLOverrides[src.RepoName]
 	var repoTLS *tls.Config
@@ -517,9 +524,6 @@ func ociChartRef(url, chart string) string {
 }
 
 func (r *AIJobReconciler) chartAllowed(src v1alpha1.AIJobSource) bool {
-	if len(r.AllowedCharts) == 0 {
-		return true
-	}
 	for _, a := range r.AllowedCharts {
 		if a == src.RepoName+"/"+src.ChartName || a == src.RepoName+"/*" {
 			return true

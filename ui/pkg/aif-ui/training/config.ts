@@ -15,18 +15,9 @@ export const ENDPOINT_PAGE = 'endpoint'; // deploy an inference profile; reached
 // and shows its count, so the page showed how many core Endpoints objects the cluster has.
 export const ENDPOINTS_PAGE = 'ai-workloads';
 
-// Helm chart that renders one training run (Indexed Job + torchrun). The extension finds it
-// in whichever Rancher ClusterRepo publishes it, so only the chart name is fixed here.
+// Helm chart that renders one training run (Indexed Job + torchrun). It is built into the AI Factory
+// operator, which installs it for every AIJob; no chart repository is involved.
 export const CHART_NAME = 'gpu-train-job';
-// Repository the chart must come from. Charts are matched by name across all repos a user can see,
-// so without pinning, a second repo publishing a chart of the same name could be picked up.
-// '' = accept any single repo but refuse when more than one publishes the chart.
-export const CHART_REPO = 'gpu-train-charts';
-export const CHART_REPO_TYPE = 'cluster';
-// Where the training chart (charts/gpu-train-job) is published, with the operator at the same
-// version. The operator chart creates the gpu-train-charts ClusterRepo pointing here; the banner
-// offers it, in an editable field (a mirror, an air-gapped registry), where that repository is missing.
-export const CHART_REPO_URL = 'oci://ghcr.io/suse/chart/gpu-train-job';
 export const JOB_LABEL = 'app.kubernetes.io/name';
 export const JOB_LABEL_VALUE = CHART_NAME;
 

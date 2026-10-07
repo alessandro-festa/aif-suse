@@ -58,6 +58,12 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
+.PHONY: train-chart
+train-chart: ## Package charts/gpu-train-job into the operator, which installs it for AIJobs with no spec.source.
+	rm -f internal/trainchart/gpu-train-job*.tgz
+	helm package ../charts/gpu-train-job --destination internal/trainchart
+	mv internal/trainchart/gpu-train-job-*.tgz internal/trainchart/gpu-train-job.tgz
+
 .PHONY: fmt
 fmt: ## Run go fmt against code.
 	go fmt ./...

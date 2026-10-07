@@ -70,6 +70,9 @@ type ReleaseSpec struct {
 	RegistryAuth *RegistryAuth
 	// TLSConfig optionally supplies registry TLS trust (private CA / mTLS / skip-verify). In-memory only.
 	TLSConfig *tls.Config
+	// ChartArchive, when set, is the chart itself (a packaged .tgz): nothing is
+	// pulled and ChartRef, RepoURL and Version are not used to find it.
+	ChartArchive []byte
 }
 
 // RegistryAuth carries resolved chart-pull credentials. Never logged or persisted.

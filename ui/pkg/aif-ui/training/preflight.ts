@@ -107,7 +107,10 @@ export interface Facts {
   // nothing to provision it from and the pod waits forever — see the scratch check.
   storageClasses: StorageClassInfo[];
   pytorchOperatorInstalled: boolean; // Kubeflow Training Operator: required for job.kind=pytorchjob
-  chart: { repoName: string; repoType: string; version: string } | null;
+  // The AIJob API: the operator installs the run, from the training chart built into it.
+  jobApi: boolean;
+  // A custom chart instead of the built-in one (Advanced). null = the built-in chart.
+  chart: { repoName: string; chartName: string; version: string } | null;
   fetchErrors: string[]; // things we could not read (RBAC etc.)
   // Queue hierarchy and live capacity, for the quota checks. Separate from kaiQueues above, which
   // stays a flat list for the picker; quota answers need the whole tree.
@@ -369,17 +372,14 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
   }
 
   // 1. chart
-  if (facts.chart) {
-    add('chart', 'pass', 'Job template available', `${ facts.chart.repoName } / gpu-train-job ${ facts.chart.version }`);
+  if (!facts.jobApi) {
+    add('chart', 'fail', 'AI Factory job API not available',
+      'This cluster has no AIJob API. Training jobs are submitted through AI Factory, on the ' +
+      'cluster where its operator runs (the Rancher local cluster).');
+  } else if (facts.chart) {
+    add('chart', 'pass', 'Custom job template', `${ facts.chart.repoName } / ${ facts.chart.chartName } ${ facts.chart.version }`);
   } else {
-    // Naming *this* cluster matters. The extension is installed once, in the Rancher local
-    // cluster, so it is easy to assume the chart repo it came with travels with it. It does not:
-    // ClusterRepos are not replicated to downstream clusters, and the Helm release is created
-    // here, so the repo has to exist here too. That is the failure people actually hit.
-    add('chart', 'fail', 'Job template not found',
-      'No ClusterRepo in this cluster publishes the gpu-train-job chart. A repo added to the ' +
-      'Rancher local cluster does not apply here — use "Add to this cluster" in the banner at ' +
-      'the top of this page, which creates the OCI repo here.');
+    add('chart', 'pass', 'Job template built into AI Factory', 'gpu-train-job, installed by the AI Factory operator; no chart repository needed');
   }
 
   // 2. namespace

@@ -101,7 +101,10 @@ spec:
                     type: string
                 type: object
               source:
-                description: Source is the chart to install.
+                description: |-
+                  Source is a custom chart to install. Omit it to install the training chart
+                  built into the operator (charts/gpu-train-job at the operator's version),
+                  which needs no chart repository.
                 properties:
                   chartName:
                     description: ChartName is the Helm chart name in that repository.
@@ -126,12 +129,11 @@ spec:
                   Typed as an object so the immutability rule on the spec can compare it.
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
-            required:
-            - source
             type: object
             x-kubernetes-validations:
             - message: spec.source is immutable; submit a new AIJob
-              rule: self.source == oldSelf.source
+              rule: has(self.source) == has(oldSelf.source) && (!has(self.source)
+                || self.source == oldSelf.source)
             - message: spec.values is immutable; submit a new AIJob
               rule: has(self.values) == has(oldSelf.values) && (!has(self.values)
                 || self.values == oldSelf.values)

@@ -39,6 +39,7 @@ const BASE_FACTS: Facts = {
   pvcs:                     [],
   storageClasses:           [],
   pytorchOperatorInstalled: true,
+  jobApi:                   true,
   chart:                    null,
   fetchErrors:              [],
   queueIndex:               {},

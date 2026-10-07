@@ -115,7 +115,7 @@ export default defineComponent({
       return inferenceProfileErrors(this.draft);
     },
     profilesRoute(): any {
-      return { name: `c-cluster-${ PRODUCT_NAME }-settings`, params: { cluster: this.$route.params.cluster }, query: { tab: 'profiles', type: 'inference' } };
+      return { name: `c-cluster-${ PRODUCT_NAME }-${ PROFILES_PAGE }`, params: { cluster: this.$route.params.cluster }, query: { type: 'inference' } };
     },
   },
 

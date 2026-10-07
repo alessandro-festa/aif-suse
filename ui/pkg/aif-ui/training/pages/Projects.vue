@@ -6,7 +6,6 @@ import BadgeState from '@components/BadgeState/BadgeState.vue';
 import LabeledInput from '@components/Form/LabeledInput/LabeledInput.vue';
 import LabeledSelect from '@shell/components/form/LabeledSelect.vue';
 import AsyncButton from '@shell/components/AsyncButton.vue';
-import ChartRepoBanner from '../components/ChartRepoBanner.vue';
 import { CapacitySummary, ProjectUsage, capacitySummary, gpuModels } from '../capacity';
 import {
   ENDPOINTS_PAGE, GPU_RESOURCE, PRODUCT_NAME, SUBMIT_PAGE, TYPES
@@ -43,7 +42,7 @@ export default defineComponent({
   // Set when the page is the Projects & Quotas tab of Settings: the tab strip carries the title.
   props:      { embedded: { type: Boolean, default: false } },
   components: {
-    Loading, Banner, BadgeState, LabeledInput, LabeledSelect, AsyncButton, ChartRepoBanner
+    Loading, Banner, BadgeState, LabeledInput, LabeledSelect, AsyncButton
   },
 
   data() {
@@ -1059,7 +1058,6 @@ export default defineComponent({
 
     <!-- Whether this cluster can install the chart at all. Above the quota tables because a
          cluster that cannot run a job is a more basic fact than how its GPUs are divided up. -->
-    <ChartRepoBanner />
 
     <Banner
       v-if="error"

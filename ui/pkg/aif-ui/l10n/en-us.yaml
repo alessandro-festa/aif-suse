@@ -1,5 +1,8 @@
 product:
   suseai: SUSE AI Factory
+nav:
+  group:
+    aifWorkloads: Workloads
 suseai:
   product:
     name: SUSE AI
@@ -21,6 +24,21 @@ suseai:
     missingApp: Repository not configured
     uncheckedApp: Repository status unknown
   pages:
+    computePools:
+      title: Compute Pools
+      description: Every cluster AI Factory can place work on, as a GPU or CPU-only pool, with the schedulers, GPU sharing and training runtime it runs.
+      loading: Discovering clusters...
+      empty: No clusters found.
+      cols:
+        cluster: Cluster
+        kind: Pool
+        nodes: Nodes
+        cpu: CPU
+        memory: Memory
+        gpuMemory: GPU memory
+        schedulers: Schedulers
+        sharing: GPU sharing
+        training: Training runtime
     about:
       title: About
       sections:

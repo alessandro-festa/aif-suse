@@ -55,8 +55,9 @@ const (
 	AIJobConditionExecutionCleaned = "ExecutionCleaned"
 )
 
-// AIJobSource is the chart the execution is installed from: a chart in a
-// Rancher ClusterRepo, the same reference an App-sourced AIWorkload uses.
+// AIJobSource is a custom chart the execution is installed from: a chart in a
+// Rancher ClusterRepo, the same reference an App-sourced AIWorkload uses. Without
+// one, the job installs the training chart built into the operator.
 type AIJobSource struct {
 	// RepoName is the Rancher ClusterRepo name.
 	// +kubebuilder:validation:MinLength=1
@@ -81,7 +82,7 @@ type AIJobRetention struct {
 
 // AIJobSpec is the whole statement of intent. Source and values are fixed at
 // creation: a change of intent is a new job.
-// +kubebuilder:validation:XValidation:rule="self.source == oldSelf.source",message="spec.source is immutable; submit a new AIJob"
+// +kubebuilder:validation:XValidation:rule="has(self.source) == has(oldSelf.source) && (!has(self.source) || self.source == oldSelf.source)",message="spec.source is immutable; submit a new AIJob"
 // +kubebuilder:validation:XValidation:rule="has(self.values) == has(oldSelf.values) && (!has(self.values) || self.values == oldSelf.values)",message="spec.values is immutable; submit a new AIJob"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.cancel) || !oldSelf.cancel || (has(self.cancel) && self.cancel)",message="spec.cancel cannot be undone"
 type AIJobSpec struct {
@@ -94,8 +95,11 @@ type AIJobSpec struct {
 	// Profile names the profile that chose the values. Informational.
 	// +optional
 	Profile string `json:"profile,omitempty"`
-	// Source is the chart to install.
-	Source AIJobSource `json:"source"`
+	// Source is a custom chart to install. Omit it to install the training chart
+	// built into the operator (charts/gpu-train-job at the operator's version),
+	// which needs no chart repository.
+	// +optional
+	Source *AIJobSource `json:"source,omitempty"`
 	// Values are the chart values as submitted.
 	// Typed as an object so the immutability rule on the spec can compare it.
 	// +kubebuilder:validation:Type=object

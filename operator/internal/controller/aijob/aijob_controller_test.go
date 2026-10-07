@@ -41,6 +41,7 @@ import (
 
 	"github.com/SUSE/aif-operator/api/v1alpha1"
 	helmClient "github.com/SUSE/aif-operator/internal/infra/helm"
+	"github.com/SUSE/aif-operator/internal/trainchart"
 )
 
 // fakeHelm stands in for the in-process Helm client: it remembers releases by
@@ -116,6 +117,8 @@ func newHarness(t *testing.T, objs ...client.Object) *harness {
 		Client: c, Scheme: s, APIReader: c,
 		HelmFor: func(string) (helmClient.HelmClient, error) { return h.helm, nil },
 		Now:     func() time.Time { return h.clock },
+		// The fixture installs a custom chart from gpu-train-charts, which has to be allowed.
+		AllowedCharts: []string{"gpu-train-charts/*"},
 	}
 	return h
 }
@@ -129,7 +132,7 @@ func aijob(name string, mutate ...func(*v1alpha1.AIJob)) *v1alpha1.AIJob {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, CreationTimestamp: metav1.NewTime(t0), Generation: 1},
 		Spec: v1alpha1.AIJobSpec{
 			Category: v1alpha1.WorkloadCategoryTraining,
-			Source:   v1alpha1.AIJobSource{RepoName: "gpu-train-charts", ChartName: "gpu-train-job", Version: "0.1.31"},
+			Source:   &v1alpha1.AIJobSource{RepoName: "gpu-train-charts", ChartName: "gpu-train-job", Version: "0.1.31"},
 			Values:   &apixv1.JSON{Raw: []byte(`{"job":{"nodes":1},"commonLabels":{"team":"a"}}`)},
 		},
 	}
@@ -320,6 +323,26 @@ func TestAChartOutsideTheAllowListFailsWithoutInstalling(t *testing.T) {
 	h2.r.AllowedCharts = []string{"gpu-train-charts/*"}
 	h2.reconcile("train-2")
 	assert.Len(t, h2.helm.ensured, 1)
+}
+
+func TestAJobWithoutASourceInstallsTheBuiltInChart(t *testing.T) {
+	h := newHarness(t, aijob("train-1", func(j *v1alpha1.AIJob) { j.Spec.Source = nil }))
+	h.r.AllowedCharts = nil
+	h.reconcile("train-1")
+	require.Len(t, h.helm.ensured, 1)
+	spec := h.helm.ensured[0]
+	assert.Equal(t, trainchart.Archive(), spec.ChartArchive)
+	assert.Empty(t, spec.ChartRef, "nothing to pull")
+	assert.Empty(t, spec.RepoURL)
+	assert.Equal(t, "train-1", spec.Values["commonLabels"].(map[string]interface{})[v1alpha1.AIJobJobIDLabel])
+}
+
+func TestACustomChartIsRefusedUnlessAllowed(t *testing.T) {
+	h := newHarness(t, aijob("train-1"))
+	h.r.AllowedCharts = nil
+	h.reconcile("train-1")
+	assert.Empty(t, h.helm.ensured)
+	assert.Equal(t, "InvalidSource", h.get("train-1").Status.Result.Reason)
 }
 
 func TestARenderFailureFailsTheJobButANetworkErrorRetries(t *testing.T) {

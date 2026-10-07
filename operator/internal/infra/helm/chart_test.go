@@ -95,3 +95,32 @@ func TestLoadLocalChartRejectsWhatIsNotAChart(t *testing.T) {
 		t.Error("loadLocalChart() accepted a file that is not a chart archive")
 	}
 }
+
+// A chart handed over in memory installs without a single pull: the operator's
+// built-in training chart has no registry to pull from.
+func TestEnsureReleaseInstallsAChartArchiveWithoutPulling(t *testing.T) {
+	path, err := chartutil.Save(testChart("2.1.0"), t.TempDir())
+	if err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	archive, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, counter := newCountingClient(t)
+	spec := testSpec("", nil)
+	spec.ChartRef = ""
+	spec.ChartArchive = archive
+
+	if err := c.EnsureRelease(t.Context(), spec); err != nil {
+		t.Fatalf("EnsureRelease() error = %v", err)
+	}
+	if counter.pulls != 0 {
+		t.Fatalf("pulls = %d, want 0 for an in-memory chart", counter.pulls)
+	}
+	rel, err := c.LastRelease(t.Context(), testRelName)
+	if err != nil || rel == nil {
+		t.Fatalf("LastRelease() = %v, %v; want the installed release", rel, err)
+	}
+}

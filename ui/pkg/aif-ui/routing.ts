@@ -1,4 +1,5 @@
 import { PRODUCT, PAGE_TYPES } from './config/suseai';
+import { trainingRoutes } from './training/routes';
 
 export default [
   // Product root → redirect to Overview
@@ -110,6 +111,14 @@ export default [
     meta:      { product: PRODUCT, category: 'workloads' }
   },
 
+  // Compute Pools - each cluster as a GPU or CPU-only pool, with its scheduling stack
+  {
+    name:      `c-cluster-${ PRODUCT }-${ PAGE_TYPES.POOLS }`,
+    path:      `/c/:cluster/${ PRODUCT }/${ PAGE_TYPES.POOLS }`,
+    component: () => import('./pages/ComputePools.vue'),
+    meta:      { product: PRODUCT, category: 'compute-pools' }
+  },
+
   // About page
   {
     name:      `c-cluster-${ PRODUCT }-${ PAGE_TYPES.ABOUT }`,
@@ -117,6 +126,9 @@ export default [
     component: () => import('./pages/About.vue'),
     meta:      { product: PRODUCT, category: 'about' }
   },
+
+  // Training Jobs, Queues & Quotas, Compute Profiles, and the submit/deploy flows
+  ...trainingRoutes,
 
   // Legacy routes (kept for compatibility during transition)
   {

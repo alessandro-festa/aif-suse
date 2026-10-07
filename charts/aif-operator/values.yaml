@@ -131,16 +131,15 @@ manager:
   #     - ghcr.io
   allowedRegistryHosts: []
 
-  # aijobAllowedCharts lists the charts an AIJob may install, as
-  # "<clusterRepo>/<chart>" or "<clusterRepo>/*". The operator installs an
-  # AIJob's release with its own service account, so leaving this empty (allow
-  # any chart from any ClusterRepo) lets anyone who can create an AIJob install
-  # anything those permissions allow. E.g.:
+  # AIJobs install the training chart built into the operator (charts/gpu-train-job
+  # at this version), so no chart repository is needed. aijobAllowedCharts opts in
+  # to custom charts an AIJob may install instead (spec.source), as
+  # "<clusterRepo>/<chart>" or "<clusterRepo>/*". The operator installs an AIJob's
+  # release with its own service account, so list only charts you trust. E.g.:
   #   aijobAllowedCharts:
-  #     - gpu-train-charts/gpu-train-job
-  # The default allows only the training chart released with this operator (see trainingChart).
-  aijobAllowedCharts:
-    - gpu-train-charts/gpu-train-job
+  #     - my-charts/my-train-job
+  # Empty (default): only the built-in chart.
+  aijobAllowedCharts: []
 
   env: []
 
@@ -260,16 +259,6 @@ aiExtension:
 # CRs under files/blueprints/ are created on install and reconciled on upgrade.
 # Disable to manage blueprints exclusively through other means without the
 # chart re-creating its defaults.
-# The training chart AIJobs install (charts/gpu-train-job), released with this chart at the same
-# version. The operator's allow-list, the training pages and the SDK find it in the ClusterRepo
-# named here. Set create to false to manage that ClusterRepo yourself, e.g. pointing at a mirror;
-# an existing ClusterRepo of that name is never replaced.
-trainingChart:
-  clusterRepo:
-    create: true
-    name: gpu-train-charts
-    url: oci://ghcr.io/suse/chart/gpu-train-job
-
 defaultBlueprints:
   enabled: true
   # When true, the default blueprints (and their catalog) are synced by Fleet

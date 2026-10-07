@@ -51,7 +51,7 @@ func aiJob(name string, phase aiplatformv1alpha1.AIJobPhase) *aiplatformv1alpha1
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a"},
 		Spec: aiplatformv1alpha1.AIJobSpec{
 			Category: aiplatformv1alpha1.WorkloadCategory("training"),
-			Source:   aiplatformv1alpha1.AIJobSource{RepoName: "training", ChartName: "train-job", Version: "1.0.0"},
+			Source:   &aiplatformv1alpha1.AIJobSource{RepoName: "training", ChartName: "train-job", Version: "1.0.0"},
 		},
 		Status: aiplatformv1alpha1.AIJobStatus{Phase: phase},
 	}

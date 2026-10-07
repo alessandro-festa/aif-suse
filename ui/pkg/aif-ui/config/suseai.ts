@@ -59,6 +59,12 @@ export const PAGE_TYPES = {
   REPOSITORIES: 'repositories',
   BLUEPRINTS:   'blueprints',
   WORKLOADS:    'workloads',
+  // Workloads group: the training pages keep their route names (training/config.ts); the virtual
+  // types are prefixed so Rancher's nav never mistakes one for a resource type of the same name.
+  TRAINING_JOBS: 'training-jobs',
+  PROJECTS:      'ai-projects',
+  PROFILES:      'compute-profiles',
+  POOLS:         'compute-pools',
   SETTINGS:     'settings',
   ABOUT:        'about',
 } as const;
@@ -100,10 +106,46 @@ export const VIRTUAL_TYPES: VirtualTypeConfig[] = [
   },
   {
     name:  PAGE_TYPES.WORKLOADS,
-    label: 'Workloads',
+    label: 'Deployments',
     route: {
       name:   `c-cluster-${ PRODUCT }-${ PAGE_TYPES.WORKLOADS }`,
       params: { product: PRODUCT, cluster: BLANK_CLUSTER },
+      meta:   { product: PRODUCT }
+    }
+  },
+  {
+    name:  PAGE_TYPES.TRAINING_JOBS,
+    label: 'Training Jobs',
+    route: {
+      name:   `c-cluster-${ PRODUCT }-jobs`,
+      params: { product: PRODUCT, cluster: MANAGEMENT_CLUSTER },
+      meta:   { product: PRODUCT }
+    }
+  },
+  {
+    name:  PAGE_TYPES.PROJECTS,
+    label: 'Projects',
+    route: {
+      name:   `c-cluster-${ PRODUCT }-projects`,
+      params: { product: PRODUCT, cluster: MANAGEMENT_CLUSTER },
+      meta:   { product: PRODUCT }
+    }
+  },
+  {
+    name:  PAGE_TYPES.PROFILES,
+    label: 'Compute Profiles',
+    route: {
+      name:   `c-cluster-${ PRODUCT }-profiles`,
+      params: { product: PRODUCT, cluster: MANAGEMENT_CLUSTER },
+      meta:   { product: PRODUCT }
+    }
+  },
+  {
+    name:  PAGE_TYPES.POOLS,
+    label: 'Compute Pools',
+    route: {
+      name:   `c-cluster-${ PRODUCT }-${ PAGE_TYPES.POOLS }`,
+      params: { product: PRODUCT, cluster: MANAGEMENT_CLUSTER },
       meta:   { product: PRODUCT }
     }
   },
@@ -132,13 +174,24 @@ export const NAV_WEIGHTS: Record<string, number> = {
   [PAGE_TYPES.OVERVIEW]:   50,
   [PAGE_TYPES.APPS]:       40,
   [PAGE_TYPES.BLUEPRINTS]: 30,
-  [PAGE_TYPES.WORKLOADS]:  20,
   [PAGE_TYPES.SETTINGS]:   10,
+  // Order inside the Workloads group
+  [PAGE_TYPES.WORKLOADS]:     5,
+  [PAGE_TYPES.TRAINING_JOBS]: 4,
+  [PAGE_TYPES.PROJECTS]:      3,
+  [PAGE_TYPES.PROFILES]:      2,
+  [PAGE_TYPES.POOLS]:         1,
   [PAGE_TYPES.ABOUT]:      5,
 };
 
 // === Basic Types Configuration ===
-export const BASIC_TYPES = [PAGE_TYPES.OVERVIEW, PAGE_TYPES.APPS, PAGE_TYPES.BLUEPRINTS, PAGE_TYPES.WORKLOADS, PAGE_TYPES.SETTINGS, PAGE_TYPES.ABOUT];
+export const BASIC_TYPES = [PAGE_TYPES.OVERVIEW, PAGE_TYPES.APPS, PAGE_TYPES.BLUEPRINTS, PAGE_TYPES.SETTINGS, PAGE_TYPES.ABOUT];
+
+// Workloads is a sub-menu: inference deployments plus the training/scheduling pages.
+// The label comes from l10n nav.group.aifWorkloads.
+export const WORKLOADS_GROUP = 'aifWorkloads';
+export const WORKLOADS_GROUP_WEIGHT = 20;
+export const WORKLOADS_GROUP_TYPES = [PAGE_TYPES.WORKLOADS, PAGE_TYPES.TRAINING_JOBS, PAGE_TYPES.PROJECTS, PAGE_TYPES.PROFILES, PAGE_TYPES.POOLS];
 
 // === Export defaults ===
 export default SUSEAI_PRODUCT;

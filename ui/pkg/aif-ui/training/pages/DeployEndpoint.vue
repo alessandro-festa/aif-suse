@@ -141,7 +141,7 @@ export default defineComponent({
 
     profilesRoute(): any {
       return {
-        name: `c-cluster-${ PRODUCT_NAME }-catalog`, params: { cluster: this.$route.params.cluster }, query: { tab: 'inference' }
+        name: `c-cluster-${ PRODUCT_NAME }-${ PROFILES_PAGE }`, params: { cluster: this.$route.params.cluster }, query: { type: 'inference' }
       };
     },
   },

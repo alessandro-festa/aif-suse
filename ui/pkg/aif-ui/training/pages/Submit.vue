@@ -11,14 +11,13 @@ import Checkbox from '@components/Form/Checkbox/Checkbox.vue';
 import YamlEditor from '@shell/components/YamlEditor.vue';
 import Tabbed from '@shell/components/Tabbed/index.vue';
 import Tab from '@shell/components/Tabbed/Tab.vue';
-import ChartRepoBanner from '../components/ChartRepoBanner.vue';
 import ProfilePanel from '../components/ProfilePanel.vue';
 import StatusPill from '../components/StatusPill.vue';
 import TabProblems from '../components/TabProblems.vue';
 import jsyaml from 'js-yaml';
 import { saferDump } from '@shell/utils/create-yaml';
 import {
-  CD_CHANNEL_DEVICE_CLASS, CHART_NAME, CHART_REPO, CHART_REPO_TYPE, GPU_DEVICE_CLASS, GPU_RESOURCE,
+  CD_CHANNEL_DEVICE_CLASS, CHART_NAME, GPU_DEVICE_CLASS, GPU_RESOURCE,
   ENDPOINTS_PAGE, JOB_LABEL, JOB_LABEL_VALUE, PRODUCT_NAME, PROFILES_PAGE, TYPES
 } from '../config';
 import {
@@ -52,6 +51,7 @@ const EMPTY_FACTS: Facts = {
   runaiInstalled:           false,
   runaiProjectNamespaces:   [],
   pytorchOperatorInstalled: false,
+  jobApi:                   false,
   localQueues:              [],
   clusterQueues:            [],
   kaiQueues:                [],
@@ -102,7 +102,6 @@ export default defineComponent({
     YamlEditor,
     Tabbed,
     Tab,
-    ChartRepoBanner,
     ProfilePanel,
     TabProblems,
     StatusPill,
@@ -113,7 +112,11 @@ export default defineComponent({
     return {
       form:            { ...DEFAULT_FORM } as Form,
       facts:           { ...EMPTY_FACTS } as Facts,
-      submitted:       null as null | { operationName: string; operationNamespace: string },
+      submitted:       false,
+      // Advanced: install a chart of your own instead of the one built into AI Factory.
+      customChart:     {
+        enabled: false, repoName: '', chartName: '', version: ''
+      },
       allConfigMaps:   [] as any[],
       allSecrets:      [] as any[],
       allPvcs:         [] as any[],
@@ -573,11 +576,6 @@ export default defineComponent({
       return true;
     },
 
-    /** Extra annotations on the Helm release. Pages built on this one (Deploy) add theirs here. */
-    releaseAnnotations(): Record<string, string> {
-      return {};
-    },
-
     /** What actually gets installed: the form's values, or the user's edited YAML if they changed it. */
     effectiveValues(): any {
       if (this.entryMode === 'yaml' && this.yamlSource === 'values' && this.valuesEdited) {
@@ -643,10 +641,10 @@ export default defineComponent({
         }
 
         // manifest tab: read it into the form, then submit from Form or Helm values
-        return this.yamlSource === 'values' ? !this.facts.chart : true;
+        return this.yamlSource === 'values' ? !this.facts.jobApi : true;
       }
 
-      return !this.summary.ok || !this.facts.chart;
+      return !this.summary.ok || !this.facts.jobApi;
     },
 
     /**
@@ -863,34 +861,27 @@ export default defineComponent({
     },
 
     onProfileSaved() {
-      this.$router.push({ name: `c-cluster-${ PRODUCT_NAME }-settings`, params: { cluster: this.$route.params.cluster }, query: { tab: 'profiles' } });
+      this.$router.push({ name: `c-cluster-${ PRODUCT_NAME }-${ PROFILES_PAGE }`, params: { cluster: this.$route.params.cluster } });
+    },
+
+    /** The custom chart, once all three fields are filled in; null = the built-in chart. */
+    customChartSource(): { repoName: string; chartName: string; version: string } | null {
+      const c = this.customChart;
+      const [repoName, chartName, version] = [c.repoName.trim(), c.chartName.trim(), c.version.trim()];
+
+      return c.enabled && repoName && chartName && version ? { repoName, chartName, version } : null;
+    },
+
+    onCustomChart() {
+      this.facts = { ...this.facts, chart: this.customChartSource() };
     },
 
     async loadFacts() {
       const facts: Facts = { ...EMPTY_FACTS, fetchErrors: [] };
 
-      // chart lookup through Rancher's catalog store
-      try {
-        await this.$store.dispatch('catalog/load', { force: true, reset: true });
-        const all: any[] = this.$store.getters['catalog/chart']({ chartName: CHART_NAME, multiple: true }) || [];
-        // pin to the configured repo; otherwise accept only an unambiguous single source
-        const pinned = CHART_REPO ? all.filter((c) => c.repoName === CHART_REPO && c.repoType === CHART_REPO_TYPE) : all;
-        const chart = pinned.length === 1 ? pinned[0] : null;
-
-        if (chart) {
-          const version = chart.versions?.[0]?.version;
-
-          facts.chart = {
-            repoName: chart.repoName, repoType: chart.repoType, version
-          };
-        } else if (all.length > 1) {
-          facts.fetchErrors.push(`chart ${ CHART_NAME } is published by ${ all.length } repositories (${ all.map((c) => c.repoName).join(', ') }); refusing to guess. Expected repo: ${ CHART_REPO || 'exactly one' }`);
-        } else if (all.length === 1 && CHART_REPO) {
-          facts.fetchErrors.push(`chart ${ CHART_NAME } found only in repo ${ all[0].repoName }, not in the expected ${ CHART_REPO }`);
-        }
-      } catch (e: any) {
-        facts.fetchErrors.push(`catalog: ${ e?.message || e }`);
-      }
+      // The operator installs the run from the chart built into it: no repository to look up.
+      facts.jobApi = !!this.$store.getters['cluster/schemaFor'](AIJOB_TYPE);
+      facts.chart = this.customChartSource();
 
       facts.kueueInstalled = !!this.$store.getters['cluster/schemaFor'](TYPES.LOCAL_QUEUE);
       facts.kaiInstalled = !!this.$store.getters['cluster/schemaFor'](TYPES.KAI_QUEUE);
@@ -1184,58 +1175,11 @@ export default defineComponent({
 
         return;
       }
-      if (!this.facts.chart) {
-        done(false);
-
-        return;
-      }
       try {
-        const { repoType, repoName, version } = this.facts.chart;
-
-        // With the AIJob API the run is a record the operator installs from and keeps afterwards.
-        if (this.$store.getters['cluster/schemaFor'](AIJOB_TYPE)) {
-          await this.$store.dispatch('cluster/create', aiJobFor({
-            name: this.form.releaseName, namespace: this.form.namespace, repoName, chartName: CHART_NAME, version, values: this.effectiveValues
-          })).then((job: any) => job.save());
-          this.submitted = { operationName: '', operationNamespace: '' };
-          done(true);
-          setTimeout(() => {
-            this.$router.push({
-              name: `c-cluster-${ PRODUCT_NAME }-${ ENDPOINTS_PAGE }`, params: { cluster: this.$route.params.cluster }, query: { tab: 'training' }
-            });
-          }, 1200);
-
-          return;
-        }
-
-        const repo = this.$store.getters['catalog/repo']({ repoType, repoName });
-
-        if (!repo) {
-          throw new Error(`Chart repository ${ repoName } not found`);
-        }
-
-        const input = {
-          charts: [{
-            chartName:   CHART_NAME,
-            version,
-            releaseName: this.form.releaseName,
-            annotations: {
-              'catalog.cattle.io/ui-source-repo-type': repoType,
-              'catalog.cattle.io/ui-source-repo':      repoName,
-              [`${ PRODUCT_NAME }/submitted-by`]:      'ai-factory-ui',
-              ...this.releaseAnnotations,
-            },
-            values: this.effectiveValues,
-          }],
-          noHooks:   false,
-          timeout:   '600s',
-          wait:      false,
-          namespace: this.form.namespace,
-        };
-
-        const res = await repo.doAction('install', input);
-
-        this.submitted = { operationName: res.operationName, operationNamespace: res.operationNamespace };
+        await this.$store.dispatch('cluster/create', aiJobFor({
+          name: this.form.releaseName, namespace: this.form.namespace, source: this.facts.chart, values: this.effectiveValues
+        })).then((job: any) => job.save());
+        this.submitted = true;
         done(true);
         setTimeout(() => {
           this.$router.push({
@@ -1274,11 +1218,6 @@ export default defineComponent({
       </p>
     </div>
 
-    <!-- Above the tabs, so it shows on Form too. "Job template not found" in preflight is this,
-         and the fix is one button; burying it on the Helm values tab meant the default tab named
-         the failure and offered nothing. -->
-    <ChartRepoBanner @added="loadFacts()" />
-
     <Banner
       v-if="error"
       color="error"
@@ -1287,8 +1226,46 @@ export default defineComponent({
     <Banner
       v-if="submitted"
       color="success"
-      :label="submitted.operationName ? `Submitted. Helm operation ${submitted.operationNamespace}/${submitted.operationName}. Redirecting to Deployments…` : `Submitted job ${form.releaseName}. Redirecting to Deployments…`"
+      :label="`Submitted job ${form.releaseName}. Redirecting to Training Jobs…`"
     />
+
+    <!-- The operator installs the training chart built into it. A chart of your own is an escape
+         hatch, kept out of the way: it must take the same values, and an administrator has to
+         allow it (operator manager.aijobAllowedCharts). -->
+    <details class="tj-custom-chart">
+      <summary>Advanced: custom job chart</summary>
+      <Checkbox
+        v-model:value="customChart.enabled"
+        label="Install a chart from a repository instead of the one built into AI Factory"
+        @update:value="onCustomChart"
+      />
+      <div
+        v-if="customChart.enabled"
+        class="row mt-10"
+      >
+        <div class="col span-4">
+          <LabeledInput
+            v-model:value="customChart.repoName"
+            label="ClusterRepo"
+            @update:value="onCustomChart"
+          />
+        </div>
+        <div class="col span-4">
+          <LabeledInput
+            v-model:value="customChart.chartName"
+            label="Chart"
+            @update:value="onCustomChart"
+          />
+        </div>
+        <div class="col span-4">
+          <LabeledInput
+            v-model:value="customChart.version"
+            label="Version"
+            @update:value="onCustomChart"
+          />
+        </div>
+      </div>
+    </details>
 
     <!-- Profile mode: a wizard (Configure, Profile, Pre-flight); Form/YAML belongs to Configure. -->
     <div
@@ -2066,16 +2043,12 @@ export default defineComponent({
             here overrides the form; everything else about the install is unchanged, so the run still
             appears on the Jobs page as a Helm release.
           </p>
-          <!-- Only the consequence for *this* tab. ChartRepoBanner at the top of the page already
-               explains the missing repo and offers to add it, on every tab. -->
           <Banner
-            v-if="!facts.chart"
+            v-if="!facts.jobApi"
             color="error"
           >
-            No repository this cluster can see publishes <code>{{ chartName }}</code>, so these
-            values cannot be installed — and neither can anything else from this page, because every
-            run is an install of that chart. Add the repository using the banner at the top of this
-            page.
+            This cluster has no AI Factory job API, so these values cannot be installed from here.
+            Submit training jobs from the cluster where AI Factory runs.
           </Banner>
           <YamlEditor
             :key="`values-${yamlNonce}`"
@@ -2289,7 +2262,7 @@ export default defineComponent({
       class="tj-wizard-foot"
     >
       <router-link
-        :to="{ name: `c-cluster-${ productName }-settings`, params: { cluster: $route.params.cluster }, query: { tab: 'profiles' } }"
+        :to="{ name: `c-cluster-${ productName }-${ profilesPage }`, params: { cluster: $route.params.cluster } }"
         class="btn role-secondary"
       >
         Cancel
@@ -2329,6 +2302,7 @@ export default defineComponent({
 
 .tj-submit { padding: 0 20px 20px; }
 .tj-header { margin-bottom: 10px; h1 { margin-bottom: 4px; } }
+.tj-custom-chart { margin-bottom: 12px; summary { cursor: pointer; color: var(--muted); } }
 .tj-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: 24px; align-items: start; }
 @media (max-width: 1100px) { .tj-grid { grid-template-columns: 1fr; } }
 // Profile mode: one column; each wizard step takes the full width.

@@ -228,8 +228,9 @@ func main() {
 	flag.StringVar(&apiBindAddr, "api-bind-address", ":8080", "The address the operator API binds to.")
 	var aijobAllowedCharts, aijobRepoURLOverrides, onlyControllers string
 	flag.StringVar(&aijobAllowedCharts, "aijob-allowed-charts", "",
-		"Comma-separated <clusterRepo>/<chart> (or <clusterRepo>/*) that an AIJob may install. AIJobs are "+
-			"installed with the operator's service account, so set this to bound them. Empty (default) allows all.")
+		"Comma-separated <clusterRepo>/<chart> (or <clusterRepo>/*): the custom charts an AIJob may install "+
+			"instead of the built-in training chart. AIJobs are installed with the operator's service account. "+
+			"Empty (default) allows only the built-in chart.")
 	flag.StringVar(&aijobRepoURLOverrides, "aijob-repo-url-overrides", "",
 		"Development only: comma-separated <clusterRepo>=<url> used instead of the ClusterRepo's spec.url, for "+
 			"running the operator outside the cluster where an in-cluster repository Service does not resolve.")
@@ -401,10 +402,6 @@ func main() {
 			if c = strings.TrimSpace(c); c != "" {
 				allowedCharts = append(allowedCharts, c)
 			}
-		}
-		if len(allowedCharts) == 0 {
-			setupLog.Info("WARNING: --aijob-allowed-charts is empty (allow-all): an AIJob can install any chart " +
-				"from any ClusterRepo with the operator's service account.")
 		}
 		overrides := map[string]string{}
 		for _, kv := range strings.Split(aijobRepoURLOverrides, ",") {

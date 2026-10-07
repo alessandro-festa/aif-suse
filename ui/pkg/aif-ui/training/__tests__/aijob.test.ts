@@ -1,19 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { aiJobFor, AIJOB_TYPE } from '../aijob';
 
-const input = {
-  name: 'train-a1b2c', namespace: 'team-a', repoName: 'training', chartName: 'train-job', version: '1.2.0'
-};
+const input = { name: 'train-a1b2c', namespace: 'team-a' };
 
 describe('aiJobFor', () => {
-  it('names the job after the run and points at the chart', () => {
+  it('names the job after the run and leaves the chart to the operator', () => {
     const j = aiJobFor({ ...input, values: { job: { nodes: 2 } } });
 
     expect(j.type).toBe(AIJOB_TYPE);
     expect(j.metadata).toEqual({ name: 'train-a1b2c', namespace: 'team-a' });
     expect(j.spec.category).toBe('training');
-    expect(j.spec.source).toEqual({ repoName: 'training', chartName: 'train-job', version: '1.2.0' });
+    expect('source' in j.spec).toBe(false);
     expect(j.spec.values.job).toEqual({ nodes: 2 });
+  });
+
+  it('points at a custom chart when one is given', () => {
+    const source = { repoName: 'training', chartName: 'train-job', version: '1.2.0' };
+
+    expect(aiJobFor({ ...input, source, values: {} }).spec.source).toEqual(source);
   });
 
   it('turns off the capacity check and keeps the other pre-flight settings', () => {

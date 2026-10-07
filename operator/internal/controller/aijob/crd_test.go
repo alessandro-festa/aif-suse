@@ -73,7 +73,7 @@ func TestCRDRules(t *testing.T) {
 	j := &v1alpha1.AIJob{
 		ObjectMeta: metav1.ObjectMeta{Name: "train-1", Namespace: ns},
 		Spec: v1alpha1.AIJobSpec{
-			Source: v1alpha1.AIJobSource{RepoName: "gpu-train-charts", ChartName: "gpu-train-job", Version: "0.1.31"},
+			Source: &v1alpha1.AIJobSource{RepoName: "gpu-train-charts", ChartName: "gpu-train-job", Version: "0.1.31"},
 			Values: &apixv1.JSON{Raw: []byte(`{"job":{"nodes":2}}`)},
 		},
 	}
@@ -90,6 +90,10 @@ func TestCRDRules(t *testing.T) {
 
 	err = update(func(x *v1alpha1.AIJob) { x.Spec.Source.Version = "0.1.32" })
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "spec.source is immutable")
+
+	err = update(func(x *v1alpha1.AIJob) { x.Spec.Source = nil })
+	require.Error(t, err, "dropping the source would switch to the built-in chart")
 	assert.Contains(t, err.Error(), "spec.source is immutable")
 
 	err = update(func(x *v1alpha1.AIJob) { x.Spec.Values = &apixv1.JSON{Raw: []byte(`{"job":{"nodes":4}}`)} })
@@ -114,4 +118,13 @@ func TestCRDRules(t *testing.T) {
 	bad.ResourceVersion, bad.Name = "", "bad"
 	bad.Spec.Source.ChartName = ""
 	assert.Error(t, c.Create(ctx, bad), "chartName is required")
+
+	builtIn := &v1alpha1.AIJob{ObjectMeta: metav1.ObjectMeta{Name: "built-in", Namespace: ns}}
+	require.NoError(t, c.Create(ctx, builtIn), "a job without a source installs the built-in chart")
+	cur := &v1alpha1.AIJob{}
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(builtIn), cur))
+	cur.Spec.Source = &v1alpha1.AIJobSource{RepoName: "r", ChartName: "c", Version: "1"}
+	err = c.Update(ctx, cur)
+	require.Error(t, err, "a source cannot be added later either")
+	assert.Contains(t, err.Error(), "spec.source is immutable")
 }

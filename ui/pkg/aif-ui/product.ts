@@ -7,7 +7,10 @@ import {
   VIRTUAL_TYPES,
   BASIC_TYPES,
   NAV_WEIGHTS,
-  PAGE_TYPES
+  PAGE_TYPES,
+  WORKLOADS_GROUP,
+  WORKLOADS_GROUP_WEIGHT,
+  WORKLOADS_GROUP_TYPES
 } from './config/suseai';
 import type { RancherStore } from './types/rancher-types';
 import { checkOperatorConnection } from './utils/operator-config';
@@ -24,7 +27,9 @@ let removeCrtbWatch:  (() => void) | null = null;
 export function init($plugin: IPlugin, store: RancherStore) {
   store.registerModule?.(PRODUCT, suseaiStore);
 
-  const { product, virtualType, basicType, weightType } = $plugin.DSL(store, PRODUCT);
+  const {
+    product, virtualType, basicType, weightType, weightGroup, setGroupDefaultType
+  } = $plugin.DSL(store, PRODUCT);
 
   product({
     icon:              'suseai',
@@ -96,6 +101,9 @@ export function init($plugin: IPlugin, store: RancherStore) {
   });
 
   basicType(BASIC_TYPES);
+  basicType(WORKLOADS_GROUP_TYPES, WORKLOADS_GROUP);
+  weightGroup(WORKLOADS_GROUP, WORKLOADS_GROUP_WEIGHT, true);
+  setGroupDefaultType(WORKLOADS_GROUP, PAGE_TYPES.WORKLOADS);
 
   // Prefetch local-namespace CRTBs for users who have CRTB schema access, so
   // the first navigation hits the Vuex cache rather than blocking on a network

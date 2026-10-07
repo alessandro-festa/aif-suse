@@ -163,6 +163,8 @@ jobs:
           # training chart: released with the operator, whose AIJobs install it
           yq -i '.version = strenv(VERSION) | .appVersion = strenv(VERSION)' charts/gpu-train-job/Chart.yaml
           sed -i -E "s|^(#\!BuildTag: charts/gpu-train-job:)${old_re}|\1${VERSION}|" charts/gpu-train-job/Chart.yaml
+          # the operator embeds the training chart; re-package it at the new version
+          make -C operator train-chart
 
           # ui packages (root version + package-lock root entries only)
           bump_json() {

@@ -18,7 +18,7 @@ import {
 } from '../preflight';
 import { availability } from '../quota';
 import {
-  Profile, PROFILE_ANNOTATION, profileChecks, profilesFrom, resolveForm, resolvedSections
+  Profile, profileChecks, profilesFrom, resolveForm, resolvedSections
 } from '../profiles';
 import {
   Readiness, readiness, resourceTotals, WorkersNow, workersSchedulableNow
@@ -152,10 +152,6 @@ export default defineComponent({
       },
     },
 
-    releaseAnnotations(): Record<string, string> {
-      return this.profile ? { [PROFILE_ANNOTATION]: this.profile.name } : {};
-    },
-
     can(): Record<string, boolean> {
       const open = new Set<string>(this.profile?.editable || []);
 
@@ -227,7 +223,7 @@ export default defineComponent({
     },
 
     profilesRoute(): any {
-      return { name: `c-cluster-${ PRODUCT_NAME }-catalog`, params: { cluster: this.$route.params.cluster }, query: { tab: 'training' } };
+      return { name: `c-cluster-${ PRODUCT_NAME }-${ PROFILES_PAGE }`, params: { cluster: this.$route.params.cluster } };
     },
   },
 
@@ -304,7 +300,6 @@ export default defineComponent({
         >View profile →</a>
       </section>
 
-      <ChartRepoBanner @added="loadFacts()" />
       <Banner
         v-if="error"
         color="error"
@@ -313,7 +308,7 @@ export default defineComponent({
       <Banner
         v-if="submitted"
         color="success"
-        :label="`Deployed. Helm operation ${submitted.operationNamespace}/${submitted.operationName}. Redirecting to Deployments…`"
+        :label="`Deployed job ${form.releaseName}. Redirecting to Training Jobs…`"
       />
 
       <div class="tj-grid">

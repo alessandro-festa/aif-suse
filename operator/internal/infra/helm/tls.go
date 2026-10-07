@@ -99,6 +99,12 @@ type chartFetcher func(setRegistry func(*registry.Client), opts *action.ChartPat
 // Both are in-cluster, so neither shows up as registry egress, which is what
 // this counter exists to track.
 func (c *helmClient) loadChart(setRegistry func(*registry.Client), opts *action.ChartPathOptions, spec ReleaseSpec) (*chart.Chart, error) {
+	// A chart handed over in memory (the operator's built-in training chart) is
+	// neither a pull nor a cache entry.
+	if len(spec.ChartArchive) > 0 {
+		return loadArchive(spec.ChartArchive)
+	}
+
 	host, chartLabel := pullRegistry(spec), pullChart(spec)
 
 	key, cacheable := chartCacheKey(spec)

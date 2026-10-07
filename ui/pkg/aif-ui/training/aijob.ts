@@ -1,15 +1,20 @@
 // A training run submitted as an AIJob: the durable record the operator installs the chart from and
 // keeps after the Job is gone. The form's chart values are the job's values; the operator adds the
-// job-id label. Where the cluster has no AIJob API the form installs the chart directly instead.
+// job-id label. Without a source the operator installs the training chart built into it, so no
+// chart repository is involved; a custom chart is an advanced option.
 
 export const AIJOB_TYPE = 'ai-factory.suse.com.aijob';
+
+export interface AIJobSource {
+  repoName: string;
+  chartName: string;
+  version: string;
+}
 
 export interface AIJobInput {
   name: string;
   namespace: string;
-  repoName: string;
-  chartName: string;
-  version: string;
+  source?: AIJobSource | null;
   values: any;
   displayName?: string;
 }
@@ -35,9 +40,7 @@ export function aiJobFor(i: AIJobInput): any {
       ...(i.displayName ? { displayName: i.displayName } : {}),
       category: 'training',
       ...(profile ? { profile } : {}),
-      source:   {
-        repoName: i.repoName, chartName: i.chartName, version: i.version
-      },
+      ...(i.source ? { source: { repoName: i.source.repoName, chartName: i.source.chartName, version: i.source.version } } : {}),
       values,
     },
   };

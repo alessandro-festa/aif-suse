@@ -159,10 +159,10 @@ export default defineComponent({
       return {
         submit:   { name: `c-cluster-${ PRODUCT_NAME }-${ SUBMIT_PAGE }`, params },
         training: {
-          name: `c-cluster-${ PRODUCT_NAME }-catalog`, params, query: { tab: 'training' }
+          name: `c-cluster-${ PRODUCT_NAME }-${ PROFILES_PAGE }`, params
         },
         inference: {
-          name: `c-cluster-${ PRODUCT_NAME }-catalog`, params, query: { tab: 'inference' }
+          name: `c-cluster-${ PRODUCT_NAME }-${ PROFILES_PAGE }`, params, query: { type: 'inference' }
         },
       };
     },
