@@ -254,3 +254,14 @@ func TestHAMiGPUsAreCountedAsDevicesAndSharesTakeNoWholeGPU(t *testing.T) {
 	assert.Equal(t, int64(1), st.Requested.GPUs, "the share takes a slot, not a GPU")
 	assert.Equal(t, []string{"hami"}, detectStack(nil, []corev1.Node{n}, nil).Sharing)
 }
+
+func TestATerminatingPodIsNoLongerAConsumer(t *testing.T) {
+	gone := pod("c1", corev1.PodRunning, "4", "8Gi", 0)
+	gone.Namespace, gone.Labels = "vision", map[string]string{v1alpha1.AIJobJobIDLabel: "deleted-run"}
+	now := metav1.Now()
+	gone.DeletionTimestamp = &now
+	st, err := poolStatus(v1alpha1.ComputePoolSpec{Kind: v1alpha1.ComputePoolKindCPU}, []corev1.Node{cpuNode("c1")}, []corev1.Pod{gone}, stack{}, nil)
+	require.NoError(t, err)
+	assert.Empty(t, st.Consumers, "its run was uninstalled; it is on its way out")
+	assert.Equal(t, "0", st.Requested.CPU.String())
+}

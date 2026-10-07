@@ -95,6 +95,14 @@ export async function createAIWorkload(store: any, workload: any): Promise<any> 
   });
 }
 
+/** Delete an AIJob on local; the operator then uninstalls the run where it was placed. */
+export async function deleteAIJob(store: any, namespace: string, name: string): Promise<void> {
+  await store.dispatch('cluster/request', {
+    url:    localURL(`${ AIF_API }/namespaces/${ encodeURIComponent(namespace) }/aijobs/${ encodeURIComponent(name) }`),
+    method: 'DELETE',
+  });
+}
+
 /** Create an AIJob on local. */
 export async function createAIJob(store: any, job: any): Promise<any> {
   const body = { ...job };

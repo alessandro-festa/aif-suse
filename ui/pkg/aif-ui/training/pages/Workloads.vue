@@ -8,7 +8,7 @@ import Loading from '@shell/components/Loading.vue';
 import Banner from '@components/Banner/Banner.vue';
 import { saferDump } from '@shell/utils/create-yaml';
 import { AIJOB_TYPE } from '../aijob';
-import { placedPods } from '../placement';
+import { deleteAIJob, placedPods } from '../placement';
 import RunDetail from '../components/RunDetail.vue';
 import VolumeFiles from '../components/VolumeFiles.vue';
 import YamlViewer, { YamlDoc } from '../components/YamlViewer.vue';
@@ -58,6 +58,8 @@ export default defineComponent({
       page:     1,
       pageSize: 10,
       menuFor:  '' as string, // row key whose ⋯ menu is open
+      // runs whose AIJob delete was sent: shown as Deleting until they are gone
+      deleting: {} as Record<string, boolean>,
       open:     {} as Record<string, boolean>, // expanded rows, by key
       yaml:     {
         open: false, title: '', docs: [] as YamlDoc[], loading: false, error: ''
@@ -341,9 +343,38 @@ export default defineComponent({
         }
       });
     },
+    /** The run is going: its AIJob delete was sent, or it is being finalized. */
+    isDeleting(r: Run): boolean {
+      return !!this.deleting[r.key] || !!r.obj?.metadata?.deletionTimestamp;
+    },
     remove(r: Run) {
       this.menuFor = '';
+      const ai = r.type === 'training' ? r.training?.aiJob : null;
+
+      if (ai) {
+        // An AIJob is deleted on local whatever cluster the page is on, and the operator uninstalls
+        // the run where it ran; a failure is shown in the dialog, never swallowed.
+        this.$store.dispatch('management/promptModal', {
+          component:      'GenericPrompt',
+          componentProps: {
+            title:       `Delete ${ r.name }?`,
+            body:        `The run is stopped and uninstalled ${ r.clusterId ? 'from the cluster it runs on' : '' }. Its record in ${ ai.metadata.namespace } is removed.`,
+            applyMode:   'delete',
+            actionColor: 'bg-error',
+            applyAction: async() => {
+              await deleteAIJob(this.$store, ai.metadata.namespace, ai.metadata.name);
+              this.deleting = { ...this.deleting, [r.key]: true };
+              setTimeout(() => this.load(), 1500);
+              setTimeout(() => this.load(), 6000);
+            },
+          },
+        });
+
+        return;
+      }
       if (!r.obj?.promptRemove) {
+        this.$store.dispatch('growl/error', { title: `Cannot delete ${ r.name }`, message: 'This run has nothing this page can delete.' });
+
         return;
       }
       r.obj.promptRemove();
@@ -564,7 +595,14 @@ export default defineComponent({
             <td>{{ r.namespace }}</td>
             <td>{{ r.resources }}</td>
             <td>
-              <span :class="['tj-state', stateClass(r.state)]"><i class="tj-dot" />{{ r.state }}</span>
+              <span
+                v-if="isDeleting(r)"
+                class="tj-state muted"
+              ><i class="tj-dot" />Deleting…</span>
+              <span
+                v-else
+                :class="['tj-state', stateClass(r.state)]"
+              ><i class="tj-dot" />{{ r.state }}</span>
             </td>
             <td :title="r.created">
               {{ ago(r.created) }}

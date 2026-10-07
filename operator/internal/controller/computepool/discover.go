@@ -249,7 +249,8 @@ func poolStatus(spec v1alpha1.ComputePoolSpec, nodes []corev1.Node, pods []corev
 	rcpu, rmem := resource.Quantity{}, resource.Quantity{}
 	by := map[string]*v1alpha1.ComputePoolConsumer{}
 	for _, p := range pods {
-		if !in[p.Spec.NodeName] || p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+		// a terminating pod is on its way out (its run uninstalled or reclaimed): not a consumer
+		if !in[p.Spec.NodeName] || p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed || p.DeletionTimestamp != nil {
 			continue
 		}
 		c := consumerOf(p, by)

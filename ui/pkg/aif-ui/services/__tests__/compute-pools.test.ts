@@ -112,6 +112,19 @@ describe('compute pool rows', () => {
     }]);
     expect(r.consumers[0]).toMatchObject({ project: 'vision', phase: 'Running', activity: '2% of its GPUs, idle' });
     expect(r.consumers[1].project).toBeUndefined();
+
+    const gone = poolRow({
+      ...h100,
+      status: {
+        ...h100.status,
+        consumers: [{
+          kind: 'run', namespace: 'vision', name: 'deleted-run', pods: 1, requested: { cpu: '1' }
+        }]
+      }
+    });
+
+    describeRuns([gone], []);
+    expect(gone.consumers[0].phase).toBe('Deleted, stopping');
   });
 
   it('name the clusters that have no pool yet', () => {

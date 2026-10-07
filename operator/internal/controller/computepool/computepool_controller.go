@@ -36,6 +36,8 @@ import (
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
+	"k8s.io/client-go/util/workqueue"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -249,6 +251,10 @@ var notLocal = predicate.NewPredicateFuncs(func(o ctrl.Object) bool { return o.G
 // SetupWithManager reconciles on cluster creation and deletion, on pool
 // creation and spec changes (so an administrator's new pool gets a status at
 // once), and every Resync. Status updates do not trigger a reconcile.
+// runSettleDelay is how long after a run's change its cluster is read a second
+// time: long enough for an uninstalled run's pods to have gone.
+const runSettleDelay = 10 * time.Second
+
 func (r *Reconciler) SetupWithManager(mgr controllerruntime.Manager) error {
 	cluster := &unstructured.Unstructured{}
 	cluster.SetGroupVersionKind(clusterGVK)
@@ -259,9 +265,43 @@ func (r *Reconciler) SetupWithManager(mgr controllerruntime.Manager) error {
 		}
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: p.Spec.ClusterID}}}
 	})
+	// A run placed on a cluster that is deleted, or changes phase, changes what its pools hold:
+	// read the cluster again now, and once more shortly after, when its pods have gone.
+	clusterOf := func(o ctrl.Object) (reconcile.Request, bool) {
+		j, ok := o.(*v1alpha1.AIJob)
+		if !ok || j.Status.Placement == nil || j.Status.Placement.ClusterID == "" || j.Status.Placement.ClusterID == rancher.LocalClusterID {
+			return reconcile.Request{}, false
+		}
+		return reconcile.Request{NamespacedName: types.NamespacedName{Name: j.Status.Placement.ClusterID}}, true
+	}
+	readTwice := func(q workqueue.TypedRateLimitingInterface[reconcile.Request], o ctrl.Object) {
+		if req, ok := clusterOf(o); ok {
+			q.Add(req)
+			q.AddAfter(req, runSettleDelay)
+		}
+	}
+	runCluster := handler.TypedFuncs[ctrl.Object, reconcile.Request]{
+		UpdateFunc: func(_ context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			readTwice(q, e.ObjectNew)
+		},
+		DeleteFunc: func(_ context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			readTwice(q, e.Object)
+		},
+	}
+	runMoved := predicate.Funcs{
+		CreateFunc:  func(event.CreateEvent) bool { return false },
+		DeleteFunc:  func(event.DeleteEvent) bool { return true },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			o, ok1 := e.ObjectOld.(*v1alpha1.AIJob)
+			n, ok2 := e.ObjectNew.(*v1alpha1.AIJob)
+			return ok1 && ok2 && (o.Status.Phase != n.Status.Phase || o.DeletionTimestamp.IsZero() != n.DeletionTimestamp.IsZero())
+		},
+	}
 	return controllerruntime.NewControllerManagedBy(mgr).
 		Named("computepool").
 		For(cluster, builder.WithPredicates(predicate.GenerationChangedPredicate{}, notLocal)).
 		Watches(&v1alpha1.ComputePool{}, toCluster, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&v1alpha1.AIJob{}, runCluster, builder.WithPredicates(runMoved)).
 		Complete(r)
 }

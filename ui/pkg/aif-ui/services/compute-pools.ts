@@ -242,16 +242,21 @@ export function describeRuns(rows: ComputePoolRow[], aiJobs: any[]): void {
   }
   for (const r of rows) {
     for (const c of r.consumers) {
-      const j = c.kind === 'run' ? byPlace.get(`${ r.clusterId }/${ c.namespace }/${ c.name }`) : null;
+      if (c.kind !== 'run') {
+        continue;
+      }
+      const j = byPlace.get(`${ r.clusterId }/${ c.namespace }/${ c.name }`);
 
       if (!j) {
+        // its record is gone: deleted, and its pods are still stopping
+        c.phase = 'Deleted, stopping';
         continue;
       }
       const ns = String(j.metadata?.namespace || '');
       const a = j.status?.activity;
 
       c.project = ns.startsWith('aif-') ? ns.slice(4) : ns;
-      c.phase = j.status?.phase || '';
+      c.phase = j.metadata?.deletionTimestamp ? 'Deleting' : j.status?.phase || '';
       if (a?.sampledAt) {
         c.activity = `${ a.utilisation ?? 0 }% of its ${ String(a.source || '').startsWith('gpu') ? 'GPUs' : 'CPU request' }${ a.idleSince ? ', idle' : '' }`;
       }

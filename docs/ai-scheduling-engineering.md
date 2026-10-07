@@ -681,6 +681,30 @@ the API types without checking `git diff` for `”`.
   carries hami.io/node-nvidia-register…".
 - Annotation removed and runs deleted afterwards.
 
+**F-63 [lab trap] Two AI Factory UIs loaded at once: "Workloads" twice, "Deployments" gone.** The
+lab ran the installed aif-ui 2.3.0-rc.3 (upstream nav, a top-level Workloads entry) beside the
+developer-loaded rc.4. Both register product `suseai`, so their menus merged by load order. This
+is the F-25 workaround's cost, and likely also behind earlier intermittent glitches. Fix on the
+lab: `helm upgrade aif-operator … --reuse-values --set aiExtension.enabled=false`, which removes
+the installed UIPlugin and leaves only the dev build. Undo with `aiExtension.enabled=true` when
+testing the packaged UI.
+
+**F-64 [bug, user report, fixed] A deleted run stayed in Jobs and in its pool.**
+- The two AIJobs never got a deletion timestamp: the UI's DELETE never left the browser. The
+  backend was fine; the same DELETE through Rancher removed both, and the finalizer uninstalled
+  train-err0m downstream.
+- The page's `remove()` returned silently when a row had no `promptRemove`. It now deletes an
+  AIJob itself: Rancher's GenericPrompt, then a DELETE on local
+  (`/k8s/clusters/local/apis/…/aijobs/…`). Any error shows in the dialog, and the row reads
+  "Deleting…" until it is gone. Other rows show an error instead of doing nothing.
+- The exact cause of the lost click is not proven; F-63 is the likely one.
+
+**F-65 [bug, fixed] Pools listed a deleted run for about a minute.** They are read on a 1-minute
+resync. Now the pool controller watches AIJobs: a placed run deleted, or changing phase, re-reads
+its cluster at once and 10 s later. Terminating pods are no longer consumers. Live: a deleted run
+left its pool's consumers in ~3 s (it was 65 s). In the UI, a run whose AIJob is gone reads
+"Deleted, stopping", and one being deleted reads "Deleting".
+
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator
 namespace. Discovery reuses it (D-15).
