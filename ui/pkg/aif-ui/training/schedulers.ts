@@ -3,7 +3,7 @@
 // as TypeScript; __tests__/schedulers-parity.test.ts fails when the two disagree. Change the YAML
 // first, then this.
 
-export type SchedulerType = 'none' | 'kueue' | 'kai' | 'runai';
+export type SchedulerType = 'none' | 'kueue' | 'kai' | 'runai' | 'volcano';
 
 export interface SchedulerBackend {
   display: string;
@@ -13,14 +13,16 @@ export interface SchedulerBackend {
   schedulerName: string;
   /**
    * How a run names its queue: a label on every pod template ('pod') or on the Job / PyTorchJob
-   * ('workload'). namespaceLabel: the namespace must carry it with the queue name too.
+   * ('workload'). as 'annotation': the key is a pod annotation (Volcano). default: the queue a run
+   * without one goes to. namespaceLabel: the namespace must carry it with the queue name too.
    */
-  queue: { target: 'pod' | 'workload'; label: string; namespaceLabel?: string } | null;
+  queue: { target: 'pod' | 'workload'; label: string; as?: 'annotation'; default?: string; namespaceLabel?: string } | null;
   /** scheduler: it holds the pods until it binds them. suspend: the workload is created suspended. */
   admission: 'scheduler' | 'suspend' | 'none';
-  gang: 'podgrouper' | 'admission' | 'none';
-  /** Where GPU entitlement lives: scheduling.run.ai/v2 Queues, Kueue ClusterQueues, or nowhere. */
-  quota: 'queue-tree' | 'clusterqueue' | 'none';
+  /** podgroup: the chart creates a Volcano PodGroup of minMember = nodes. */
+  gang: 'podgrouper' | 'admission' | 'podgroup' | 'none';
+  /** Where GPU entitlement lives: scheduling.run.ai/v2 Queues, Kueue ClusterQueues, Volcano Queues, or nowhere. */
+  quota: 'queue-tree' | 'clusterqueue' | 'volcano-queue' | 'none';
   /** GPU-sharing modes it places. kai-fraction: the pod's gpu-memory annotation. */
   sharing: 'kai-fraction'[];
 }
@@ -66,6 +68,18 @@ export const SCHEDULER_BACKENDS: Record<SchedulerType, SchedulerBackend> = {
     quota:         'queue-tree',
     sharing:       [],
   },
+  volcano: {
+    display:       'Volcano',
+    detect:        { group: 'scheduling.volcano.sh' },
+    schedulerName: 'volcano',
+    queue:         {
+      target: 'pod', label: 'scheduling.volcano.sh/queue-name', as: 'annotation', default: 'default'
+    },
+    admission: 'scheduler',
+    gang:      'podgroup',
+    quota:     'volcano-queue',
+    sharing:   [],
+  },
 };
 
 export function backendOf(s: SchedulerType): SchedulerBackend {
@@ -91,7 +105,19 @@ export function placesGpuMemoryShares(s: SchedulerType): boolean {
 export function podQueueLabel(s: SchedulerType): string {
   const q = backendOf(s).queue;
 
-  return q?.target === 'pod' ? q.label : '';
+  return q?.target === 'pod' && q.as !== 'annotation' ? q.label : '';
+}
+
+/** The pod annotation naming the queue, for a backend that binds by pod annotation (Volcano); '' otherwise. */
+export function podQueueAnnotation(s: SchedulerType): string {
+  const q = backendOf(s).queue;
+
+  return q?.target === 'pod' && q.as === 'annotation' ? q.label : '';
+}
+
+/** The queue a run goes to when it names none; '' when it must name one. */
+export function defaultQueue(s: SchedulerType): string {
+  return backendOf(s).queue?.default || '';
 }
 
 /** The label on the Job / PyTorchJob naming the queue, for a backend that binds the workload; '' otherwise. */
@@ -110,6 +136,6 @@ export function backendForSchedulerName(name: string | undefined): SchedulerType
   return (Object.keys(SCHEDULER_BACKENDS) as SchedulerType[]).find((k) => SCHEDULER_BACKENDS[k].schedulerName === name);
 }
 
-/** Every schedulerName that holds pods for a queue (kai-scheduler, runai-scheduler). */
+/** Every schedulerName that holds pods for a queue (kai-scheduler, runai-scheduler, volcano). */
 export const POD_HOLDING_SCHEDULERS: string[] = (Object.keys(SCHEDULER_BACKENDS) as SchedulerType[])
   .filter(holdsPods).map((k) => SCHEDULER_BACKENDS[k].schedulerName);

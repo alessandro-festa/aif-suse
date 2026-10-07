@@ -58,8 +58,17 @@ workload (schedulers.yaml): Kueue.
 {{- define "gpu-train-job.queueWorkloadLabels" -}}
 {{- $queue := (include "gpu-train-job.backend" . | fromYaml).queue -}}
 {{- if and $queue (eq $queue.target "workload") -}}
-{{ $queue.label }}: {{ required (printf "scheduler.queue is required when scheduler.type=%s" .Values.scheduler.type) .Values.scheduler.queue | quote }}
+{{ $queue.label }}: {{ include "gpu-train-job.queueName" . | quote }}
 {{- end -}}
+{{- end -}}
+
+{{/*
+The queue a run is bound to: scheduler.queue, else the backend's default queue (schedulers.yaml),
+else an error.
+*/}}
+{{- define "gpu-train-job.queueName" -}}
+{{- $queue := (include "gpu-train-job.backend" . | fromYaml).queue -}}
+{{- .Values.scheduler.queue | default ($queue.default | default "") | required (printf "scheduler.queue is required when scheduler.type=%s" .Values.scheduler.type) -}}
 {{- end -}}
 
 {{/*

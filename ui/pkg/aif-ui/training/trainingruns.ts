@@ -6,7 +6,7 @@ import { JOB_LABEL, JOB_LABEL_VALUE } from './config';
 import { placementOf, podsOfPlacedJob } from './placement';
 import { KAI_QUEUE_LABEL } from './quota';
 import {
-  backendForSchedulerName, POD_HOLDING_SCHEDULERS, podQueueLabel, workloadQueueLabel
+  backendForSchedulerName, POD_HOLDING_SCHEDULERS, podQueueAnnotation, podQueueLabel, workloadQueueLabel
 } from './schedulers';
 
 export interface TrainingInput {
@@ -46,11 +46,13 @@ export interface TrainingRun {
  * word `project`. That last one is generic enough to mean something else entirely, so it only
  * counts on a pod the Run:AI scheduler owns.
  */
-export function queueOf(jobLabels: Record<string, string>, podLabels: Record<string, string>, schedulerName: string): string {
-  const ownLabel = podQueueLabel(backendForSchedulerName(schedulerName) || 'none');
+export function queueOf(jobLabels: Record<string, string>, podLabels: Record<string, string>, schedulerName: string, podAnnotations: Record<string, string> = {}): string {
+  const backend = backendForSchedulerName(schedulerName) || 'none';
+  const ownLabel = podQueueLabel(backend);
+  const ownAnnotation = podQueueAnnotation(backend);
 
   return jobLabels[workloadQueueLabel('kueue')] || podLabels[KAI_QUEUE_LABEL] ||
-    (ownLabel ? podLabels[ownLabel] : '') || '';
+    (ownLabel ? podLabels[ownLabel] : '') || (ownAnnotation ? podAnnotations[ownAnnotation] : '') || '';
 }
 
 function jobRows(i: TrainingInput): TrainingRun[] {
@@ -90,7 +92,7 @@ function jobRows(i: TrainingInput): TrainingRun[] {
         nodes:       j.spec?.completions || 1,
         image:       j.spec?.template?.spec?.containers?.[0]?.image || '',
         scheduler:   j.spec?.template?.spec?.schedulerName || 'default-scheduler',
-        queue:       queueOf(j.metadata?.labels || {}, j.spec?.template?.metadata?.labels || {}, j.spec?.template?.spec?.schedulerName || ''),
+        queue:       queueOf(j.metadata?.labels || {}, j.spec?.template?.metadata?.labels || {}, j.spec?.template?.spec?.schedulerName || '', j.spec?.template?.metadata?.annotations || {}),
         age:         j.metadata.creationTimestamp,
         pods,
       };
@@ -137,7 +139,7 @@ function pytorchRows(i: TrainingInput): TrainingRun[] {
         nodes:       replicas,
         image:       master.containers?.[0]?.image || '',
         scheduler:   master.schedulerName || 'default-scheduler',
-        queue:       queueOf(j.metadata?.labels || {}, specs.Master?.template?.metadata?.labels || {}, master.schedulerName || ''),
+        queue:       queueOf(j.metadata?.labels || {}, specs.Master?.template?.metadata?.labels || {}, master.schedulerName || '', specs.Master?.template?.metadata?.annotations || {}),
         age:         j.metadata.creationTimestamp,
         pods,
       };

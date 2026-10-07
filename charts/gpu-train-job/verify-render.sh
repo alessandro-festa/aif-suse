@@ -124,6 +124,30 @@ else
   printf '✗ %s\n' "CPU-only run renders GPU pieces"; fail=1
 fi
 
+# Volcano: a PodGroup of minMember = nodes in the run's queue (default "default"), and every pod
+# names it, carries the queue annotation and is handed to the volcano scheduler.
+for kind in job pytorchjob; do
+  for q in "" team-a; do
+    out=$(helm template t . --set scheduler.type=volcano ${q:+--set scheduler.queue=$q} --set job.kind=$kind --set job.nodes=2 2>&1)
+    if printf '%s\n' "$out" | Q="${q:-default}" python3 -c '
+import os, sys, yaml
+docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+pg = next(d for d in docs if d["kind"] == "PodGroup")
+assert pg["metadata"]["name"] == "t" and pg["spec"] == {"minMember": 2, "queue": os.environ["Q"]}, pg["spec"]
+d = next(d for d in docs if d["kind"] in ("Job", "PyTorchJob"))
+tpls = [d["spec"]["template"]] if d["kind"] == "Job" else [r["template"] for r in d["spec"]["pytorchReplicaSpecs"].values()]
+for t in tpls:
+    a = t["metadata"]["annotations"]
+    assert a["scheduling.k8s.io/group-name"] == "t" and a["scheduling.volcano.sh/queue-name"] == os.environ["Q"], a
+    assert t["spec"]["schedulerName"] == "volcano"
+    assert "scheduling.volcano.sh/queue-name" not in t["metadata"]["labels"]'; then
+      printf '✓ %s\n' "volcano $kind queue=${q:-default}: PodGroup minMember 2, pods name it"
+    else
+      printf '✗ %s\n' "volcano $kind queue=${q:-default}: PodGroup or pod binding wrong"; fail=1
+    fi
+  done
+done
+
 echo
 [ $fail -eq 0 ] && echo "chart render checks passed" || echo "chart render checks FAILED"
 exit $fail

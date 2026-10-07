@@ -103,6 +103,9 @@ scheduler:
   #         event, because nothing is running under the name kai-scheduler to claim it.
   #         The namespace must also carry the label runai/queue: <queue>; Run:AI's pod webhooks are
   #         scoped to namespaces that have it, and without it the pod is admitted unqueued.
+  # volcano — schedulerName volcano; the run gets a PodGroup (minMember = job.nodes) in queue
+  #         scheduler.queue (default: Volcano's "default" queue), so a multi-node run starts
+  #         all-or-nothing.
   type: none
   queue: ""
   priorityClassName: ""

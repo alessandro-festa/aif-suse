@@ -238,3 +238,22 @@ func TestExecutionNameFollowsTheChartFullname(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// volcanoPod is a pod Volcano has not placed yet: it names its queue in an annotation, not a label.
+func volcanoPod(name, node string) corev1.Pod {
+	return corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Annotations: map[string]string{"scheduling.volcano.sh/queue-name": "team-a", "scheduling.k8s.io/group-name": "train-1"}},
+		Spec:       corev1.PodSpec{SchedulerName: "volcano", NodeName: node},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending},
+	}
+}
+
+func TestAVolcanoRunWaitingInItsQueueIsQueued(t *testing.T) {
+	assert.True(t, schedulerHeld([]corev1.Pod{volcanoPod("p0", ""), volcanoPod("p1", "")}), "Volcano holds the gang until all can be placed")
+	assert.False(t, schedulerHeld([]corev1.Pod{volcanoPod("p0", "node-a"), volcanoPod("p1", "")}), "a pod is bound: no longer held")
+
+	st := &v1alpha1.AIJobStatus{}
+	applyObservation(st, observed{execution: execution("Job"), pods: []corev1.Pod{volcanoPod("p0", "")}})
+	require.NotNil(t, st.Queue)
+	assert.Equal(t, "team-a", st.Queue.KAIQueue, "read from the annotation")
+}

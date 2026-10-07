@@ -61,6 +61,8 @@ const EMPTY_FACTS: Facts = {
   localQueues:              [],
   clusterQueues:            [],
   kaiQueues:                [],
+  volcanoInstalled:         false,
+  volcanoQueues:            [],
   devicePluginGpus:         0,
   draDevices:               0,
   gpuDeviceMemory:          0,
@@ -223,6 +225,9 @@ export default defineComponent({
 
         out.push({ label: `${ backendOf(value).display } (gang + fair share)`, value });
       }
+      if (this.facts.volcanoInstalled) {
+        out.push({ label: 'Volcano (gang + queues)', value: 'volcano' });
+      }
 
       return out;
     },
@@ -236,6 +241,12 @@ export default defineComponent({
         return this.facts.localQueues
           .filter((q) => q.namespace === this.form.namespace)
           .map((q) => ({ label: `${ q.name }  →  ${ q.clusterQueue }`, value: q.name }));
+      }
+      if (this.form.scheduler === 'volcano') {
+        // its default queue first, so a run that names none goes where the chart would put it
+        return [...(this.facts.volcanoQueues || [])]
+          .sort((a, b) => (a.name === 'default' ? -1 : b.name === 'default' ? 1 : a.name.localeCompare(b.name)))
+          .map((q) => ({ label: `${ q.name }  ·  ${ q.state || 'Open' }${ q.gpuCapability !== null ? `  ·  up to ${ q.gpuCapability } GPU` : '' }`, value: q.name }));
       }
       if (usesQueueTree(this.form.scheduler)) {
         // Only leaf queues can run workloads, so parents are not offered. Each option carries its
@@ -999,6 +1010,14 @@ export default defineComponent({
 
       facts.kueueInstalled = !!this.$store.getters['cluster/schemaFor'](TYPES.LOCAL_QUEUE);
       facts.kaiInstalled = !!this.$store.getters['cluster/schemaFor'](TYPES.KAI_QUEUE);
+      facts.volcanoInstalled = !!this.$store.getters['cluster/schemaFor'](TYPES.VOLCANO_QUEUE);
+      if (facts.volcanoInstalled) {
+        facts.volcanoQueues = (await this.safeFindAll(TYPES.VOLCANO_QUEUE, 'Volcano queues')).map((q: any) => ({
+          name:          q.metadata.name,
+          state:         q.status?.state || '',
+          gpuCapability: q.spec?.capability?.['nvidia.com/gpu'] !== undefined ? Number(q.spec.capability['nvidia.com/gpu']) : null,
+        }));
+      }
       // Same CRD under both products, so the queue type cannot distinguish them. The run.ai API
       // group only exists under commercial Run:AI, and it is what decides schedulerName below.
       facts.runaiInstalled = !!this.$store.getters['cluster/schemaFor'](TYPES.RUNAI_CLUSTER);

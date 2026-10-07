@@ -31,10 +31,11 @@ Branch: `aijob-scheduling` on the alessandro-festa fork (`origin`), based on SUS
 | IE | Inference engines: vLLM, Ollama (App Collection), llama.cpp, SGLang ("Inference Engines Apps" custom repo) as inference profiles; inference deploy in an AI project's pool | done; llama.cpp verified end to end on downstream-1; Apps page and deploy page to try in the browser | `50499978`, `06769b24`, `bd31a1cd` |
 | 5a | Idle reclaim, operator: activity sampled through the proxy (kubelet CPU, DCGM GPU), pool reclaim settings, Suspend/Terminate/Never per run, hand-off to the waiting run | done, verified on the lab (CPU) | — |
 | 5b | Idle reclaim, UI: pool reclaim settings, run activity and reclaims, reclaim policy in profiles/Submit | built; unit-tested; to try in the browser | — |
-| 6 | Volcano backend | — | — |
+| 6 | Volcano backend: table entry, PodGroup gang, queue by annotation, pre-flight, Submit, observe | done, verified on the lab (Volcano 1.15.3 on downstream-1) | — |
 | 7 | HAMi on the GPU-sharing axis | — | — |
 | 8 | Catalog entries (KAI, Kueue, Volcano, HAMi; Kubeflow training-only preset) + "install a scheduler here" | — | — |
 | 9 | Generic `AIJob.status.queue`; Trainer v2 `TrainJob` | — | — |
+| 10 | Exploration: training frameworks beyond PyTorch (JAX, TensorFlow, DeepSpeed); see design doc §8.1 | — (asked 2026-10-07) | — |
 
 ---
 
@@ -334,6 +335,19 @@ The page reads everything from local and refreshes every 30 s.
 AIF_RESULT. With `HOLD_SECONDS` it then sits idle (env, editable), which makes it the reclaim test.
 Its reclaim policy is Suspend.
 
+**D-49 Volcano binds by annotation and gangs by PodGroup.** schedulers.yaml gains:
+- `queue.as: annotation` and `queue.default`;
+- gang `podgroup`: the chart renders a `scheduling.volcano.sh/v1beta1` PodGroup of
+  `minMember = job.nodes`, in the run's queue (default `default`), and every pod carries
+  `scheduling.k8s.io/group-name` and `scheduling.volcano.sh/queue-name`;
+- quota `volcano-queue`.
+
+The pod annotation keeps one rule for "held by its scheduler" (F-14), and the operator reads queues
+from labels or annotations. The chart pre-flight checks that Volcano is installed and that the queue
+exists and is Open. The UI checks the same, plus a queue's `nvidia.com/gpu` capability. Renders for
+none/kueue/kai/runai stay byte-identical (32-case matrix). `status.queue.kaiQueue` carries
+Volcano's queue too, until the generic status.queue (Phase 9).
+
 ---
 
 ## 3. Findings
@@ -615,6 +629,15 @@ because nothing is installed there**: no KAI, Kueue, Volcano, HAMi or Kubeflow o
 Runs used the built-ins (kube-scheduler after AI Factory's queue; plain Kubernetes Jobs). The
 page now names the built-ins with dashed tags ("Kubernetes default", "Whole GPUs", "Kubernetes
 Job") instead of "—". Installing an add-on per cluster is Phase 8.
+
+**F-58 [fact] Lab check (P6), Volcano 1.15.3 on downstream-1** (helm `volcano-sh/volcano`,
+namespace `volcano-system`, left installed):
+- Pool discovery reported c-xvstz-cpu's scheduler as `volcano`.
+- `volcano-gang`, 2 pods × 1 CPU in queue `default`: one PodGroup with minMember 2, both pods
+  started together, and the run Succeeded.
+- `volcano-held`, 2 pods × 1.5 CPU in a queue capped at 2 CPU: PodGroup Inqueue, both pods Pending,
+  run phase Queued (queue `small`). After raising the capability to 4, the gang started and
+  Succeeded.
 
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator

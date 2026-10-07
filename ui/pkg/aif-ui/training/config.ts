@@ -33,6 +33,7 @@ export const TYPES = {
   CLUSTER_QUEUE:           'kueue.x-k8s.io.clusterqueue',
   WORKLOAD:                'kueue.x-k8s.io.workload',
   KAI_QUEUE:               'scheduling.run.ai.queue',
+  VOLCANO_QUEUE:           'scheduling.volcano.sh.queue',
   // Run:AI is built on KAI and ships the same queue CRD, so KAI_QUEUE cannot tell them apart. The
   // commercial product additionally installs the run.ai API group; KAI on its own does not. This
   // is the only difference the dashboard can see, and it decides schedulerName -- pick wrong and

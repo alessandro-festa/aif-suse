@@ -65,10 +65,13 @@ type BackendProbe struct {
 }
 
 // BackendQueue is how a run names its queue: a Label on the pods ("pod") or on
-// the Job / PyTorchJob ("workload").
+// the Job / PyTorchJob ("workload"). As "annotation" makes Label a pod
+// annotation key; Default is the queue of a run that names none.
 type BackendQueue struct {
 	Target         string `json:"target"`
 	Label          string `json:"label"`
+	As             string `json:"as,omitempty"`
+	Default        string `json:"default,omitempty"`
 	NamespaceLabel string `json:"namespaceLabel,omitempty"`
 }
 

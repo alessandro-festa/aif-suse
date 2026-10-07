@@ -42,19 +42,26 @@ const (
 	completionIndex = "batch.kubernetes.io/job-completion-index"
 )
 
-// podQueueLabels maps a schedulerName to the pod label that names its queue, for
-// the backends that hold pods unplaced until their queue has room (KAI, Run:AI).
-// From the built-in chart's schedulers.yaml, embedded at build time, so a failure
-// to read it is a build defect (TestBackendsAreReadFromTheChart), not a runtime one.
-var podQueueLabels = func() map[string]string {
+// podQueueKey is where a pod names its queue: a label, or an annotation.
+type podQueueKey struct {
+	key        string
+	annotation bool
+}
+
+// podQueueLabels maps a schedulerName to where its pods name their queue, for
+// the backends that hold pods unplaced until their queue has room (KAI, Run:AI,
+// Volcano). From the built-in chart's schedulers.yaml, embedded at build time, so
+// a failure to read it is a build defect (TestBackendsAreReadFromTheChart), not a
+// runtime one.
+var podQueueLabels = func() map[string]podQueueKey {
 	backends, err := trainchart.Backends()
 	if err != nil {
 		panic(err)
 	}
-	m := map[string]string{}
+	m := map[string]podQueueKey{}
 	for _, b := range backends {
 		if b.SchedulerName != "" && b.Admission == "scheduler" && b.Queue != nil && b.Queue.Target == "pod" {
-			m[b.SchedulerName] = b.Queue.Label
+			m[b.SchedulerName] = podQueueKey{key: b.Queue.Label, annotation: b.Queue.As == "annotation"}
 		}
 	}
 	return m
@@ -152,8 +159,16 @@ func derivePhase(current v1alpha1.AIJobPhase, installed bool, o observed) v1alph
 // pods in, from the pod label that backend reads.
 func podQueue(pods []corev1.Pod) string {
 	for _, p := range pods {
-		if label, ok := podQueueLabels[p.Spec.SchedulerName]; ok && p.Labels[label] != "" {
-			return p.Labels[label]
+		k, ok := podQueueLabels[p.Spec.SchedulerName]
+		if !ok {
+			continue
+		}
+		on := p.Labels
+		if k.annotation {
+			on = p.Annotations
+		}
+		if on[k.key] != "" {
+			return on[k.key]
 		}
 	}
 	return ""

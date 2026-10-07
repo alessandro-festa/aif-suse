@@ -248,6 +248,30 @@ the local scheduler (KAI, Kueue, Volcano, Run:ai).
 | 7 | HAMi on the sharing axis | a fractional job lands via HAMi |
 | 8 | Catalog entries (KAI, Kueue, Volcano, HAMi; Kubeflow training-only preset) + "install a scheduler on this cluster" empty state | install from Compute Pools |
 | 9 | Generic `AIJob.status.queue`; Trainer v2 `TrainJob` template + observer | — |
+| 10 | **Exploration: training frameworks beyond PyTorch** — JAX, TensorFlow, DeepSpeed (§8.1) | a findings section, and per framework a smoke-test profile that runs on the lab or a reason it cannot |
+
+### 8.1 Phase 10: frameworks beyond PyTorch (exploration)
+
+The chart runs one Indexed Job (or a PyTorchJob) and gives every pod its rank and the rendezvous
+through the headless Service (`JOB_COMPLETION_INDEX`, `NNODES`, `NPROC_PER_NODE`, rank 0's DNS
+name). The exploration asks, per framework: what multi-node needs, whether the plain Indexed Job
+can supply it (a new `job.mode`), or whether a Kubeflow CRD is the better runtime, and which images
+are supported.
+
+| Framework | How it goes multi-node | Plain Indexed Job? | Kubeflow runtime | To find out |
+|---|---|---|---|---|
+| **DeepSpeed** | PyTorch underneath; `deepspeed` launcher (pdsh/MPI) or plain `torchrun` with a DeepSpeed config | likely already works in `torchrun` mode with DeepSpeed in the image | Trainer v2 ships a DeepSpeed runtime (MPI); Training Operator v1 has none (MPIJob) | image with DeepSpeed + its CUDA ops; ZeRO-3 / offload on our GPUs; a `deepspeed` mode or just a profile |
+| **JAX** | `jax.distributed.initialize(coordinator, num_processes, process_id)` | yes: coordinator = rank 0's Service name, `process_id` = completion index | Training Operator v1.9 `JAXJob`; Trainer v2 JAX runtime | CUDA JAX images (SUSE Application Collection? NGC); a `jax` mode that sets the three values |
+| **TensorFlow** | `TF_CONFIG` (cluster spec + task index) for MultiWorkerMirroredStrategy | yes, if the chart builds `TF_CONFIG` from the index and the Service names | Training Operator v1 `TFJob` | TF images and CUDA versions; whether TF is still worth first-class support next to PyTorch/JAX |
+
+Also in scope:
+- which of these the SUSE Application Collection or the AI Factory catalog ships;
+- how pool discovery should report them (`status.training` already lists `training-operator` and
+  `trainer-v2`; JAXJob / TFJob support is a version of the former);
+- what the UI's Submit form and profiles need (framework, mode, image limits);
+- one CPU smoke test per framework, like `cpu-smoke`, so it runs on CPU pools without a GPU.
+
+Out of scope until decided: changing the default runtime away from PyTorch.
 
 Lab: kind-sims-datacenter (management) plus downstream-1 and downstream-2. Target is a different
 scheduler on each downstream (e.g. KAI on one, Kueue CPU-only on the other).

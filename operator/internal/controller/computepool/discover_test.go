@@ -136,6 +136,7 @@ func TestDetectStackReadsTheChartsSchedulerTable(t *testing.T) {
 	kai := detectStack([]string{"scheduling.run.ai", "kueue.x-k8s.io"}, nil, backends)
 	assert.Equal(t, []string{"kai", "kueue"}, kai.Schedulers)
 	assert.Equal(t, []string{"kai-fraction"}, kai.Sharing)
+	assert.Equal(t, []string{"volcano"}, detectStack([]string{"scheduling.volcano.sh", "batch.volcano.sh"}, nil, backends).Schedulers)
 
 	hami := corev1.Node{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{hamiNodeAnnotation: "GPU-0,10,24576,100,NVIDIA-L4,0,true"}}}
 	assert.Equal(t, []string{"hami"}, detectStack(nil, []corev1.Node{hami}, backends).Sharing)

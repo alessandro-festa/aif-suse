@@ -791,3 +791,34 @@ describe('AI project and compute pool checks', () => {
     expect(auto.find((c) => c.id === 'pool')?.severity).toBe('info');
   });
 });
+
+describe('Volcano', () => {
+  const form: Form = {
+    ...DEFAULT_FORM, namespace: 'default', releaseName: 'train-1', scheduler: 'volcano', queue: '', nodes: 2, gpusPerNode: 1
+  };
+  const queues = [
+    { name: 'default', state: 'Open', gpuCapability: null },
+    { name: 'team-a', state: 'Open', gpuCapability: 1 },
+    { name: 'old', state: 'Closed', gpuCapability: null },
+  ];
+  const sev = (f: Form, over: Partial<Facts>, id: string) => runPreflight(f, facts(over)).filter((c) => c.id === id).map((c) => c.severity);
+
+  it('must be installed', () => {
+    expect(checkIds(form, facts({}))).toContain('scheduler');
+    expect(sev(form, { volcanoInstalled: true, volcanoQueues: queues }, 'scheduler')).toEqual(['pass']);
+  });
+
+  it('puts a run that names no queue in its default queue', () => {
+    expect(sev(form, { volcanoInstalled: true, volcanoQueues: queues }, 'queue')).toEqual(['pass']);
+  });
+
+  it('refuses a queue that is missing, closed, or capped below the request', () => {
+    const on = { volcanoInstalled: true, volcanoQueues: queues };
+
+    expect(sev({ ...form, queue: 'nope' }, on, 'queue')).toEqual(['fail']);
+    expect(sev({ ...form, queue: 'old' }, on, 'queue')).toEqual(['fail']);
+    expect(sev({ ...form, queue: 'team-a' }, on, 'queue')).toEqual(['fail']); // 2 GPUs, capped at 1
+    expect(sev({ ...form, queue: 'team-a', nodes: 1 }, on, 'queue')).toEqual(['pass']);
+    expect(sev(form, { volcanoInstalled: true, volcanoQueues: [] }, 'queue'), 'queues not readable: a warning').toEqual(['warn']);
+  });
+});

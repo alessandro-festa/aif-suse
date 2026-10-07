@@ -5,7 +5,7 @@ import { GpuType, gpuShort, sameGpu } from './gputypes';
 import { SharedGpu, sharedGpuChecks, kaiShareChecks } from './gpushare';
 import { ClusterCapacity, QueueIndex, availability, explain } from './quota';
 import {
-  backendForSchedulerName, backendOf, holdsPods, placesGpuMemoryShares, podQueueLabel, SchedulerType, usesQueueTree,
+  backendForSchedulerName, backendOf, defaultQueue, holdsPods, placesGpuMemoryShares, podQueueLabel, SchedulerType, usesQueueTree,
   workloadQueueLabel
 } from './schedulers';
 
@@ -81,6 +81,10 @@ export interface Facts {
   localQueues: QueueInfo[];
   clusterQueues: QueueInfo[];
   kaiQueues: QueueInfo[];
+  // Volcano: installed (it serves scheduling.volcano.sh Queues), and its queues with their state
+  // (Open, Closed, Closing) and GPU capability (null = uncapped)
+  volcanoInstalled?: boolean;
+  volcanoQueues?: { name: string; state: string; gpuCapability: number | null }[];
   devicePluginGpus: number; // sum of allocatable nvidia.com/gpu across nodes
   draDevices: number; // devices advertised by ResourceSlices for the GPU driver
   gpuDeviceMemory: number; // bytes: the largest GPU device's memory from ResourceSlice capacity (0 = unknown)
@@ -487,6 +491,12 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
     } else {
       add('scheduler', 'pass', `${ bind.display } is installed`);
     }
+  } else if (form.scheduler === 'volcano') {
+    if (facts.volcanoInstalled) {
+      add('scheduler', 'pass', 'Volcano is installed', 'A multi-node run gets a PodGroup and starts all-or-nothing.');
+    } else {
+      add('scheduler', 'fail', 'Volcano is not installed on this cluster', 'Pods with schedulerName volcano would stay Pending forever. Pick another scheduler.');
+    }
   } else {
     add('scheduler', 'pass', 'Default kube-scheduler', 'No queueing: the job runs as soon as the GPUs are free.');
   }
@@ -528,6 +538,20 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
       } else {
         add('queue', 'pass', `LocalQueue ${ lq.name } → ${ lq.clusterQueue }`, typeof quota === 'number' ? `GPU quota ${ quota } (${ pool } pool)` : '');
       }
+    }
+  } else if (form.scheduler === 'volcano' && facts.volcanoInstalled) {
+    const name = form.queue || defaultQueue('volcano');
+    const vq = (facts.volcanoQueues || []).find((q) => q.name === name);
+
+    if (!vq) {
+      add('queue', (facts.volcanoQueues || []).length ? 'fail' : 'warn', `Volcano queue "${ name }" not found`,
+        (facts.volcanoQueues || []).length ? `Available: ${ (facts.volcanoQueues || []).map((q) => q.name).join(', ') }` : 'No Volcano queues visible; your account may not be able to list them.');
+    } else if (vq.state && vq.state !== 'Open') {
+      add('queue', 'fail', `Volcano queue "${ name }" is ${ vq.state }`, 'It takes no new runs until it is Open.');
+    } else if (vq.gpuCapability !== null && requested > vq.gpuCapability) {
+      add('queue', 'fail', 'Request exceeds the queue\'s capability', `${ requested } GPUs requested; queue ${ name } is capped at ${ vq.gpuCapability }. This run could never start.`);
+    } else {
+      add('queue', 'pass', `Volcano queue ${ name }`, vq.gpuCapability !== null ? `GPU capability ${ vq.gpuCapability }` : '');
     }
   } else if (usesQueueTree(form.scheduler) && facts.kaiInstalled) {
     const node = facts.queueIndex[form.queue];

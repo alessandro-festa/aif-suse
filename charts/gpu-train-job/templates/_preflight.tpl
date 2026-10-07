@@ -138,6 +138,18 @@ real cause instead of leaving a Pending pod with no events. Disable with preflig
     {{- end }}
   {{- end }}
 {{- end }}
+{{- if eq $backend.quota "volcano-queue" }}
+  {{- if not (.Capabilities.APIVersions.Has "scheduling.volcano.sh/v1beta1/Queue") }}
+    {{- fail "preflight: scheduler.type=volcano but no queues.scheduling.volcano.sh CRD is present, so Volcano is not installed here. Choose another scheduler." }}
+  {{- end }}
+  {{- $name := include "gpu-train-job.queueName" . }}
+  {{- $vq := lookup "scheduling.volcano.sh/v1beta1" "Queue" "" $name }}
+  {{- if not $vq }}
+    {{- fail (printf "preflight: Volcano queue %q does not exist (kubectl get queues.scheduling.volcano.sh)." $name) }}
+  {{- else if ne (dig "status" "state" "Open" $vq) "Open" }}
+    {{- fail (printf "preflight: Volcano queue %q is %s; it takes no new runs until it is Open." $name (dig "status" "state" "" $vq)) }}
+  {{- end }}
+{{- end }}
 {{- if eq (include "gpu-train-job.gpuMode" .) "device-plugin" }}
   {{- $nodes := lookup "v1" "Node" "" "" }}
   {{- $found := false }}

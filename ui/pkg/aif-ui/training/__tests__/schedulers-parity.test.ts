@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import yaml from 'js-yaml';
+import { queueOf } from '../trainingruns';
 import {
-  backendForSchedulerName, holdsPods, placesGpuMemoryShares, POD_HOLDING_SCHEDULERS, podQueueLabel, SCHEDULER_BACKENDS,
-  usesQueueTree, workloadQueueLabel
+  backendForSchedulerName, defaultQueue, holdsPods, placesGpuMemoryShares, POD_HOLDING_SCHEDULERS, podQueueAnnotation, podQueueLabel, SCHEDULER_BACKENDS, usesQueueTree, workloadQueueLabel
 } from '../schedulers';
 
 // schedulers.ts is a copy of the chart's schedulers.yaml, which the chart's templates and the
@@ -29,6 +29,20 @@ describe('scheduler backends', () => {
     expect(backendForSchedulerName('runai-scheduler')).toBe('runai');
     expect(backendForSchedulerName('')).toBeUndefined();
     expect(backendForSchedulerName('default-scheduler')).toBeUndefined();
-    expect(POD_HOLDING_SCHEDULERS).toEqual(['kai-scheduler', 'runai-scheduler']);
+    expect(POD_HOLDING_SCHEDULERS).toEqual(['kai-scheduler', 'runai-scheduler', 'volcano']);
+    expect(podQueueLabel('volcano')).toBe(''); // Volcano names its queue in an annotation
+    expect(podQueueAnnotation('volcano')).toBe('scheduling.volcano.sh/queue-name');
+    expect(defaultQueue('volcano')).toBe('default');
+    expect(defaultQueue('kai')).toBe('');
+    expect(holdsPods('volcano') && !usesQueueTree('volcano')).toBe(true);
+    expect(backendForSchedulerName('volcano')).toBe('volcano');
+  });
+});
+
+describe('a run\'s queue in the Jobs list', () => {
+  it('is read from the label or annotation its scheduler uses', () => {
+    expect(queueOf({}, { 'kai.scheduler/queue': 'team-a' }, 'kai-scheduler')).toBe('team-a');
+    expect(queueOf({}, {}, 'volcano', { 'scheduling.volcano.sh/queue-name': 'team-b' })).toBe('team-b');
+    expect(queueOf({}, {}, 'default-scheduler', { 'scheduling.volcano.sh/queue-name': 'x' })).toBe('');
   });
 });

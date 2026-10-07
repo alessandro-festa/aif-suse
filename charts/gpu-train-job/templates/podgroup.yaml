@@ -1,0 +1,17 @@
+{{- if eq (include "gpu-train-job.backend" . | fromYaml).gang "podgroup" }}
+# The run's Volcano PodGroup: its pods name it (scheduling.k8s.io/group-name), and Volcano starts
+# none of them until all minMember can be placed, in the PodGroup's queue.
+apiVersion: scheduling.volcano.sh/v1beta1
+kind: PodGroup
+metadata:
+  name: {{ include "gpu-train-job.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gpu-train-job.labels" . | nindent 4 }}
+spec:
+  minMember: {{ .Values.job.nodes }}
+  queue: {{ include "gpu-train-job.queueName" . | quote }}
+  {{- with .Values.scheduler.priorityClassName }}
+  priorityClassName: {{ . }}
+  {{- end }}
+{{- end }}

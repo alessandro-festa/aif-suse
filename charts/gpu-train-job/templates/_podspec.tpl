@@ -164,12 +164,19 @@ k8s.v1.cni.cncf.io/networks: {{ .Values.network.multusNetwork | quote }}
 {{- if eq (include "gpu-train-job.gpuMode" .) "kai-fraction" }}
 gpu-memory: {{ int .Values.gpu.sharedMemoryMiB | toString | quote }}
 {{- end }}
+{{- $backend := include "gpu-train-job.backend" . | fromYaml }}
+{{- if and $backend.queue (eq $backend.queue.target "pod") (eq ($backend.queue.as | default "label") "annotation") }}
+{{ $backend.queue.label }}: {{ include "gpu-train-job.queueName" . | quote }}
+{{- end }}
+{{- if eq $backend.gang "podgroup" }}
+scheduling.k8s.io/group-name: {{ include "gpu-train-job.fullname" . | quote }}
+{{- end }}
 {{- end -}}
 
 {{- define "gpu-train-job.queuePodLabels" -}}
 {{- $queue := (include "gpu-train-job.backend" . | fromYaml).queue }}
-{{- if and $queue (eq $queue.target "pod") }}
-{{ $queue.label }}: {{ required (printf "scheduler.queue is required when scheduler.type=%s" .Values.scheduler.type) .Values.scheduler.queue | quote }}
+{{- if and $queue (eq $queue.target "pod") (ne ($queue.as | default "label") "annotation") }}
+{{ $queue.label }}: {{ include "gpu-train-job.queueName" . | quote }}
 {{- end }}
 {{- end -}}
 
