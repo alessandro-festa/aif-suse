@@ -1,12 +1,14 @@
-# Ray Train Distributed Test (CPU): the Ray driver, run by KubeRay on the head. A TorchTrainer starts
+# Ray Train Distributed Test: the Ray driver, run by KubeRay on the head. A TorchTrainer starts
 # one training worker per Ray worker pod (job.nodes), each fits a small model with gradients
 # synchronised by Ray Train's PyTorch integration, and the driver checks the result. torch comes from
-# the job's Ray runtime environment (ray.runtimeEnv), installed by Ray on every node.
+# the job's Ray runtime environment (ray.runtimeEnv), installed by Ray on every node. DEVICE=gpu trains
+# on one GPU per worker (a GPU Ray image and the CUDA build of torch).
 import json, os, sys, time
 import ray
 
 t0 = time.time()
 ray.init()
+gpu = os.environ.get("DEVICE", "cpu") == "gpu"
 checks = []
 def add(name, ok, detail):
     checks.append({"name": name, "ok": bool(ok), "detail": detail})
@@ -25,19 +27,20 @@ def train_loop(config):
     import ray.train.torch as rtt
     ctx = ray.train.get_context()
     torch.manual_seed(0)  # one model and one target everywhere; each worker its own batches
-    model = rtt.prepare_model(torch.nn.Linear(4, 1))
+    model = rtt.prepare_model(torch.nn.Linear(4, 1))  # on the worker's device
+    dev = rtt.get_device()
     opt = torch.optim.SGD(model.parameters(), lr=0.1)
-    w = torch.tensor([[1.0], [-2.0], [0.5], [3.0]])
+    w = torch.tensor([[1.0], [-2.0], [0.5], [3.0]], device=dev)
     data = torch.Generator().manual_seed(1000 + ctx.get_world_rank())
     first = None
     for _ in range(80):
-        x = torch.randn(64, 4, generator=data)
+        x = torch.randn(64, 4, generator=data).to(dev)
         loss = torch.nn.functional.mse_loss(model(x), x @ w)
         opt.zero_grad(); loss.backward(); opt.step()
         first = first if first is not None else loss.item()
-    ray.train.report({"first": first, "last": loss.item(), "world_size": ctx.get_world_size(), "node": os.environ.get("NODE_NAME", "")})
+    ray.train.report({"first": first, "last": loss.item(), "world_size": ctx.get_world_size(), "node": os.environ.get("NODE_NAME", ""), "device": str(dev)})
 
-result = TorchTrainer(train_loop, scaling_config=ScalingConfig(num_workers=workers, use_gpu=False),
+result = TorchTrainer(train_loop, scaling_config=ScalingConfig(num_workers=workers, use_gpu=gpu),
                       run_config=RunConfig(name="aif-ray-train-test", storage_path="/tmp/ray-results")).fit()
 m = result.metrics
 add("Training workers", m.get("world_size") == workers, f"{m.get('world_size')} of {workers} in one process group")
@@ -46,5 +49,5 @@ add("Trains with synchronised gradients", m["last"] < m["first"] * 0.05, f"loss 
 ok = all(c["ok"] for c in checks)
 print("AIF_RESULT " + json.dumps({"test": "Ray Train Distributed Test", "status": "pass" if ok else "fail", "checks": checks,
       "metrics": {"workers": str(workers), "seconds": f"{time.time() - t0:.1f}"},
-      "env": {"ray": ray.__version__, "nodes": str(len(nodes))}}), flush=True)
+      "env": {"ray": ray.__version__, "nodes": str(len(nodes)), "device": m.get("device", "")}}), flush=True)
 sys.exit(0 if ok else 1)

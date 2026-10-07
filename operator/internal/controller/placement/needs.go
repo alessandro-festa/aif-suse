@@ -42,7 +42,13 @@ type Needs struct {
 	ShareMiB int64
 	CPU      resource.Quantity // the whole run's
 	Memory   resource.Quantity // the whole run's
+	// Runtime is the training runtime the run's kind needs on the pool's cluster,
+	// as pool discovery names it (ComputePool status.training); "" = none.
+	Runtime string
 }
+
+// runtimeFor is the training runtime each job kind needs.
+var runtimeFor = map[string]string{"pytorchjob": "training-operator", "trainjob": "trainer-v2", "rayjob": "kuberay"}
 
 // GPUs is how many whole GPUs the run takes; a share takes none whole.
 func (n Needs) GPUs() int64 {
@@ -83,6 +89,7 @@ func NeedsOf(raw []byte) (Needs, error) {
 		GPUsPerNode: intAt(v, "job", "gpusPerNode"),
 		Model:       strings.ReplaceAll(strAt(v, "gpu", "productName"), " ", "-"),
 		ShareMiB:    intAt(v, "gpu", "sharedMemoryMiB"),
+		Runtime:     runtimeFor[strAt(v, "job", "kind")],
 	}
 	if n.Nodes < 1 {
 		n.Nodes = 1

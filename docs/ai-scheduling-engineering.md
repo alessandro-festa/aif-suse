@@ -448,6 +448,20 @@ RDZV_ENDPOINT work as on the plain Job. Scheduler binding is the pod template's,
 kinds; Kueue's label and suspend go on the TrainJob; a Volcano gang uses the chart's PodGroup. The
 webhook's refusal of the first install is retried in 2 s (`runtimeNotSeenYet`), not failed.
 
+**D-58 Placement only picks pools whose cluster has the run's runtime.** A RayJob needs KubeRay, a
+TrainJob Trainer v2, a PyTorchJob the Training Operator (as ComputePool `status.training` names
+them). Without this the queue could choose a pool where the chart's pre-flight then refuses the
+install for good; now such a pool is skipped with "no kuberay on its cluster", and reclaim (which
+asks the same `refuse`) never frees a pool for a run that could not use it. A run that names its
+pool is not second-guessed: the chart's pre-flight still explains the refusal.
+
+**D-59 One test script per framework, CPU or GPU by `DEVICE`.** The JAX, TensorFlow, DeepSpeed,
+Ray Train and TrainJob tests read `DEVICE` (cpu by default): gpu installs the CUDA build
+(jax[cuda12], tensorflow[and-cuda], torch cu128), uses NCCL and puts tensors on the GPU. A GPU run
+whose pod has no `/dev/nvidia*` fails at once (exit 3) with an AIF_RESULT saying so, instead of
+falling back to CPU and passing. Profiles 51–55 are the GPU variants (one whole GPU per pod, room
+for the CUDA wheels); the Ray one uses `rayproject/ray:2.49.2-gpu`.
+
 ---
 
 ## 3. Findings
@@ -855,6 +869,24 @@ DeepSpeed ranks fitted different targets.
     cluster on its pool for an hour. With `ray.shutdownAfterSeconds` the head and workers left
     ~60–75 s after the job ended.
 
+**F-75 [fact] Lab checks for the backlog (O-35/O-36/O-38):**
+- The five CPU framework tests still pass after the `DEVICE` change (JAX, TensorFlow, DeepSpeed,
+  Ray Train, TrainJob, all on c-xvstz-cpu). On the simulated L40S pool the GPU variants of JAX,
+  TensorFlow and DeepSpeed fail with "GPU visible: no /dev/nvidia* in the pod"; the Ray and TrainJob
+  ones were refused by the chart's pre-flight (no KubeRay / Trainer on downstream-2 then), which is
+  what showed placement ignored runtimes (D-58).
+- KAI + TrainJob (Trainer 2.1.0 installed on downstream-2): KAI's PodGrouper makes one PodGroup per
+  JobSet (owner JobSet, `minMember` unset) and still gangs it: 3 pods asking 1 GPU each on a 2-GPU
+  pool all stayed unbound ("2 node(s) didn't have enough resources: GPUs" as status.queue.reason);
+  2 pods ran and Succeeded.
+- Kueue 0.20 + TrainJob: Kueue's own TrainJob webhook refuses the first install too
+  (`vtrainjob.kb.io`: "runtime '<name>' not found"); the retry now covers it. Kueue then admits the
+  Workload but cannot unsuspend the TrainJob ("kueue runtime patch not found"): it writes
+  `spec.runtimePatches`, which Trainer 2.1.0 does not have (2.2.0 added it).
+- Kueue was installed on downstream-2 for the check and removed again (its CRDs stay, as before);
+  Trainer 2.1.0 stays there. The add-on HelmOp for an OCI chart must name the chart in the repo URL
+  with no `chart` field ("OCI repository with a non-empty chart field" otherwise), as the UI does.
+
 **F-74 [fact] Kubeflow Trainer 2.1.0, as found on the lab (P9):**
 - The Trainer Helm chart installs **no** ClusterTrainingRuntimes, so a run cannot assume
   `torch-distributed` exists: it brings its own TrainingRuntime (D-57).
@@ -1065,10 +1097,10 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | O-32 | A HAMi share is one GPU per pod (as KAI's); HAMi allows several slices per pod | chart preflight | later |
 | O-33 | ~~Kubeflow training runtime~~ decided: upstream Kubeflow Trainer v2 for now (D-52); ask SUSE for a training-only mode of its chart (F-67) | add-ons | follow-up with SUSE |
 | O-34 | Add-ons are pinned versions in the UI; upgrading one means editing `services/addons.ts` | add-ons | later |
-| O-35 | GPU variants of the JAX / TensorFlow / DeepSpeed profiles (framework images, NCCL), untested on the lab's simulated GPUs | profiles | with a GPU cluster |
-| O-36 | TrainJob on Trainer's shipped ClusterTrainingRuntimes (JAX, DeepSpeed, MPI from 2.3.0) instead of the run's own torch runtime; KAI gang over a JobSet and Kueue's TrainJob integration not tried on the lab | chart / operator | later |
+| O-35 | ~~GPU variants~~ done: profiles 51–55 (D-59), render-checked and scheduled on the simulated L40S pool; they fail there with "no /dev/nvidia*" as designed. Not yet run on a real GPU | profiles | real GPU cluster |
+| O-36 | KAI gangs a TrainJob (F-75) ✓. Kueue + TrainJob needs Trainer ≥ 2.2 (`spec.runtimePatches`), so Kubernetes ≥ 1.32: Submit warns. Trainer's shipped JAX/DeepSpeed runtimes also need 2.3.0 / 1.32. Both wait for a 1.32 cluster | chart / lab | k8s ≥ 1.32 |
 | O-37 | Ray beyond training: Ray Tune (HPO), RayService / vLLM multi-node serving; Ray autoscaling vs placement (size at max workers) and idle reclaim of long-lived RayClusters | Ray | later |
-| O-38 | GPU Ray Train profile (rayproject/ray-ml or a CUDA image), untested on the simulated GPUs | profiles | with a GPU cluster |
+| O-38 | ~~GPU variants~~ done: profiles 51–55 (D-59), render-checked and scheduled on the simulated L40S pool; they fail there with "no /dev/nvidia*" as designed. Not yet run on a real GPU | profiles | real GPU cluster |
 | O-39 | ~~SDK: a wrong RANCHER_URL host yields empty lists~~ done: a 404 list checks `/version` once and raises ConnectionError with the hostname hint; GPU variants of the dev profiles | SDK | done |
 | O-17 | The UI's 3c flows (pool picker → cluster switch → submit; Projects on a downstream cluster) are covered by unit tests of their logic, not by component tests; try them in the browser | UI | now |
 

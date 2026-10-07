@@ -1,10 +1,20 @@
 #!/bin/sh
-# JAX Distributed Test (CPU): N processes, one per pod, join through jax.distributed on rank 0's
+# JAX Distributed Test: N processes, one per pod, join through jax.distributed on rank 0's
 # stable name (RDZV_ENDPOINT, the chart's headless Service), gather every rank, and fit a tiny
-# linear model with gradients averaged across processes. No GPU, no Kubeflow runtime: the chart's
+# linear model with gradients averaged across processes. CPU (gloo) by default, DEVICE=gpu for one
+# GPU per pod (jax[cuda12]). No Kubeflow runtime: the chart's
 # Indexed Job gives each pod its rank (JOB_COMPLETION_INDEX) and the world size (NNODES).
 set -e
-pip install --quiet --no-cache-dir --disable-pip-version-check "jax[cpu]==${JAX_VERSION:-0.7.2}" >/tmp/pip.log 2>&1 || { cat /tmp/pip.log; exit 3; }
+AIF_TEST="JAX Distributed Test"
+DEVICE="${DEVICE:-cpu}"
+# DEVICE=gpu: the run asked for a GPU; without an NVIDIA device in the pod nothing below can use one
+if [ "$DEVICE" = gpu ] && ! ls /dev/nvidia[0-9]* >/dev/null 2>&1; then
+  echo "FAIL  DEVICE=gpu but no NVIDIA device in the pod (/dev/nvidia*): no driver on the node, or a simulated GPU"
+  [ "${JOB_COMPLETION_INDEX:-0}" = 0 ] && echo "AIF_RESULT {\"test\":\"$AIF_TEST\",\"status\":\"fail\",\"checks\":[{\"name\":\"GPU visible\",\"ok\":false,\"detail\":\"no /dev/nvidia* in the pod\"}]}"
+  exit 3
+fi
+EXTRA=cpu; [ "$DEVICE" = gpu ] && EXTRA=cuda12
+pip install --quiet --no-cache-dir --disable-pip-version-check "jax[$EXTRA]==${JAX_VERSION:-0.7.2}" >/tmp/pip.log 2>&1 || { cat /tmp/pip.log; exit 3; }
 cat > /tmp/test.py <<'PY'
 import json, os, time, sys
 import numpy as np
@@ -12,7 +22,9 @@ import warnings
 # the coordinator is given explicitly; JAX's own Kubernetes bootstrap (jax[k8s]) would need pod-list RBAC
 warnings.filterwarnings("ignore", message="Kubernetes environment detected")
 import jax
-jax.config.update("jax_cpu_collectives_implementation", "gloo")
+gpu = os.environ.get("DEVICE", "cpu") == "gpu"
+if not gpu:
+    jax.config.update("jax_cpu_collectives_implementation", "gloo")
 rank, world = int(os.environ["JOB_COMPLETION_INDEX"]), int(os.environ["NNODES"])
 coord = os.environ["RDZV_ENDPOINT"]
 checks = []
@@ -23,7 +35,8 @@ def add(name, ok, detail):
 t0 = time.time()
 jax.distributed.initialize(coordinator_address=coord, num_processes=world, process_id=rank)
 add("Processes joined", jax.process_count() == world, f"{jax.process_count()} of {world} through {coord.split('.')[0]}")
-add("Devices visible", jax.device_count() == world * jax.local_device_count(), f"{jax.device_count()} CPU devices in total")
+add("Devices visible", jax.device_count() == world * jax.local_device_count() and (jax.default_backend() == "gpu") == gpu,
+    f"{jax.device_count()} {jax.default_backend().upper()} devices in total")
 
 from jax.experimental import multihost_utils
 ranks = multihost_utils.process_allgather(np.array([rank]))

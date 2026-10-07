@@ -1,21 +1,35 @@
 #!/bin/sh
-# Kubeflow Trainer v2 Test (CPU): a TrainJob of N pods, one process each. Trainer's torch policy
+# Kubeflow Trainer v2 Test: a TrainJob of N pods, one process each. Trainer's torch policy
 # hands torchrun the world (PET_NNODES, PET_NODE_RANK, PET_MASTER_ADDR, PET_MASTER_PORT); torchrun
 # reads it by itself, and the script checks the world it got, all-reduces across the pods and trains
-# with DistributedDataParallel over gloo. No GPU. Needs Kubeflow Trainer v2 on the cluster.
+# with DistributedDataParallel: over gloo on CPU by default, over NCCL on one GPU per pod with
+# DEVICE=gpu. Needs Kubeflow Trainer v2 on the cluster.
 set -e
+AIF_TEST="Kubeflow Trainer v2 Test"
+DEVICE="${DEVICE:-cpu}"
+# DEVICE=gpu: the run asked for a GPU; without an NVIDIA device in the pod nothing below can use one
+if [ "$DEVICE" = gpu ] && ! ls /dev/nvidia[0-9]* >/dev/null 2>&1; then
+  echo "FAIL  DEVICE=gpu but no NVIDIA device in the pod (/dev/nvidia*): no driver on the node, or a simulated GPU"
+  [ "${JOB_COMPLETION_INDEX:-0}" = 0 ] && echo "AIF_RESULT {\"test\":\"$AIF_TEST\",\"status\":\"fail\",\"checks\":[{\"name\":\"GPU visible\",\"ok\":false,\"detail\":\"no /dev/nvidia* in the pod\"}]}"
+  exit 3
+fi
 for v in PET_NNODES PET_NODE_RANK PET_MASTER_ADDR PET_MASTER_PORT; do
   eval "val=\${$v:-}"
   [ -n "$val" ] || { echo "FAIL  $v is not set: not a Kubeflow Trainer TrainJob with the torch policy"; exit 3; }
 done
-pip install --quiet --no-cache-dir --disable-pip-version-check "torch==${TORCH_VERSION:-2.8.0}" --index-url https://download.pytorch.org/whl/cpu >/tmp/pip.log 2>&1 || { tail -20 /tmp/pip.log; exit 3; }
+WHEELS=cpu; [ "$DEVICE" = gpu ] && WHEELS=cu128
+pip install --quiet --no-cache-dir --disable-pip-version-check "torch==${TORCH_VERSION:-2.8.0}" --index-url "https://download.pytorch.org/whl/$WHEELS" >/tmp/pip.log 2>&1 || { tail -20 /tmp/pip.log; exit 3; }
 cat > /tmp/test.py <<'PY'
 import json, os, platform, sys, time
 import torch
 import torch.distributed as dist
 
 t0 = time.time()
-dist.init_process_group("gloo")  # torchrun set RANK, WORLD_SIZE, MASTER_ADDR and MASTER_PORT from Trainer's PET_*
+gpu = os.environ.get("DEVICE", "cpu") == "gpu"
+dev = torch.device("cuda", int(os.environ.get("LOCAL_RANK", 0))) if gpu else torch.device("cpu")
+if gpu:
+    torch.cuda.set_device(dev)
+dist.init_process_group("nccl" if gpu else "gloo")  # torchrun set RANK, WORLD_SIZE, MASTER_ADDR and MASTER_PORT from Trainer's PET_*
 rank, world = dist.get_rank(), dist.get_world_size()
 checks = []
 def add(name, ok, detail):
@@ -24,19 +38,19 @@ def add(name, ok, detail):
 
 nodes = int(os.environ["PET_NNODES"])
 add("Trainer gave torchrun the world", world == nodes, f"{world} processes, PET_NNODES={nodes}, master {os.environ['PET_MASTER_ADDR']}:{os.environ['PET_MASTER_PORT']}")
-x = torch.tensor([float(rank + 1)])
+x = torch.tensor([float(rank + 1)], device=dev)
 dist.all_reduce(x)
 want = world * (world + 1) / 2
 add("All-reduce across the pods", x.item() == want, f"sum {x.item():.0f}, expected {want:.0f}")
 
 torch.manual_seed(0)  # the same target and starting weights on every rank
-w = torch.randn(16, 1)
-model = torch.nn.parallel.DistributedDataParallel(torch.nn.Sequential(torch.nn.Linear(16, 64), torch.nn.ReLU(), torch.nn.Linear(64, 1)))
+w = torch.randn(16, 1).to(dev)
+model = torch.nn.parallel.DistributedDataParallel(torch.nn.Sequential(torch.nn.Linear(16, 64), torch.nn.ReLU(), torch.nn.Linear(64, 1)).to(dev), device_ids=[dev.index] if gpu else None)
 opt = torch.optim.AdamW(model.parameters(), lr=0.01)
 data = torch.Generator().manual_seed(1000 + rank)  # each rank its own shard
 losses = []
 for _ in range(120):
-    xb = torch.randn(32, 16, generator=data)
+    xb = torch.randn(32, 16, generator=data).to(dev)
     loss = torch.nn.functional.mse_loss(model(xb), xb @ w)
     opt.zero_grad()
     loss.backward()
@@ -53,7 +67,7 @@ ok = all(c["ok"] for c in checks)
 if rank == 0:
     print("AIF_RESULT " + json.dumps({"test": "Kubeflow Trainer v2 Test", "status": "pass" if ok else "fail", "checks": checks,
           "metrics": {"processes": str(world), "seconds": f"{time.time() - t0:.1f}"},
-          "env": {"torch": torch.__version__, "runtime": "TrainJob (torch policy)", "arch": platform.machine(), "node": os.environ.get("NODE_NAME", "")}}), flush=True)
+          "env": {"torch": torch.__version__, "runtime": "TrainJob (torch policy)", "backend": "nccl" if gpu else "gloo", "arch": platform.machine(), "node": os.environ.get("NODE_NAME", "")}}), flush=True)
 dist.barrier()
 dist.destroy_process_group()
 sys.exit(0 if ok else 1)

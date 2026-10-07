@@ -98,6 +98,8 @@ func refuse(n Needs, p *v1alpha1.ComputePool, f free) string {
 		return "no GPUs"
 	case !n.WantsGPU() && p.Spec.Kind != v1alpha1.ComputePoolKindCPU:
 		return "a GPU pool; CPU runs go to CPU pools"
+	case n.Runtime != "" && !contains(p.Status.Training, n.Runtime):
+		return "no " + n.Runtime + " on its cluster"
 	case n.Model != "" && (p.Status.GPU == nil || !contains(p.Status.GPU.Models, n.Model)):
 		return "not " + n.Model
 	case n.GPUs() > f.GPUs:

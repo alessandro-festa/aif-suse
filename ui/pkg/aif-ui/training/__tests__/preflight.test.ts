@@ -892,6 +892,10 @@ describe('Kubeflow Trainer v2 (TrainJob)', () => {
     expect(kind(form, {})).toEqual([['kind', 'fail']]);
   });
 
+  it('warns that Kueue needs Trainer 2.2 for a TrainJob', () => {
+    expect(kind({ ...form, scheduler: 'kueue' }, { trainerInstalled: true })).toEqual([['kind', 'pass'], ['kind-queue', 'warn']]);
+  });
+
   it('installs as job.kind=trainjob and reads back', () => {
     const v = chartValues(form);
 

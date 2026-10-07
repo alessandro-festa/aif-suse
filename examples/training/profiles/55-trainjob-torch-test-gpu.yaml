@@ -1,20 +1,19 @@
-# Kubeflow Trainer v2 Test (CPU): A Kubeflow Trainer v2 TrainJob of two or more CPU pods: Trainer's torch policy hands torchrun the world, the pods all-reduce and train with DistributedDataParallel over gloo. Needs the Kubeflow Trainer add-on.
+# Kubeflow Trainer v2 Test (GPU): The Kubeflow Trainer v2 test on GPUs: a TrainJob whose pods torchrun with Trainer's world and train with DistributedDataParallel over NCCL. Needs the Kubeflow Trainer add-on. One whole GPU per pod; DEVICE=cpu runs the CPU path.
 # Built by ../tests/build_profiles.py from ../tests/; edit the script there and rebuild.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: trainjob-torch-test
+  name: trainjob-torch-test-gpu
   namespace: ai-profiles
   labels:
     trainingjobs/profile: training
 data:
   profile.yaml: |
-    displayName: Kubeflow Trainer v2 Test (CPU)
+    displayName: Kubeflow Trainer v2 Test (GPU)
     purpose: test
     framework: PyTorch
-    gpu: CPU
     status: beta
-    description: 'A Kubeflow Trainer v2 TrainJob of two or more CPU pods: Trainer''s torch policy hands torchrun the world, the pods all-reduce and train with DistributedDataParallel over gloo. Needs the Kubeflow Trainer add-on.'
+    description: 'The Kubeflow Trainer v2 test on GPUs: a TrainJob whose pods torchrun with Trainer''s world and train with DistributedDataParallel over NCCL. Needs the Kubeflow Trainer add-on. One whole GPU per pod; DEVICE=cpu runs the CPU path.'
     values:
       image:
         repository: python
@@ -23,7 +22,7 @@ data:
         kind: trainjob
         mode: custom
         nodes: 2
-        gpusPerNode: 0
+        gpusPerNode: 1
         command:
         - sh
         - -c
@@ -106,11 +105,13 @@ data:
       resources:
         requests:
           cpu: '1'
-          memory: 2Gi
-          ephemeral-storage: 4Gi
+          memory: 8Gi
+          ephemeral-storage: 16Gi
       env:
       - name: TORCH_VERSION
         value: 2.8.0
+      - name: DEVICE
+        value: gpu
     editable:
     - nodes
     - env

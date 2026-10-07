@@ -1,29 +1,28 @@
-# Ray Train Distributed Test (CPU): A KubeRay RayJob: a Ray head and two or more CPU workers; a Ray Train TorchTrainer runs one training worker per pod with synchronised gradients, then the Ray cluster is removed. Needs the KubeRay add-on.
+# Ray Train Distributed Test (GPU): The Ray Train test on GPUs: a RayJob on Ray's GPU image, one TorchTrainer worker per GPU worker pod with the CUDA build of torch. Needs the KubeRay add-on. One whole GPU per pod; DEVICE=cpu runs the CPU path.
 # Built by ../tests/build_profiles.py from ../tests/; edit the script there and rebuild.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: ray-train-test
+  name: ray-train-test-gpu
   namespace: ai-profiles
   labels:
     trainingjobs/profile: training
 data:
   profile.yaml: |
-    displayName: Ray Train Distributed Test (CPU)
+    displayName: Ray Train Distributed Test (GPU)
     purpose: test
     framework: Ray
-    gpu: CPU
     status: beta
-    description: 'A KubeRay RayJob: a Ray head and two or more CPU workers; a Ray Train TorchTrainer runs one training worker per pod with synchronised gradients, then the Ray cluster is removed. Needs the KubeRay add-on.'
+    description: 'The Ray Train test on GPUs: a RayJob on Ray''s GPU image, one TorchTrainer worker per GPU worker pod with the CUDA build of torch. Needs the KubeRay add-on. One whole GPU per pod; DEVICE=cpu runs the CPU path.'
     values:
       image:
         repository: rayproject/ray
-        tag: 2.49.2
+        tag: 2.49.2-gpu
       job:
         kind: rayjob
         mode: custom
         nodes: 2
-        gpusPerNode: 0
+        gpusPerNode: 1
         command:
         - python
         - -c
@@ -84,12 +83,16 @@ data:
       resources:
         requests:
           cpu: '1'
-          memory: 2Gi
+          memory: 8Gi
+          ephemeral-storage: 16Gi
       ray:
         runtimeEnv: |
           pip:
             packages: ["torch==2.8.0"]
-            pip_install_options: ["--index-url", "https://download.pytorch.org/whl/cpu"]
+            pip_install_options: ["--index-url", "https://download.pytorch.org/whl/cu128"]
+      env:
+      - name: DEVICE
+        value: gpu
     editable:
     - nodes
     limits:

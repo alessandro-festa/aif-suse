@@ -1,20 +1,19 @@
-# JAX Distributed Test (CPU): Two or more CPU pods join one JAX job through jax.distributed on rank 0's stable name, gather every rank and train a small model with gradients averaged across processes. No GPU, no Kubeflow runtime.
+# JAX Distributed Test (GPU): The JAX distributed test on GPUs: jax[cuda12], two or more pods join through jax.distributed, gather every rank and train with gradients averaged across processes. One whole GPU per pod; DEVICE=cpu runs the CPU path.
 # Built by ../tests/build_profiles.py from ../tests/; edit the script there and rebuild.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: jax-distributed-test
+  name: jax-distributed-test-gpu
   namespace: ai-profiles
   labels:
     trainingjobs/profile: training
 data:
   profile.yaml: |
-    displayName: JAX Distributed Test (CPU)
+    displayName: JAX Distributed Test (GPU)
     purpose: test
     framework: JAX
-    gpu: CPU
     status: beta
-    description: Two or more CPU pods join one JAX job through jax.distributed on rank 0's stable name, gather every rank and train a small model with gradients averaged across processes. No GPU, no Kubeflow runtime.
+    description: 'The JAX distributed test on GPUs: jax[cuda12], two or more pods join through jax.distributed, gather every rank and train with gradients averaged across processes. One whole GPU per pod; DEVICE=cpu runs the CPU path.'
     values:
       image:
         repository: python
@@ -23,7 +22,7 @@ data:
         kind: job
         mode: custom
         nodes: 2
-        gpusPerNode: 0
+        gpusPerNode: 1
         command:
         - sh
         - -c
@@ -99,11 +98,13 @@ data:
       resources:
         requests:
           cpu: '1'
-          memory: 1Gi
-          ephemeral-storage: 4Gi
+          memory: 8Gi
+          ephemeral-storage: 16Gi
       env:
       - name: JAX_VERSION
         value: 0.7.2
+      - name: DEVICE
+        value: gpu
     editable:
     - nodes
     - env

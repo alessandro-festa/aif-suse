@@ -228,3 +228,8 @@ func TestATrainJobRefusedForItsRuntimeIsRetriedNotFailed(t *testing.T) {
 	assert.Len(t, h.helm.ensured, ensured+1, "EnsureRelease runs again over the failed revision")
 	assert.Equal(t, metav1.ConditionTrue, meta.FindStatusCondition(h.get("train-4").Status.Conditions, v1alpha1.AIJobConditionInstalled).Status)
 }
+
+func TestKueuesTrainJobWebhookRefusalIsRetriedToo(t *testing.T) {
+	assert.True(t, runtimeNotSeenYet(errors.New(`1 error occurred: * admission webhook "vtrainjob.kb.io" denied the request: runtime 'p9-tj-kueue' not found`)))
+	assert.False(t, runtimeNotSeenYet(errors.New(`admission webhook "vtrainjob.kb.io" denied the request: spec.suspend: Invalid value`)))
+}

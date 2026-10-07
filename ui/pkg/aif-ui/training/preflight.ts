@@ -943,6 +943,10 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
       add('kind', 'pass', `TrainJob: ${ form.nodes } node(s) under Kubeflow Trainer v2`,
         'The run brings its own TrainingRuntime. Trainer\'s torch policy hands torchrun its world (PET_* variables); each pod also has JOB_COMPLETION_INDEX, NNODES and RDZV_ENDPOINT.');
     }
+    if (form.scheduler === 'kueue') {
+      add('kind-queue', 'warn', 'Kueue starts a TrainJob only with Kubeflow Trainer 2.2 or later',
+        'Kueue\'s TrainJob integration patches spec.runtimePatches, which Trainer 2.1 (the add-on on Kubernetes before 1.32) does not have: Kueue admits the job and it never starts. Use KAI or Volcano there, or the Indexed Job.');
+    }
   }
 
   // 9. mode-specific hints

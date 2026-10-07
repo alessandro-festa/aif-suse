@@ -57,6 +57,22 @@ RAY_TRAIN = {"image": {"repository": "rayproject/ray", "tag": "2.49.2"},
              "resources": {"requests": {"cpu": "1", "memory": "2Gi"}},
              "ray": {"runtimeEnv": RAY_TORCH_CPU}}
 
+def gpu_variant(values, image=None, runtime_env=None):
+    """The CPU test on one whole GPU per pod: DEVICE=gpu makes the script install the CUDA build and use
+    NCCL; the CUDA wheels need room to unpack."""
+    v = {**values, "job": {**values["job"], "gpusPerNode": 1},
+         "resources": {"requests": {**values["resources"]["requests"], "memory": "8Gi", "ephemeral-storage": "16Gi"}},
+         "env": list(values.get("env", [])) + [{"name": "DEVICE", "value": "gpu"}]}
+    if image:
+        v["image"] = image
+    if runtime_env:
+        v["ray"] = {"runtimeEnv": runtime_env}
+    return v
+
+
+RAY_TORCH_GPU = 'pip:\n  packages: ["torch==2.8.0"]\n  pip_install_options: ["--index-url", "https://download.pytorch.org/whl/cu128"]\n'
+GPU_NOTE = " One whole GPU per pod; DEVICE=cpu runs the CPU path."
+
 FRAMEWORK_LIMITS = {"nodes": {"min": 1, "max": 4}, "registries": ["python", "docker.io/library/python"], "maxRuntimeHours": 1}
 
 PROFILES = [
@@ -93,6 +109,32 @@ PROFILES = [
         "description": "A Kubeflow Trainer v2 TrainJob of two or more CPU pods: Trainer's torch policy hands torchrun the world, the pods all-reduce and train with DistributedDataParallel over gloo. Needs the Kubeflow Trainer add-on.",
         "values": {**framework_test("trainjob_torch_test.sh", "3.12-slim", "2Gi", [{"name": "TORCH_VERSION", "value": "2.8.0"}]),
                    "job": {"kind": "trainjob", "mode": "custom", "nodes": 2, "gpusPerNode": 0, "command": ["sh", "-c", script("trainjob_torch_test.sh")]}},
+        "editable": ["nodes", "env"], "limits": FRAMEWORK_LIMITS}),
+    ("51-jax-distributed-test-gpu", "jax-distributed-test-gpu", {
+        "displayName": "JAX Distributed Test (GPU)", "purpose": "test", "framework": "JAX", "status": "beta",
+        "description": "The JAX distributed test on GPUs: jax[cuda12], two or more pods join through jax.distributed, gather every rank and train with gradients averaged across processes." + GPU_NOTE,
+        "values": gpu_variant(framework_test("jax_distributed_test.sh", "3.12-slim", "1Gi", [{"name": "JAX_VERSION", "value": "0.7.2"}])),
+        "editable": ["nodes", "env"], "limits": FRAMEWORK_LIMITS}),
+    ("52-tensorflow-distributed-test-gpu", "tensorflow-distributed-test-gpu", {
+        "displayName": "TensorFlow Distributed Test (GPU)", "purpose": "test", "framework": "TensorFlow", "status": "beta",
+        "description": "The TensorFlow distributed test on GPUs: tensorflow[and-cuda], a MultiWorkerMirroredStrategy cluster with NCCL all-reduce. TensorFlow publishes its CUDA build for x86_64 nodes." + GPU_NOTE,
+        "values": gpu_variant(framework_test("tensorflow_distributed_test.sh", "3.12-slim", "2Gi", [{"name": "TF_VERSION", "value": "2.20.0"}])),
+        "editable": ["nodes", "env"], "limits": FRAMEWORK_LIMITS}),
+    ("53-deepspeed-distributed-test-gpu", "deepspeed-distributed-test-gpu", {
+        "displayName": "DeepSpeed Distributed Test (GPU)", "purpose": "test", "framework": "DeepSpeed", "status": "beta",
+        "description": "The DeepSpeed distributed test on GPUs: the CUDA build of torch, ZeRO stage 1 over NCCL on DeepSpeed's CUDA accelerator." + GPU_NOTE,
+        "values": gpu_variant(framework_test("deepspeed_distributed_test.sh", "3.12", "3Gi", [{"name": "TORCH_VERSION", "value": "2.8.0"}, {"name": "DEEPSPEED_VERSION", "value": "0.17.6"}])),
+        "editable": ["nodes", "env"], "limits": FRAMEWORK_LIMITS}),
+    ("54-ray-train-test-gpu", "ray-train-test-gpu", {
+        "displayName": "Ray Train Distributed Test (GPU)", "purpose": "test", "framework": "Ray", "status": "beta",
+        "description": "The Ray Train test on GPUs: a RayJob on Ray's GPU image, one TorchTrainer worker per GPU worker pod with the CUDA build of torch. Needs the KubeRay add-on." + GPU_NOTE,
+        "values": gpu_variant(RAY_TRAIN, image={"repository": "rayproject/ray", "tag": "2.49.2-gpu"}, runtime_env=RAY_TORCH_GPU),
+        "editable": ["nodes"], "limits": {"nodes": {"min": 1, "max": 4}, "registries": ["rayproject/", "docker.io/rayproject/"], "maxRuntimeHours": 1}}),
+    ("55-trainjob-torch-test-gpu", "trainjob-torch-test-gpu", {
+        "displayName": "Kubeflow Trainer v2 Test (GPU)", "purpose": "test", "framework": "PyTorch", "status": "beta",
+        "description": "The Kubeflow Trainer v2 test on GPUs: a TrainJob whose pods torchrun with Trainer's world and train with DistributedDataParallel over NCCL. Needs the Kubeflow Trainer add-on." + GPU_NOTE,
+        "values": gpu_variant({**framework_test("trainjob_torch_test.sh", "3.12-slim", "2Gi", [{"name": "TORCH_VERSION", "value": "2.8.0"}]),
+                               "job": {"kind": "trainjob", "mode": "custom", "nodes": 2, "gpusPerNode": 0, "command": ["sh", "-c", script("trainjob_torch_test.sh")]}}),
         "editable": ["nodes", "env"], "limits": FRAMEWORK_LIMITS}),
     ("30-gpu-smoke-shared", "gpu-smoke-shared", {
         "displayName": "GPU Smoke Test (shared GPU)", "purpose": "test", "framework": "CUDA", "status": "ready",

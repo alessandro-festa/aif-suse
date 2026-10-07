@@ -119,3 +119,23 @@ func TestARayRunNeedsItsHeadAndSubmitterToo(t *testing.T) {
 	assert.Equal(t, int64(2), n.GPUs(), "the workers' GPUs; the head has none")
 	assert.Equal(t, "9100m", n.CPU.String(), "2 workers × 4 CPU, the head's 1, the submitter's 100m")
 }
+
+func TestAPoolWithoutTheRunsRuntimeIsSkipped(t *testing.T) {
+	plain, withRay := pool("plain", "cpu", 0, 0, "16"), pool("ray", "cpu", 0, 0, "8")
+	withRay.Status.Training = []string{"kuberay"}
+	run := Needs{Nodes: 2, CPU: resource.MustParse("2"), Memory: resource.MustParse("2Gi"), Runtime: "kuberay"}
+	got, _ := choose(run, []*v1alpha1.ComputePool{plain, withRay}, nil)
+	require.NotNil(t, got)
+	assert.Equal(t, "ray", got.Name, "the bigger pool has no KubeRay")
+
+	_, why := choose(run, []*v1alpha1.ComputePool{plain}, nil)
+	assert.Contains(t, why, "plain: no kuberay on its cluster")
+}
+
+func TestTheRuntimeComesFromTheJobKind(t *testing.T) {
+	for kind, want := range map[string]string{"job": "", "pytorchjob": "training-operator", "trainjob": "trainer-v2", "rayjob": "kuberay"} {
+		n, err := NeedsOf([]byte(`{"job":{"kind":"` + kind + `","mode":"custom","command":["x"]}}`))
+		require.NoError(t, err)
+		assert.Equal(t, want, n.Runtime, kind)
+	}
+}

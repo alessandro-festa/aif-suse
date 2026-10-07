@@ -668,10 +668,13 @@ func (r *AIJobReconciler) chartAllowed(src v1alpha1.AIJobSource) bool {
 
 // transient reports whether an install error is worth retrying: the network or
 // the API server, not the chart.
-// runtimeNotSeenYet is Trainer's webhook refusing a TrainJob created before its
-// TrainingRuntime was visible to it.
+// runtimeNotSeenYet is a webhook refusing a TrainJob created before its
+// TrainingRuntime was visible to it: Trainer's, or Kueue's TrainJob webhook
+// (vtrainjob.kb.io, "runtime '<name>' not found") where Kueue manages TrainJobs.
 func runtimeNotSeenYet(err error) bool {
-	return strings.Contains(strings.ToLower(err.Error()), "trainingruntime must be created before the trainjob")
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "trainingruntime must be created before the trainjob") ||
+		(strings.Contains(msg, "vtrainjob.kb.io") && strings.Contains(msg, "runtime") && strings.Contains(msg, "not found"))
 }
 
 func transient(err error) bool {
