@@ -107,6 +107,26 @@ type ComputePoolResources struct {
 	GPUs int64 `json:"gpus,omitempty"`
 }
 
+// MaxPoolConsumers bounds ComputePoolStatus.Consumers.
+const MaxPoolConsumers = 12
+
+// ComputePoolConsumer is one thing running on a pool's nodes and what it requests.
+type ComputePoolConsumer struct {
+	// Kind is run (an AI Factory training run), workload (other pods in a
+	// namespace), or rest (everything past the largest MaxPoolConsumers).
+	// +kubebuilder:validation:Enum=run;workload;rest
+	Kind string `json:"kind"`
+	// Namespace on the pool's cluster; empty for rest.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+	// Name is the run's job ID (the AIJob's name) for a run; empty otherwise.
+	// +optional
+	Name string `json:"name,omitempty"`
+	// Pods counted.
+	Pods      int32                `json:"pods"`
+	Requested ComputePoolResources `json:"requested"`
+}
+
 // ComputePoolGPU describes the pool's GPUs.
 type ComputePoolGPU struct {
 	// Models are the GPU products on the pool's nodes (nvidia.com/gpu.product).
@@ -134,6 +154,11 @@ type ComputePoolStatus struct {
 	// Requested is the sum of the requests of the pods running on those nodes.
 	// +optional
 	Requested ComputePoolResources `json:"requested,omitempty"`
+	// Consumers is what takes that capacity, largest first: each training run
+	// (by its job ID), and other workloads grouped by namespace. At most
+	// MaxPoolConsumers; the rest are summed in one entry of kind "rest".
+	// +optional
+	Consumers []ComputePoolConsumer `json:"consumers,omitempty"`
 	// +optional
 	GPU *ComputePoolGPU `json:"gpu,omitempty"`
 	// Schedulers are the scheduler backends installed on the cluster, by their

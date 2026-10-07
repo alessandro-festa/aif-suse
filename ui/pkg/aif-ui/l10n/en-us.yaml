@@ -38,14 +38,25 @@ suseai:
         pool: Pool
         kind: Kind
         nodes: Nodes
-        cpu: CPU used / total
-        memory: Memory used / total
-        gpus: GPUs used / total
+        cpu: CPU requested / total
+        memory: Memory requested / total
+        gpus: GPUs requested / total
         schedulers: Schedulers
         sharing: GPU sharing
         training: Training runtime
         reclaim: Idle reclaim
         status: Status
+      free: free
+      consumers:
+        toggle: Who uses this pool
+        none: Nothing runs on this pool's nodes.
+        what: Run or workload
+        run: Run
+        namespace: Namespace
+        project: AI project
+        pods: Pods
+        memory: Memory
+        activity: Activity
       reclaim:
         edit: Edit
         cancel: Cancel

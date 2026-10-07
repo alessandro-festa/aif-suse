@@ -237,22 +237,31 @@ func poolStatus(spec v1alpha1.ComputePoolSpec, nodes []corev1.Node, pods []corev
 	out.Allocatable.CPU, out.Allocatable.Memory = cpu, mem
 
 	rcpu, rmem := resource.Quantity{}, resource.Quantity{}
+	by := map[string]*v1alpha1.ComputePoolConsumer{}
 	for _, p := range pods {
 		if !in[p.Spec.NodeName] || p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
 			continue
 		}
-		for _, c := range p.Spec.Containers {
-			rcpu.Add(c.Resources.Requests[corev1.ResourceCPU])
-			rmem.Add(c.Resources.Requests[corev1.ResourceMemory])
+		c := consumerOf(p, by)
+		c.Pods++
+		for _, ct := range p.Spec.Containers {
+			rcpu.Add(ct.Resources.Requests[corev1.ResourceCPU])
+			rmem.Add(ct.Resources.Requests[corev1.ResourceMemory])
+			c.Requested.CPU.Add(ct.Resources.Requests[corev1.ResourceCPU])
+			c.Requested.Memory.Add(ct.Resources.Requests[corev1.ResourceMemory])
 			// An extended resource's request always equals its limit; either may be set.
-			if q, ok := c.Resources.Limits[gpuResource]; ok {
-				out.Requested.GPUs += q.Value()
-			} else if q, ok := c.Resources.Requests[gpuResource]; ok {
-				out.Requested.GPUs += q.Value()
+			var gpus int64
+			if q, ok := ct.Resources.Limits[gpuResource]; ok {
+				gpus = q.Value()
+			} else if q, ok := ct.Resources.Requests[gpuResource]; ok {
+				gpus = q.Value()
 			}
+			out.Requested.GPUs += gpus
+			c.Requested.GPUs += gpus
 		}
 	}
 	out.Requested.CPU, out.Requested.Memory = rcpu, rmem
+	out.Consumers = topConsumers(by)
 
 	if spec.Kind == v1alpha1.ComputePoolKindGPU {
 		g := &v1alpha1.ComputePoolGPU{MemoryMiB: minMemMiB}
@@ -263,4 +272,50 @@ func poolStatus(spec v1alpha1.ComputePoolSpec, nodes []corev1.Node, pods []corev
 		out.GPU = g
 	}
 	return out, nil
+}
+
+// consumerOf is the entry a pod counts towards: its training run, else its namespace.
+func consumerOf(p corev1.Pod, by map[string]*v1alpha1.ComputePoolConsumer) *v1alpha1.ComputePoolConsumer {
+	c := v1alpha1.ComputePoolConsumer{Kind: "workload", Namespace: p.Namespace}
+	if id := p.Labels[v1alpha1.AIJobJobIDLabel]; id != "" {
+		c.Kind, c.Name = "run", id
+	}
+	key := c.Kind + "/" + c.Namespace + "/" + c.Name
+	if by[key] == nil {
+		by[key] = &c
+	}
+	return by[key]
+}
+
+// topConsumers sorts the consumers largest first (GPUs, then CPU, then memory)
+// and sums those past MaxPoolConsumers into one "rest" entry.
+func topConsumers(by map[string]*v1alpha1.ComputePoolConsumer) []v1alpha1.ComputePoolConsumer {
+	all := make([]v1alpha1.ComputePoolConsumer, 0, len(by))
+	for _, c := range by {
+		all = append(all, *c)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		a, b := all[i].Requested, all[j].Requested
+		if a.GPUs != b.GPUs {
+			return a.GPUs > b.GPUs
+		}
+		if c := a.CPU.Cmp(b.CPU); c != 0 {
+			return c > 0
+		}
+		if c := a.Memory.Cmp(b.Memory); c != 0 {
+			return c > 0
+		}
+		return all[i].Namespace+"/"+all[i].Name < all[j].Namespace+"/"+all[j].Name
+	})
+	if len(all) <= v1alpha1.MaxPoolConsumers {
+		return all
+	}
+	rest := v1alpha1.ComputePoolConsumer{Kind: "rest"}
+	for _, c := range all[v1alpha1.MaxPoolConsumers:] {
+		rest.Pods += c.Pods
+		rest.Requested.CPU.Add(c.Requested.CPU)
+		rest.Requested.Memory.Add(c.Requested.Memory)
+		rest.Requested.GPUs += c.Requested.GPUs
+	}
+	return append(all[:v1alpha1.MaxPoolConsumers], rest)
 }

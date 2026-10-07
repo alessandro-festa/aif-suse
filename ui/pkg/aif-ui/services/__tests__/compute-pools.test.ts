@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  listComputePools, poolRow, reclaimDraft, reclaimErrors, reclaimSpec, reclaimText, undiscoveredClusters
+  describeRuns, listComputePools, poolRow, reclaimDraft, reclaimErrors, reclaimSpec, reclaimText, undiscoveredClusters
 } from '../compute-pools';
 
 const h100 = {
@@ -52,11 +52,62 @@ describe('compute pool rows', () => {
   });
 
   it('are not listed when the operator does not serve ComputePool', async() => {
-    const store = { getters: { 'cluster/schemaFor': () => null }, dispatch: () => Promise.reject(new Error('not called')) };
+    const store = { dispatch: () => Promise.reject(Object.assign(new Error('Not Found'), { status: 404 })) };
 
     expect(await listComputePools(store)).toEqual({
       installed: false, rows: [], objects: {}, undiscovered: []
     });
+  });
+
+  it('are read from local, whatever cluster the page is on', async() => {
+    const urls: string[] = [];
+    const store = {
+      dispatch: async(action: string, p: any) => {
+        if (action === 'management/findAll') {
+          return [{ id: 'c-abc', spec: { displayName: 'prod' }, metadata: { name: 'c-abc' } }];
+        }
+        urls.push(p.url);
+
+        return p.url.endsWith('/computepools') ? { items: [h100] } : { items: [] };
+      },
+    };
+    const got = await listComputePools(store);
+
+    expect(got.installed).toBe(true);
+    expect(got.rows.map((r) => r.name)).toEqual(['c-abc-gpu-nvidia-h100-80gb-hbm3']);
+    expect(urls).toEqual(['/k8s/clusters/local/apis/ai-factory.suse.com/v1alpha1/computepools', '/k8s/clusters/local/apis/ai-factory.suse.com/v1alpha1/aijobs']);
+  });
+
+  it('say what is free and who takes the rest', () => {
+    const r = poolRow({
+      ...h100,
+      status: {
+        ...h100.status,
+        consumers: [
+          {
+            kind: 'run', namespace: 'vision', name: 'train-a', pods: 2, requested: { cpu: '8', memory: '32Gi', gpus: 4 }
+          },
+          {
+            kind: 'workload', namespace: 'gpu-operator', pods: 3, requested: { cpu: '1500m', memory: '1Gi' }
+          },
+        ],
+      },
+    });
+
+    expect(r.free).toEqual({ cpu: '117.5', memory: '952.0Gi', gpus: 11 });
+    expect(r.consumers[0]).toEqual({
+      kind: 'run', namespace: 'vision', name: 'train-a', pods: 2, cpu: '8', memory: '32.0Gi', gpus: 4
+    });
+    expect(r.consumers[1]).toMatchObject({ kind: 'workload', namespace: 'gpu-operator', cpu: '1.5', gpus: 0 });
+
+    describeRuns([r], [{
+      metadata: { name: 'train-a', namespace: 'aif-vision' },
+      status:   {
+        phase: 'Running', placement: { clusterId: 'c-abc', namespace: 'vision', pool: r.name }, activity: { sampledAt: 'x', utilisation: 2, source: 'gpu', idleSince: 'y' }
+      },
+    }]);
+    expect(r.consumers[0]).toMatchObject({ project: 'vision', phase: 'Running', activity: '2% of its GPUs, idle' });
+    expect(r.consumers[1].project).toBeUndefined();
   });
 
   it('name the clusters that have no pool yet', () => {

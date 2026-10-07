@@ -7,8 +7,12 @@ import { getAllClusters } from './rancher-apps';
 // (the ComputePool resource): one per GPU model and one for the CPU-only nodes, named after their
 // cluster, with what each has and the scheduling stack the cluster runs. Rancher's own "local"
 // cluster runs no AI work and is never shown. See docs/design/ai-scheduling.md §6.
+//
+// Pools, and the AIJobs that tell who a run belongs to, live on local: they are read from there
+// explicitly, not through the cluster store, which follows whatever cluster the page is on.
 
 const LOCAL_CLUSTER = 'local';
+const AIF_API = `/k8s/clusters/${ LOCAL_CLUSTER }/apis/ai-factory.suse.com/v1alpha1`;
 
 export const COMPUTE_POOL_TYPE = 'ai-factory.suse.com.computepool';
 
@@ -35,6 +39,24 @@ export interface ComputePoolRow {
   training:      string[];
   /** The pool's idle reclaim settings; null = nothing on it is reclaimed. */
   reclaim:       PoolReclaim | null;
+  /** What is left: allocatable minus requested. */
+  free:          { cpu: string; memory: string; gpus: number };
+  /** What takes the capacity, largest first, as the operator last read it. */
+  consumers:     PoolConsumer[];
+}
+
+export interface PoolConsumer {
+  kind:      'run' | 'workload' | 'rest';
+  namespace: string;
+  name:      string; // the run's job ID (its AIJob's name)
+  pods:      number;
+  cpu:       string;
+  memory:    string;
+  gpus:      number;
+  // runs only, from the AIJob on local
+  project?:  string;
+  phase?:    string;
+  activity?: string; // "3% of its CPU request", when the pool samples it
 }
 
 /** ComputePool.spec.reclaim. Durations are a number and m, h or d ("30m", "2h", "3d"). */
@@ -137,6 +159,8 @@ export function poolRow(p: any, clusterNames: Record<string, string> = {}): Comp
   const alloc = st.allocatable || {};
   const req = st.requested || {};
   const cores = (q: any) => Math.round(parseCpu(q) * 10) / 10;
+  const freeCores = Math.max(0, Math.round((parseCpu(alloc.cpu) - parseCpu(req.cpu)) * 10) / 10);
+  const freeMem = Math.max(0, (parseMem(alloc.memory) || 0) - (parseMem(req.memory) || 0));
 
   return {
     name:          p?.metadata?.name || '',
@@ -159,6 +183,16 @@ export function poolRow(p: any, clusterNames: Record<string, string> = {}): Comp
     sharing:       st.sharing || [],
     training:      st.training || [],
     reclaim:       spec.reclaim?.idleTimeout ? { ...spec.reclaim } : null,
+    free:          { cpu: String(freeCores), memory: fmtMem(freeMem), gpus: Math.max(0, (Number(alloc.gpus) || 0) - (Number(req.gpus) || 0)) },
+    consumers:     (st.consumers || []).map((c: any): PoolConsumer => ({
+      kind:      c.kind === 'run' || c.kind === 'rest' ? c.kind : 'workload',
+      namespace: c.namespace || '',
+      name:      c.name || '',
+      pods:      Number(c.pods) || 0,
+      cpu:       String(cores(c.requested?.cpu)),
+      memory:    fmtMem(parseMem(c.requested?.memory) || 0),
+      gpus:      Number(c.requested?.gpus) || 0,
+    })),
   };
 }
 
@@ -182,23 +216,97 @@ export function undiscoveredClusters(clusters: { id: string; name: string }[], r
   return clusters.filter((c) => c.id !== LOCAL_CLUSTER && !seen.has(c.id)).map((c) => ({ id: c.id, name: c.name }));
 }
 
-/** Every ComputePool, by cluster then name, and the clusters that have none yet. */
-export async function listComputePools(store: Dispatchable & { getters: any }): Promise<ComputePools> {
-  if (!store.getters['cluster/schemaFor']?.(COMPUTE_POOL_TYPE)) {
-    return {
-      installed: false, rows: [], objects: {}, undiscovered: []
-    };
+async function getLocal(store: Dispatchable, path: string): Promise<any> {
+  const res: any = await store.dispatch('cluster/request', { url: `${ AIF_API }${ path }` });
+
+  return res?.data ?? res;
+}
+
+/** Each placed run's project, phase and activity, from its AIJob on local. */
+export function describeRuns(rows: ComputePoolRow[], aiJobs: any[]): void {
+  const byPlace = new Map<string, any>();
+
+  for (const j of aiJobs || []) {
+    const at = j?.status?.placement;
+
+    if (at?.clusterId) {
+      byPlace.set(`${ at.clusterId }/${ at.namespace }/${ j.metadata?.name }`, j);
+    }
   }
-  const [pools, clusters] = await Promise.all([
-    store.dispatch('cluster/findAll', { type: COMPUTE_POOL_TYPE, opt: { force: true } }),
+  for (const r of rows) {
+    for (const c of r.consumers) {
+      const j = c.kind === 'run' ? byPlace.get(`${ r.clusterId }/${ c.namespace }/${ c.name }`) : null;
+
+      if (!j) {
+        continue;
+      }
+      const ns = String(j.metadata?.namespace || '');
+      const a = j.status?.activity;
+
+      c.project = ns.startsWith('aif-') ? ns.slice(4) : ns;
+      c.phase = j.status?.phase || '';
+      if (a?.sampledAt) {
+        c.activity = `${ a.utilisation ?? 0 }% of its ${ String(a.source || '').startsWith('gpu') ? 'GPUs' : 'CPU request' }${ a.idleSince ? ', idle' : '' }`;
+      }
+    }
+  }
+}
+
+/** Every ComputePool, by cluster then name, and the clusters that have none yet. */
+export async function listComputePools(store: Dispatchable & { getters?: any }): Promise<ComputePools> {
+  let list: any;
+
+  try {
+    list = await getLocal(store, '/computepools');
+  } catch (e: any) {
+    if (e?.status === 404 || e?._status === 404 || e?.response?.status === 404) {
+      return {
+        installed: false, rows: [], objects: {}, undiscovered: []
+      };
+    }
+    throw e;
+  }
+  const [clusters, aiJobs] = await Promise.all([
     getAllClusters(store),
+    getLocal(store, '/aijobs').then((l: any) => l?.items || []).catch(() => []),
   ]);
+  const pools: any[] = list?.items || [];
   const names = Object.fromEntries(clusters.map((c) => [c.id, c.name]));
-  const rows = (pools || []).map((p: any) => poolRow(p, names)).filter((r: ComputePoolRow) => r.clusterId !== LOCAL_CLUSTER);
+  const rows = pools.map((p: any) => poolRow(p, names)).filter((r: ComputePoolRow) => r.clusterId !== LOCAL_CLUSTER);
 
   rows.sort((a: ComputePoolRow, b: ComputePoolRow) => a.clusterName.localeCompare(b.clusterName) || a.displayName.localeCompare(b.displayName));
+  describeRuns(rows, aiJobs);
 
   return {
-    installed: true, rows, objects: Object.fromEntries((pools || []).map((p: any) => [p.metadata?.name, p])), undiscovered: undiscoveredClusters(clusters, rows)
+    installed: true, rows, objects: Object.fromEntries(pools.map((p: any) => [p.metadata?.name, p])), undiscovered: undiscoveredClusters(clusters, rows)
   };
+}
+
+/** Whether the user may change compute pools (patch on local). */
+export async function canEditPools(store: Dispatchable): Promise<boolean> {
+  try {
+    const res: any = await store.dispatch('cluster/request', {
+      url:    `/k8s/clusters/${ LOCAL_CLUSTER }/apis/authorization.k8s.io/v1/selfsubjectaccessreviews`,
+      method: 'POST',
+      data:   {
+        apiVersion: 'authorization.k8s.io/v1',
+        kind:       'SelfSubjectAccessReview',
+        spec:       { resourceAttributes: { group: 'ai-factory.suse.com', resource: 'computepools', verb: 'patch' } },
+      },
+    });
+
+    return !!(res?.data ?? res)?.status?.allowed;
+  } catch {
+    return false;
+  }
+}
+
+/** Set a pool's idle reclaim settings on local; null turns reclaim off. */
+export async function savePoolReclaim(store: Dispatchable, name: string, reclaim: PoolReclaim | null): Promise<void> {
+  await store.dispatch('cluster/request', {
+    url:     `${ AIF_API }/computepools/${ encodeURIComponent(name) }`,
+    method:  'PATCH',
+    headers: { 'content-type': 'application/merge-patch+json' },
+    data:    { spec: { reclaim } },
+  });
 }

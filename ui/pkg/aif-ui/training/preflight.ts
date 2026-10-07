@@ -596,7 +596,10 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
 
   // 7. GPU exposure
 
-  if (mode === 'device-plugin') {
+  if (form.gpusPerNode === 0 && !(form.gpuShareMiB > 0)) {
+    // a CPU-only run (the chart's gpu mode none): nothing to expose
+    add('gpu', 'pass', 'CPU only: no GPU requested');
+  } else if (mode === 'device-plugin') {
     if (facts.devicePluginGpus > 0) {
       add('gpu', 'pass', `GPU request via device plugin (nvidia.com/gpu)`, `${ facts.devicePluginGpus } allocatable across the cluster${ form.gpuMode === 'auto' ? ' — auto-detected' : '' }`);
     } else if (facts.draClassExists) {

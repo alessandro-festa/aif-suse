@@ -4,8 +4,11 @@ import { LabeledInput } from '@components/Form/LabeledInput';
 import { Checkbox } from '@components/Form/Checkbox';
 import AsyncButton from '@shell/components/AsyncButton.vue';
 import {
-  listComputePools, reclaimDraft, reclaimErrors, reclaimSpec, reclaimText
+  canEditPools, listComputePools, reclaimDraft, reclaimErrors, reclaimSpec, reclaimText, savePoolReclaim
 } from '../services/compute-pools';
+
+// How often the page reads the pools again: the operator refreshes them every minute.
+const REFRESH_MS = 30000;
 import { MANAGEMENT_CLUSTER, PRODUCT } from '../config/suseai';
 
 export default {
@@ -17,27 +20,44 @@ export default {
 
   data() {
     return {
-      pools: [], objects: {}, undiscovered: [], installed: true, loading: true, error: '',
+      pools: [], undiscovered: [], installed: true, loading: true, error: '', canEdit: false,
       // the pool whose idle reclaim is being edited, and the edit
-      editing: '', draft: null, saveError: ''
+      editing: '', draft: null, saveError: '',
+      // pools whose consumers are shown
+      open: {},
+      timer: null
     };
   },
 
   async fetch() {
     try {
-      const {
-        installed, rows, objects, undiscovered
-      } = await listComputePools(this.$store);
+      const [{ installed, rows, undiscovered }, canEdit] = await Promise.all([
+        listComputePools(this.$store),
+        canEditPools(this.$store),
+      ]);
 
       this.installed = installed;
       this.pools = rows;
-      this.objects = objects;
       this.undiscovered = undiscovered;
+      this.canEdit = canEdit;
+      this.error = '';
     } catch (e) {
       this.error = e?.message || String(e);
     } finally {
       this.loading = false;
     }
+  },
+
+  mounted() {
+    this.timer = setInterval(() => {
+      if (!this.editing) {
+        this.$fetch();
+      }
+    }, REFRESH_MS);
+  },
+
+  beforeUnmount() {
+    clearInterval(this.timer);
   },
 
   computed: {
@@ -58,8 +78,15 @@ export default {
 
   methods: {
     reclaimText,
-    canEdit(p) {
-      return !!this.objects[p.name]?.canUpdate;
+    toggle(p) {
+      this.open = { ...this.open, [p.name]: !this.open[p.name] };
+    },
+    consumerLabel(c) {
+      if (c.kind === 'rest') {
+        return 'Everything else';
+      }
+
+      return c.kind === 'run' ? c.name : `${ c.namespace } (other workloads)`;
     },
     edit(p) {
       this.editing = p.name;
@@ -71,22 +98,13 @@ export default {
       this.draft = null;
     },
     async save(done) {
-      const obj = this.objects[this.editing];
-
-      if (!obj || Object.keys(this.draftErrors).length) {
+      if (Object.keys(this.draftErrors).length) {
         done(false);
 
         return;
       }
       try {
-        const spec = reclaimSpec(this.draft);
-
-        if (spec) {
-          obj.spec.reclaim = spec;
-        } else {
-          delete obj.spec.reclaim;
-        }
-        await obj.save();
+        await savePoolReclaim(this.$store, this.editing, reclaimSpec(this.draft));
         done(true);
         this.cancelEdit();
         await this.$fetch();
@@ -178,16 +196,36 @@ export default {
           :key="p.name"
         >
         <tr :class="{ 'text-muted': p.disabled || p.connected === false }">
-          <td>{{ p.displayName }}</td>
+          <td>
+            <a
+              href="#"
+              class="pool-toggle"
+              :title="t('suseai.pages.computePools.consumers.toggle')"
+              @click.prevent="toggle(p)"
+            ><i :class="['icon', open[p.name] ? 'icon-chevron-down' : 'icon-chevron-right']" /> {{ p.displayName }}</a>
+          </td>
           <td>
             <span :class="['pool-tag', { 'pool-tag--gpu': p.kind === 'gpu' }]">{{ p.kind === 'gpu' ? 'GPU' : 'CPU' }}</span>
           </td>
           <td>{{ p.nodes }}</td>
-          <td>{{ p.cpu }}</td>
-          <td>{{ p.memory }}</td>
+          <td>
+            {{ p.cpu }}
+            <div class="text-muted">
+              {{ p.free.cpu }} {{ t('suseai.pages.computePools.free') }}
+            </div>
+          </td>
+          <td>
+            {{ p.memory }}
+            <div class="text-muted">
+              {{ p.free.memory }} {{ t('suseai.pages.computePools.free') }}
+            </div>
+          </td>
           <td>
             <template v-if="p.kind === 'gpu'">
               {{ p.gpusRequested }} / {{ p.gpus }}
+              <div class="text-muted">
+                {{ p.free.gpus }} {{ t('suseai.pages.computePools.free') }}
+              </div>
               <div
                 v-if="p.gpuModels.length"
                 class="text-muted"
@@ -237,7 +275,7 @@ export default {
           <td>
             <span :class="{ 'text-muted': !p.reclaim }">{{ reclaimText(p.reclaim) }}</span>
             <a
-              v-if="canEdit(p) && editing !== p.name"
+              v-if="canEdit && editing !== p.name"
               href="#"
               class="pool-edit"
               @click.prevent="edit(p)"
@@ -248,6 +286,64 @@ export default {
               v-clean-tooltip="p.message"
               :class="['pool-status', `pool-status--${ statusOf(p).tone }`]"
             >{{ statusOf(p).label }}</span>
+          </td>
+        </tr>
+        <tr
+          v-if="open[p.name]"
+          class="pool-consumers"
+        >
+          <td colspan="11">
+            <p
+              v-if="!p.consumers.length"
+              class="text-muted"
+            >
+              {{ t('suseai.pages.computePools.consumers.none') }}
+            </p>
+            <table v-else>
+              <thead>
+                <tr>
+                  <th>{{ t('suseai.pages.computePools.consumers.what') }}</th>
+                  <th>{{ t('suseai.pages.computePools.consumers.namespace') }}</th>
+                  <th>{{ t('suseai.pages.computePools.consumers.project') }}</th>
+                  <th>{{ t('suseai.pages.computePools.consumers.pods') }}</th>
+                  <th>CPU</th>
+                  <th>{{ t('suseai.pages.computePools.consumers.memory') }}</th>
+                  <th v-if="p.kind === 'gpu'">
+                    GPUs
+                  </th>
+                  <th>{{ t('suseai.pages.computePools.consumers.activity') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="c in p.consumers"
+                  :key="`${ c.kind }/${ c.namespace }/${ c.name }`"
+                >
+                  <td>
+                    <span
+                      v-if="c.kind === 'run'"
+                      class="pool-tag"
+                    >{{ t('suseai.pages.computePools.consumers.run') }}</span>
+                    {{ consumerLabel(c) }}
+                    <span
+                      v-if="c.phase"
+                      class="text-muted"
+                    > · {{ c.phase }}</span>
+                  </td>
+                  <td>{{ c.namespace || '—' }}</td>
+                  <td>{{ c.project || '—' }}</td>
+                  <td>{{ c.pods }}</td>
+                  <td>{{ c.cpu }}</td>
+                  <td>{{ c.memory }}</td>
+                  <td v-if="p.kind === 'gpu'">
+                    {{ c.gpus }}
+                  </td>
+                  <td class="text-muted">
+                    {{ c.activity || '—' }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </td>
         </tr>
         <tr
@@ -354,6 +450,9 @@ export default {
 }
 
 .pool-edit { margin-left: 8px; white-space: nowrap; }
+.pool-toggle { white-space: nowrap; }
+.pool-consumers td { background: var(--body-bg); border-top: 1px solid var(--border); }
+.pool-consumers table { width: 100%; th, td { padding: 4px 10px 4px 0; text-align: left; font-size: 13px; background: none; border: none; } }
 
 .pool-editor td { background: var(--body-bg); border-top: 1px solid var(--border); }
 .pool-editor-fields { display: grid; grid-template-columns: repeat(3, minmax(160px, 240px)); gap: 12px; margin: 12px 0; align-items: start; }

@@ -17,6 +17,7 @@ limitations under the License.
 package computepool
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -163,4 +164,43 @@ func TestATaintedNodeIsNotCapacityUnlessRunsTolerateIt(t *testing.T) {
 	assert.Equal(t, int64(8), gpu.Allocatable.GPUs, "the training chart tolerates the nvidia.com/gpu taint")
 
 	assert.Empty(t, discoverPools("c-cp", "cp", []corev1.Node{cp}), "a cluster of only a control plane has no pool")
+}
+
+func TestPoolStatusSaysWhoTakesTheCapacity(t *testing.T) {
+	nodes := []corev1.Node{h100("g1")}
+	inNS := func(p corev1.Pod, ns, job string) corev1.Pod {
+		p.Namespace = ns
+		if job != "" {
+			p.Labels = map[string]string{v1alpha1.AIJobJobIDLabel: job}
+		}
+		return p
+	}
+	pods := []corev1.Pod{
+		inNS(pod("g1", corev1.PodRunning, "4", "16Gi", 2), "vision", "train-a"),
+		inNS(pod("g1", corev1.PodRunning, "4", "16Gi", 2), "vision", "train-a"),
+		inNS(pod("g1", corev1.PodRunning, "1", "1Gi", 1), "team", "train-b"),
+		inNS(pod("g1", corev1.PodRunning, "500m", "512Mi", 0), "gpu-operator", ""),
+		inNS(pod("g1", corev1.PodRunning, "500m", "512Mi", 0), "gpu-operator", ""),
+	}
+	st, err := poolStatus(v1alpha1.ComputePoolSpec{Kind: v1alpha1.ComputePoolKindGPU}, nodes, pods, stack{})
+	require.NoError(t, err)
+	require.Len(t, st.Consumers, 3)
+	top := st.Consumers[0]
+	assert.Equal(t, []any{"run", "vision", "train-a", int32(2), "8", "32Gi", int64(4)},
+		[]any{top.Kind, top.Namespace, top.Name, top.Pods, top.Requested.CPU.String(), top.Requested.Memory.String(), top.Requested.GPUs}, "largest first, a run's pods together")
+	assert.Equal(t, "train-b", st.Consumers[1].Name)
+	assert.Equal(t, "workload", st.Consumers[2].Kind, "other pods by namespace")
+	assert.Equal(t, int32(2), st.Consumers[2].Pods)
+	assert.Equal(t, "1", st.Consumers[2].Requested.CPU.String())
+
+	var many []corev1.Pod
+	for i := 0; i < v1alpha1.MaxPoolConsumers+3; i++ {
+		many = append(many, inNS(pod("g1", corev1.PodRunning, "1", "1Gi", 0), fmt.Sprintf("ns-%02d", i), ""))
+	}
+	st, err = poolStatus(v1alpha1.ComputePoolSpec{Kind: v1alpha1.ComputePoolKindGPU}, nodes, many, stack{})
+	require.NoError(t, err)
+	require.Len(t, st.Consumers, v1alpha1.MaxPoolConsumers+1)
+	rest := st.Consumers[v1alpha1.MaxPoolConsumers]
+	assert.Equal(t, "rest", rest.Kind)
+	assert.Equal(t, int32(3), rest.Pods, "the smallest summed in one entry")
 }

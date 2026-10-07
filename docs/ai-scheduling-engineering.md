@@ -320,6 +320,20 @@ other in turn. It resumes when room frees, not by displacing another run.
 - The run's detail shows its activity, what reclaim waits for, and its reclaims, newest first. A
   run ended by Terminate shows the state Reclaimed.
 
+**D-47 A pool says who takes its capacity.** Discovery already reads every active pod on a pool's
+nodes each minute; it now groups their requests into `status.consumers`:
+- each training run by its job-ID label;
+- other pods by namespace;
+- largest first, at most 12, the rest summed.
+
+The Compute Pools page shows requested / total with what is free under it, and opens a pool to its
+consumers. A run there carries its AI project, phase and activity, taken from its AIJob on local.
+The page reads everything from local and refreshes every 30 s.
+
+**D-48 A CPU smoke test profile (`cpu-smoke`)** works on one CPU for `WORK_SECONDS` and reports
+AIF_RESULT. With `HOLD_SECONDS` it then sits idle (env, editable), which makes it the reclaim test.
+Its reclaim policy is Suspend.
+
 ---
 
 ## 3. Findings
@@ -582,6 +596,20 @@ its CPU. A real GPU Operator maps pods when the kubelet pod-resources socket is 
 absent after prior sync" fails on a clean checkout of `0d960c3d` too** (409 UID precondition on
 delete, envtest 1.31). Not touched by this work.
 
+**F-54 [bug, ours, recurrence of F-34/F-44] Compute Pools lost its table.** It listed pools through
+the cluster store. After a page had moved to a pool's cluster (Submit, Deploy, run details), the
+nav link carried that downstream cluster, ComputePool's schema was missing there, and the page said
+"not installed". It now reads pools and AIJobs from local, saves with a merge PATCH to local, and
+asks a SelfSubjectAccessReview whether to offer Edit.
+
+**F-55 [bug, pre-existing, fixed] The UI pre-flight refused every CPU-only run** with "No GPUs
+visible" on a cluster without GPUs, though the chart runs them (F-41). A run with no GPU and no
+share now passes the GPU-exposure check ("CPU only"). Found by the CPU smoke profile's test.
+
+**F-56 [fact] Lab check:** cpu-smoke-1 (profile values, `HOLD_SECONDS=120`) was placed on
+c-xvstz-cpu, passed all checks (482k loop steps/s), then held idle. The pool's consumers listed it
+as a run (1 CPU, 256Mi) beside the llama.cpp endpoint (`vision`, 2 CPU) and the system namespaces.
+
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator
 namespace. Discovery reuses it (D-15).
@@ -721,6 +749,8 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | Activity sampling | `operator/internal/controller/placement/activity.go` | `Probe` / `ProxyProbe`, `cpuUtilisation`, `gpuUtilisation`, `sample`, `parseIdleDuration` |
 | Idle reclaim | `operator/internal/controller/placement/reclaim.go` | `Reclaimer` (a manager Runnable, 1 min), `nextActivity`, `decide`, `contender`, `fitsIfFreed`; `queueState` shared with placement |
 | Reclaim action | `operator/internal/controller/aijob/aijob_controller.go` `reclaim` | on `ai-factory.suse.com/reclaim`; Suspend / Terminate |
+| Pool consumers | `operator/internal/controller/computepool/discover.go` (`consumerOf`, `topConsumers`); UI `services/compute-pools.ts` (`describeRuns`, `listComputePools` from local, `savePoolReclaim`, `canEditPools`) | `ComputePoolStatus.consumers` |
+| CPU smoke test | `examples/training/tests/cpu_smoke_test.sh` → `profiles/39-cpu-smoke.yaml` (`build_profiles.py`) | `HOLD_SECONDS` to test reclaim |
 | Reclaim UI | `ui/pkg/aif-ui/training/reclaim.ts`, `services/compute-pools.ts` (`reclaimText`, `reclaimDraft`, `reclaimErrors`, `reclaimSpec`), `pages/ComputePools.vue`, `training/components/RunDetail.vue`, `training/pages/Submit.vue` / `Deploy.vue` | profile key `reclaim`; `aiJobFor(…reclaim)` |
 
 ---

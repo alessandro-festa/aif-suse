@@ -210,7 +210,7 @@ export default defineComponent({
       const n = p.limits.nodes;
       const workers = n ? (n.min === n.max ? `${ n.min } worker${ n.min === 1 ? '' : 's' }` : `${ n.min }–${ n.max } workers`) : `${ p.form.nodes } worker${ p.form.nodes === 1 ? '' : 's' }`;
 
-      return `${ workers } × ${ p.form.gpusPerNode } GPU`;
+      return p.form.gpusPerNode === 0 && !(p.form.gpuShareMiB > 0) ? `${ workers } · CPU only` : `${ workers } × ${ p.form.gpusPerNode } GPU`;
     },
 
     badges(p: Profile): string[] {

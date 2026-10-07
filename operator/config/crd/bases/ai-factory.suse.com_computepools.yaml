@@ -260,6 +260,62 @@ spec:
                   - type
                   type: object
                 type: array
+              consumers:
+                description: |-
+                  Consumers is what takes that capacity, largest first: each training run
+                  (by its job ID), and other workloads grouped by namespace. At most
+                  MaxPoolConsumers; the rest are summed in one entry of kind "rest".
+                items:
+                  description: ComputePoolConsumer is one thing running on a pool's
+                    nodes and what it requests.
+                  properties:
+                    kind:
+                      description: |-
+                        Kind is run (an AI Factory training run), workload (other pods in a
+                        namespace), or rest (everything past the largest MaxPoolConsumers).
+                      enum:
+                      - run
+                      - workload
+                      - rest
+                      type: string
+                    name:
+                      description: Name is the run's job ID (the AIJob's name) for
+                        a run; empty otherwise.
+                      type: string
+                    namespace:
+                      description: Namespace on the pool's cluster; empty for rest.
+                      type: string
+                    pods:
+                      description: Pods counted.
+                      format: int32
+                      type: integer
+                    requested:
+                      description: ComputePoolResources is an amount of the resources
+                        a pool is placed by.
+                      properties:
+                        cpu:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        gpus:
+                          description: GPUs counts whole devices (nvidia.com/gpu).
+                          format: int64
+                          type: integer
+                        memory:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                      type: object
+                  required:
+                  - kind
+                  - pods
+                  - requested
+                  type: object
+                type: array
               gpu:
                 description: ComputePoolGPU describes the pool's GPUs.
                 properties:

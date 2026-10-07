@@ -8,6 +8,7 @@ import { join, resolve } from 'path';
 import jsyaml from 'js-yaml';
 
 import { profileChecks, profilesFrom, resolveForm } from '../profiles';
+import { checksFor, Facts, runPreflight } from '../preflight';
 
 const SAMPLES = (() => {
   const rel = 'examples/training/profiles';
@@ -26,7 +27,7 @@ const profiles = profilesFrom(docs.filter((d) => d?.kind === 'ConfigMap'), (s: s
 
 describe('sample profiles', () => {
   it('are all found', () => {
-    expect(profiles.map((p) => p.name).sort()).toEqual(['engine-llamacpp', 'engine-ollama', 'engine-sglang', 'engine-vllm', 'gpu-diagnostics-bundle', 'gpu-diagnostics-bundle-shared', 'gpu-health-check', 'gpu-smoke', 'gpu-smoke-shared', 'nccl-fabric-benchmark', 'pytorch-distributed', 'pytorch-distributed-test', 'pytorch-gpu-test', 'pytorch-gpu-test-shared', 'shared-gpu-dev', 'single-gpu-dev', 'suse-inference-endpoint-qwen', 'suse-inference-endpoint-qwen-shared', 'training-storage-test']);
+    expect(profiles.map((p) => p.name).sort()).toEqual(['cpu-smoke', 'engine-llamacpp', 'engine-ollama', 'engine-sglang', 'engine-vllm', 'gpu-diagnostics-bundle', 'gpu-diagnostics-bundle-shared', 'gpu-health-check', 'gpu-smoke', 'gpu-smoke-shared', 'nccl-fabric-benchmark', 'pytorch-distributed', 'pytorch-distributed-test', 'pytorch-gpu-test', 'pytorch-gpu-test-shared', 'shared-gpu-dev', 'single-gpu-dev', 'suse-inference-endpoint-qwen', 'suse-inference-endpoint-qwen-shared', 'training-storage-test']);
   });
 
   it('have no problems', () => {
@@ -47,5 +48,34 @@ describe('sample profiles', () => {
     expect(purpose['gpu-smoke']).toBe('test');
     expect(purpose['nccl-fabric-benchmark']).toBe('benchmark');
     expect(purpose['pytorch-distributed']).toBe('training');
+  });
+});
+
+describe('the CPU smoke test', () => {
+  const p = profiles.find((x) => x.name === 'cpu-smoke');
+
+  it('asks for no GPU, and passes the pre-flight on a cluster without one', () => {
+    expect(p).toBeDefined();
+    const form = resolveForm(p!, {});
+
+    expect(form.gpusPerNode).toBe(0);
+    // a cluster with nothing but CPUs
+    const facts = {
+      loaded: true, namespaces: ['vision'], kueueInstalled: false, kaiInstalled: false, runaiInstalled: false, runaiProjectNamespaces: [], localQueues: [], clusterQueues: [], kaiQueues: [],
+      devicePluginGpus: 0, draDevices: 0, gpuDeviceMemory: 0, gpuTypes: [], gfdLabels: false, sharedGpus: [], draAllocated: 0, draAllocatedBy: [], claimsClusterWide: false,
+      draClassExists: false, gpuReadable: true, computeDomainAvailable: false, gpuNodes: [], podsReadable: true, existingJobs: [], configMaps: [], secrets: [], pvcs: [],
+      storageClasses: [], pytorchOperatorInstalled: false, jobApi: true, chart: null, fetchErrors: [], queueIndex: {},
+      capacity: { total: { gpu: 0, cpu: 16, memory: 0 }, free: { gpu: 0, cpu: 16, memory: 0 } }, namespaceQueue: null,
+    } as Facts;
+    const fails = checksFor(runPreflight({ ...form, namespace: 'vision', releaseName: 'cpu-smoke-1' }, facts), { profile: false, scheduler: form.scheduler })
+      .filter((c) => c.severity === 'fail');
+
+    expect(fails.map((c) => `${ c.id }: ${ c.title }`)).toEqual([]);
+  });
+
+  it('is requeued when idle in a pool that reclaims, and its hold is editable', () => {
+    expect(p?.reclaim).toEqual({ policy: 'Suspend', idleTimeout: '' });
+    expect(p?.editable).toContain('env');
+    expect(Object.keys(p?.form.env || {})).toEqual(['WORK_SECONDS', 'HOLD_SECONDS']);
   });
 });

@@ -37,11 +37,21 @@ DIAG = {"image": {"repository": "registry.suse.com/bci/bci-base", "tag": "15.7"}
         # the bundle lands on a small volume kept after the run, for download
         "storage": {"checkpointCreate": {"enabled": True, "size": "1Gi", "storageClass": "longhorn", "keep": True}}}
 
+CPU_SMOKE = {"image": {"repository": "registry.suse.com/bci/bci-base", "tag": "15.7"},
+             "job": {"kind": "job", "mode": "custom", "nodes": 1, "gpusPerNode": 0, "command": ["sh", "-c", script("cpu_smoke_test.sh")]},
+             "resources": {"requests": {"cpu": "1", "memory": "256Mi", "ephemeral-storage": "256Mi"}},
+             "env": [{"name": "WORK_SECONDS", "value": "30"}, {"name": "HOLD_SECONDS", "value": "0"}]}
+
 PROFILES = [
     ("12-gpu-smoke", "gpu-smoke", {
         "displayName": "GPU Smoke Test", "purpose": "test", "framework": "CUDA", "status": "ready",
         "description": "About 30 seconds on one whole GPU per worker: the GPU is allocated, the NVIDIA driver answers, the CUDA runtime and device memory are reported. No PyTorch needed.",
         "values": SMOKE, "editable": ["nodes"], "limits": {"nodes": {"min": 1, "max": 4}, "maxRuntimeHours": 1}}),
+    ("39-cpu-smoke", "cpu-smoke", {
+        "displayName": "CPU Smoke Test", "purpose": "test", "framework": "CPU", "gpu": "CPU", "status": "ready",
+        "description": "About 30 seconds on one CPU, no GPU: the run is placed in a CPU pool, starts and computes. Set HOLD_SECONDS to keep it idle afterwards and watch idle reclaim.",
+        "values": CPU_SMOKE, "editable": ["nodes", "env"], "limits": {"nodes": {"min": 1, "max": 4}, "maxRuntimeHours": 2},
+        "reclaim": {"policy": "Suspend"}}),
     ("30-gpu-smoke-shared", "gpu-smoke-shared", {
         "displayName": "GPU Smoke Test (shared GPU)", "purpose": "test", "framework": "CUDA", "status": "ready",
         "description": "The smoke test on a 1 GiB GPU-memory share, as shared workloads get their GPU: placed by the GPU-sharing scheduler, capped at its share.",
