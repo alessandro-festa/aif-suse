@@ -32,6 +32,10 @@ export default defineComponent({
   },
 
   computed: {
+    /** The cluster the run's pods are on: its compute pool's, else this page's. */
+    podCluster(): string {
+      return this.run.clusterId || String(this.$route.params.cluster || 'local');
+    },
     t0(): any {
       return this.run.training;
     },
@@ -83,7 +87,7 @@ export default defineComponent({
     },
 
     async loadSetup() {
-      const cluster = encodeURIComponent(String(this.$route.params.cluster || 'local'));
+      const cluster = encodeURIComponent(this.podCluster);
       const out: Record<string, { text: string; warning: boolean }> = {};
 
       await Promise.all(this.startingPods.map(async(p: any) => {
@@ -116,7 +120,7 @@ export default defineComponent({
         return;
       }
       try {
-        const log = await readPodLog(this.$store, String(this.$route.params.cluster || 'local'), pod.metadata.namespace, pod.metadata.name, 'tailLines=400');
+        const log = await readPodLog(this.$store, this.podCluster, pod.metadata.namespace, pod.metadata.name, 'tailLines=400');
 
         this.result = parseResult(log);
       } catch (e) {

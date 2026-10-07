@@ -85,6 +85,28 @@ else
   printf '✗ %s\n' "Job: podFailurePolicy missing"; fail=1
 fi
 
+# A compute pool's selector becomes required node affinity on every pod template, next to the
+# multi-node spread, for both kinds.
+for kind in job pytorchjob; do
+  out=$(helm template t . --set job.kind=$kind --set job.nodes=2 \
+    --set 'poolSelector.matchLabels.nvidia\.com/gpu\.product=L40S' \
+    --set 'poolSelector.matchExpressions[0].key=nvidia.com/gpu.present' \
+    --set 'poolSelector.matchExpressions[0].operator=Exists' 2>&1)
+  if printf '%s\n' "$out" | python3 -c '
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(sys.stdin) if d and d["kind"] in ("Job", "PyTorchJob")]
+d = docs[0]
+specs = [d["spec"]["template"]["spec"]] if d["kind"] == "Job" else [r["template"]["spec"] for r in d["spec"]["pytorchReplicaSpecs"].values()]
+want = [{"key": "nvidia.com/gpu.product", "operator": "In", "values": ["L40S"]}, {"key": "nvidia.com/gpu.present", "operator": "Exists"}]
+ok = all(s["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"] == [{"matchExpressions": want}]
+         and "podAntiAffinity" in s["affinity"] for s in specs)
+sys.exit(0 if ok else 1)'; then
+    printf '✓ %s\n' "$kind: poolSelector is required node affinity, alongside the spread"
+  else
+    printf '✗ %s\n' "$kind: poolSelector not rendered as node affinity"; fail=1
+  fi
+done
+
 echo
 [ $fail -eq 0 ] && echo "chart render checks passed" || echo "chart render checks FAILED"
 exit $fail

@@ -754,3 +754,32 @@ describe('GPU-memory shares follow the scheduler table', () => {
     expect(chartValuesFor({ ...share, scheduler: 'runai' }, true).gpu.sharedClaim).toBe('team-mps');
   });
 });
+
+// Where a run goes: a compute pool, and a namespace of an AI project there.
+describe('compute pool and AI project checks', () => {
+  const form = { ...DEFAULT_FORM, namespace: 'team-a' };
+  const check = (f: Facts, id: string) => runPreflight(form, f).find((c) => c.id === id);
+
+  it('asks for a pool when there are pools to choose from', () => {
+    expect(check(facts({ poolsAvailable: 2, pool: '' }), 'pool')?.severity).toBe('fail');
+  });
+
+  it('refuses a namespace that is in no AI project', () => {
+    const c = check(facts({ poolsAvailable: 2, pool: 'c-x-gpu', aiProjectNamespace: null }), 'project');
+
+    expect(c?.severity).toBe('fail');
+    expect(c?.title).toContain('team-a');
+  });
+
+  it('passes with a pool and an AI project namespace', () => {
+    const f = facts({ poolsAvailable: 2, pool: 'c-x-gpu', aiProjectNamespace: 'aif-c-x-p-team' });
+
+    expect(check(f, 'pool')).toBeUndefined();
+    expect(check(f, 'project')?.severity).toBe('pass');
+  });
+
+  it('says nothing on a page that does not place runs', () => {
+    expect(check(facts({}), 'pool')).toBeUndefined();
+    expect(check(facts({}), 'project')).toBeUndefined();
+  });
+});

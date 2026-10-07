@@ -1,0 +1,78 @@
+# What members of an AI project may do with its AIJobs, in the project's namespace on this
+# cluster (aif-<cluster>-<project>). The operator binds them from the Rancher project's role
+# bindings: owners and members get the editor, read-only members the viewer. The names are fixed:
+# the operator refers to them, and may bind only these two.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aif-aijob-editor
+  labels:
+    {{- include "aif-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ai-factory.suse.com
+    resources:
+      - aijobs
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - ai-factory.suse.com
+    resources:
+      - aijobs/status
+    verbs:
+      - get
+  # Bound in the project's namespace, this is that namespace only: Submit checks it exists.
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aif-aijob-viewer
+  labels:
+    {{- include "aif-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ai-factory.suse.com
+    resources:
+      - aijobs
+      - aijobs/status
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    verbs:
+      - get
+---
+# Every member of an AI project may read the compute pools, to choose where a run goes. Pools are
+# cluster-scoped, so the operator binds this through one ClusterRoleBinding (aif-computepool-viewers)
+# whose subjects are all AI projects' members.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aif-computepool-viewer
+  labels:
+    {{- include "aif-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ai-factory.suse.com
+    resources:
+      - computepools
+    verbs:
+      - get
+      - list
+      - watch

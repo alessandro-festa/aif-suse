@@ -26,6 +26,7 @@ import {
 } from '../readiness';
 import { CodeSource, codeCheck, codeFields, initialCodeSource } from '../code';
 import { loadClusterLabel } from '../cluster';
+import { localProfileConfigMaps } from '../placement';
 
 // The code (script, ConfigMap, arguments) has a section of its own: a training run needs it every time.
 const ADVANCED_FIELDS = ['env', 'secretName', 'runtimeLimitHours', 'priorityClassName'];
@@ -53,7 +54,8 @@ export default defineComponent({
     loadClusterLabel(this.$store, String(this.$route.params.cluster || 'local')).then((l: string) => {
       this.clusterName = l;
     });
-    const cms = await this.safeFindAll('configmap', 'configmaps');
+    // Profiles live on local, whatever cluster the chosen pool moved this page to.
+    const [cms] = await Promise.all([localProfileConfigMaps(this.$store).catch(() => []), this.loadPools()]);
     const profiles = profilesFrom(cms, (s: string) => jsyaml.load(s));
 
     this.profile = profiles.find((p) => p.name === this.$route.query.profile) || null;
@@ -300,6 +302,19 @@ export default defineComponent({
           @click.prevent="drawer = 'profile'"
         >View profile →</a>
       </section>
+
+      <div
+        v-if="pools.length"
+        class="tj-pool"
+      >
+        <LabeledSelect
+          :value="poolName"
+          :options="poolOptions"
+          label="Compute pool"
+          placeholder="Choose where this runs"
+          @update:value="choosePool"
+        />
+      </div>
 
       <Banner
         v-if="error"
@@ -770,6 +785,7 @@ export default defineComponent({
 .tj-title { margin: 0 0 12px; }
 .tj-link { font-size: 13px; }
 
+.tj-pool { max-width: 520px; margin-bottom: 16px; }
 .tj-profile-card { border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: var(--border-radius); padding: 12px 16px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 4px; }
 .tj-profile-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .tj-profile-name { font-size: 16px; font-weight: 600; }

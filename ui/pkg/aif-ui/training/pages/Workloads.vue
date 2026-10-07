@@ -8,6 +8,7 @@ import Loading from '@shell/components/Loading.vue';
 import Banner from '@components/Banner/Banner.vue';
 import { saferDump } from '@shell/utils/create-yaml';
 import { AIJOB_TYPE } from '../aijob';
+import { placedPods } from '../placement';
 import RunDetail from '../components/RunDetail.vue';
 import VolumeFiles from '../components/VolumeFiles.vue';
 import YamlViewer, { YamlDoc } from '../components/YamlViewer.vue';
@@ -45,7 +46,7 @@ export default defineComponent({
       // the kept volume (namespace/name) whose files are open, in the list of volumes without a run
       browsingVolume: '' as string,
       raw: {
-        jobs: [] as any[], pytorchJobs: [] as any[], kueueWorkloads: [] as any[], apps: [] as any[], pods: [] as any[], claimTemplates: [] as any[], aiWorkloads: [] as any[], blueprints: [] as any[], configMaps: [] as any[], pvcs: [] as any[], aiJobs: [] as any[]
+        jobs: [] as any[], pytorchJobs: [] as any[], kueueWorkloads: [] as any[], apps: [] as any[], pods: [] as any[], claimTemplates: [] as any[], aiWorkloads: [] as any[], blueprints: [] as any[], configMaps: [] as any[], pvcs: [] as any[], aiJobs: [] as any[], placedPods: [] as any[]
       },
       error:  '' as string,
       // ?project=<namespace>&state=<state> preset the filters, so other pages can link to a view
@@ -105,7 +106,7 @@ export default defineComponent({
       const r = this.raw;
       const profiles = profilesFrom(r.configMaps, (s: string) => jsyaml.load(s));
       const training = trainingToRuns(trainingRuns({
-        jobs: r.jobs, pytorchJobs: r.pytorchJobs, kueueWorkloads: r.kueueWorkloads, apps: r.apps, pods: r.pods, aiJobs: r.aiJobs
+        jobs: r.jobs, pytorchJobs: r.pytorchJobs, kueueWorkloads: r.kueueWorkloads, apps: r.apps, pods: r.pods, aiJobs: r.aiJobs, placedPods: r.placedPods
       }), profiles, r.claimTemplates);
 
       return [...training, ...inferenceToRuns(r.aiWorkloads, r.blueprints, profiles, r.pods)];
@@ -205,8 +206,11 @@ export default defineComponent({
           this.list(TYPES.PVC), this.list(AIJOB_TYPE),
         ]);
 
+        // Runs placed in compute pools have their pods on other clusters.
+        const placed = await placedPods(this.$store, aiJobs);
+
         this.raw = {
-          jobs, pytorchJobs, kueueWorkloads, apps, pods, claimTemplates, aiWorkloads, blueprints, configMaps, pvcs, aiJobs
+          jobs, pytorchJobs, kueueWorkloads, apps, pods, claimTemplates, aiWorkloads, blueprints, configMaps, pvcs, aiJobs, placedPods: placed
         };
       } catch (e: any) {
         this.error = `Could not list workloads: ${ e?.message || e }`;

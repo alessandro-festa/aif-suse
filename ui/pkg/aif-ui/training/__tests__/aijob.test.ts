@@ -38,3 +38,14 @@ describe('aiJobFor', () => {
     expect(values.preflight.checkHeadroom).toBe(true);
   });
 });
+
+describe('aiJobFor in a pool', () => {
+  it('names the pool and the namespace there', () => {
+    const j = aiJobFor({ name: 'train-1', namespace: 'aif-c-x-p-team', pool: 'c-x-gpu', targetNamespace: 'team-a', values: {} });
+
+    expect(j.metadata.namespace).toBe('aif-c-x-p-team');
+    expect(j.spec.pool).toBe('c-x-gpu');
+    expect(j.spec.targetNamespace).toBe('team-a');
+    expect('pool' in aiJobFor({ name: 'b', namespace: 'n', values: {} }).spec).toBe(false);
+  });
+});

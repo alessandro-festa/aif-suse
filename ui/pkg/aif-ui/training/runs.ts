@@ -30,6 +30,7 @@ export interface Run {
   url: string; // inference only: where clients connect
   obj: any; // what Delete acts on: the AIJob, else the Helm App (or bare Job), for training; the AIWorkload for inference
   pods: any[]; // training: in rank order; inference: engine, router, gateway, database
+  clusterId?: string; // where the pods are, when not on this cluster (a run in a compute pool)
   training: TrainingRun | null; // the Jobs-page row, for the detail panel
   inference: { blueprint: string; components: string[]; workload: any } | null;
 }
@@ -107,6 +108,7 @@ export function trainingToRuns(runs: TrainingRun[], profiles: Profile[], claimTe
       // deleting an AIJob uninstalls its release first (the operator's finalizer)
       obj:          r.aiJob || r.app || r.job,
       pods:         [...(r.pods || [])].sort(byRank),
+      clusterId:    r.clusterId,
       training:     r,
       inference:    null,
     };

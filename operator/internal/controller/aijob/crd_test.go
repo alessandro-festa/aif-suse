@@ -119,6 +119,23 @@ func TestCRDRules(t *testing.T) {
 	bad.Spec.Source.ChartName = ""
 	assert.Error(t, c.Create(ctx, bad), "chartName is required")
 
+	pooled := &v1alpha1.AIJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "pooled", Namespace: ns},
+		Spec:       v1alpha1.AIJobSpec{Pool: "c-abc-gpu-l40s", TargetNamespace: "team-a"},
+	}
+	require.NoError(t, c.Create(ctx, pooled))
+	for field, mutate := range map[string]func(*v1alpha1.AIJob){
+		"spec.pool":            func(x *v1alpha1.AIJob) { x.Spec.Pool = "c-abc-cpu" },
+		"spec.targetNamespace": func(x *v1alpha1.AIJob) { x.Spec.TargetNamespace = "team-b" },
+	} {
+		cur := &v1alpha1.AIJob{}
+		require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(pooled), cur))
+		mutate(cur)
+		err := c.Update(ctx, cur)
+		require.Error(t, err, field)
+		assert.Contains(t, err.Error(), field+" is immutable")
+	}
+
 	builtIn := &v1alpha1.AIJob{ObjectMeta: metav1.ObjectMeta{Name: "built-in", Namespace: ns}}
 	require.NoError(t, c.Create(ctx, builtIn), "a job without a source installs the built-in chart")
 	cur := &v1alpha1.AIJob{}

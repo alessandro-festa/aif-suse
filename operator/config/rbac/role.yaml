@@ -32,9 +32,11 @@ rules:
   - namespaces
   verbs:
   - create
+  - delete
   - get
   - list
   - patch
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -245,6 +247,8 @@ rules:
   - management.cattle.io
   resources:
   - clusters
+  - projectroletemplatebindings
+  - projects
   verbs:
   - get
   - list
@@ -252,7 +256,39 @@ rules:
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
+  - clusterrolebindings
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - aif-aijob-editor
+  - aif-aijob-viewer
+  - aif-computepool-viewer
+  resources:
+  - clusterroles
+  verbs:
+  - bind
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
   - rolebindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
   - roles
   verbs:
   - delete

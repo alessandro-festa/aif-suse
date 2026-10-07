@@ -240,3 +240,27 @@ describe('training rows from an AIJob whose Job is gone', () => {
     expect(r.resources).toMatch(/^2 ×/);
   });
 });
+
+describe('a run placed in a compute pool', () => {
+  const aiJob = {
+    metadata: { name: 'train-1', namespace: 'aif-c-x-p-team', creationTimestamp: '2026-10-07T10:00:00Z' },
+    spec:     { pool: 'c-x-gpu', targetNamespace: 'team-a', values: {} },
+    status:   { phase: 'Running', placement: { pool: 'c-x-gpu', clusterId: 'c-x', namespace: 'team-a' } },
+  };
+  const pod = (name: string, cluster: string, namespace: string, jobId: string) => ({
+    __clusterId: cluster, metadata: { name, namespace, labels: { 'ai-factory.suse.com/job-id': jobId } }, status: { phase: 'Running' }
+  });
+
+  it('shows its pods from the pool\'s cluster, and that cluster', () => {
+    const rows = trainingRuns({
+      jobs: [], pytorchJobs: [], kueueWorkloads: [], apps: [], pods: [], aiJobs: [aiJob],
+      placedPods: [pod('train-1-0', 'c-x', 'team-a', 'train-1'), pod('other', 'c-y', 'team-a', 'train-1')],
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].clusterId).toBe('c-x');
+    expect(rows[0].phase).toBe('Running');
+    expect(rows[0].pods.map((p: any) => p.metadata.name)).toEqual(['train-1-0']);
+    expect(trainingToRuns(rows, [], [])[0].clusterId).toBe('c-x');
+  });
+});

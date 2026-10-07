@@ -394,16 +394,9 @@ spec:
   {{- with (include "gpu-train-job.podScheduling" . | trim) }}
     {{- . | nindent 2 }}
   {{- end }}
-  {{- if gt (int .Values.job.nodes) 1 }}
+  {{- with (include "gpu-train-job.affinity" . | trim) }}
   affinity:
-    podAntiAffinity:
-      preferredDuringSchedulingIgnoredDuringExecution:
-        - weight: 100
-          podAffinityTerm:
-            topologyKey: kubernetes.io/hostname
-            labelSelector:
-              matchLabels:
-                {{- include "gpu-train-job.selectorLabels" . | nindent 16 }}
+    {{- . | nindent 4 }}
   {{- end }}
   {{- if eq (include "gpu-train-job.gpuMode" .) "dra" }}
   resourceClaims:

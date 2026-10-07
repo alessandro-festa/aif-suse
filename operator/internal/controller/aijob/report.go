@@ -166,12 +166,12 @@ func ownedBy(execution metav1.Object, pods []corev1.Pod) []corev1.Pod {
 // captureReport reads the first worker's report into the status. Best effort:
 // a run without one, or a log that cannot be read, leaves the report unset.
 // Only a pod the execution created reports.
-func (r *AIJobReconciler) captureReport(ctx context.Context, job *v1alpha1.AIJob, execution metav1.Object, pods []corev1.Pod) {
+func (r *AIJobReconciler) captureReport(ctx context.Context, job *v1alpha1.AIJob, tg *target, execution metav1.Object, pods []corev1.Pod) {
 	pod := firstWorker(ownedBy(execution, pods))
-	if r.PodLogs == nil || pod == nil {
+	if tg.logs == nil || pod == nil {
 		return
 	}
-	log, err := r.PodLogs.Tail(ctx, job.Namespace, pod.Name, reportTailLines)
+	log, err := tg.logs.Tail(ctx, tg.namespace, pod.Name, reportTailLines)
 	if err != nil {
 		return
 	}

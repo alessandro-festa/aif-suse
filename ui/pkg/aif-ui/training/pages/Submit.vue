@@ -31,6 +31,10 @@ import {
 import { pvcRole } from '../checkpoints';
 import { Profile, PROFILE_NAMESPACE, profilesFrom } from '../profiles';
 import { aiJobFor, AIJOB_TYPE } from '../aijob';
+import {
+  aiProjectNamespaceFor, createAIJob, fetchPools, LOCAL_CLUSTER, localProfileConfigMaps, poolLabel
+} from '../placement';
+import { getAllClusters } from '../../services/rancher-apps';
 import { backendOf, placesGpuMemoryShares, usesQueueTree } from '../schedulers';
 import { groupOf, readiness } from '../readiness';
 import { gpuInventory, gpuShort, hasGfdLabels } from '../gputypes';
@@ -119,6 +123,8 @@ export default defineComponent({
         enabled: false, repoName: '', chartName: '', version: ''
       },
       allConfigMaps:   [] as any[],
+      // Compute pools on downstream clusters, read from local whatever cluster this page is on.
+      pools:           [] as any[],
       allSecrets:      [] as any[],
       allPvcs:         [] as any[],
       namespaceQueues: {} as Record<string, string>,
@@ -152,6 +158,7 @@ export default defineComponent({
   },
 
   async fetch() {
+    await this.loadPools();
     await this.loadFacts();
     if (this.profileMode) {
       await this.startProfileAuthoring(String(this.$route.query.authorProfile));
@@ -635,6 +642,14 @@ export default defineComponent({
     },
 
 
+    /** The pool the run goes to, from the page's query: choosing one moves the page to its cluster. */
+    poolName(): string {
+      return String(this.$route.query.pool || '');
+    },
+    poolOptions(): { label: string; value: string }[] {
+      return this.pools.map((p: any) => ({ label: poolLabel(p), value: p.name }));
+    },
+
     submitDisabled(): boolean {
       if (this.entryMode === 'yaml') {
         if (this.yamlError) {
@@ -700,11 +715,16 @@ export default defineComponent({
   },
 
   watch: {
+    // Choosing a pool moves the page to the pool's cluster: read everything again from there.
+    '$route.params.cluster'() {
+      (this as any).$fetch();
+    },
     'form.scheduler'() {
       // pick the first visible queue automatically
       this.form.queue = this.queueOptions[0]?.value || '';
     },
     'form.namespace'(ns: string) {
+      this.refreshAiProject();
       if (this.form.scheduler === 'kueue') {
         this.form.queue = this.queueOptions[0]?.value || '';
       }
@@ -832,7 +852,7 @@ export default defineComponent({
       if (name === 'new') {
         return;
       }
-      const p = profilesFrom(this.allConfigMaps, (s: string) => jsyaml.load(s)).find((x) => x.name === name);
+      const p = profilesFrom(await localProfileConfigMaps(this.$store), (s: string) => jsyaml.load(s)).find((x) => x.name === name);
 
       if (!p) {
         this.error = `No profile named ${ name } in ${ PROFILE_NAMESPACE }.`;
@@ -880,11 +900,46 @@ export default defineComponent({
       this.facts = { ...this.facts, chart: this.customChartSource() };
     },
 
+    async loadPools() {
+      try {
+        const clusters = await getAllClusters(this.$store);
+
+        this.pools = await fetchPools(this.$store, Object.fromEntries(clusters.map((c: any) => [c.id, c.name])));
+      } catch {
+        this.pools = []; // an operator without ComputePool: runs stay on this cluster, as before
+      }
+    },
+
+    /** Run in a pool: the page moves to the pool's cluster, so every fact below is read there. */
+    choosePool(name: string) {
+      const pool = this.pools.find((p: any) => p.name === name);
+
+      if (!pool) {
+        return;
+      }
+      this.$router.push({
+        name: this.$route.name, params: { ...this.$route.params, cluster: pool.clusterId }, query: { ...this.$route.query, pool: name }
+      });
+    },
+
+    /** The AI project namespace on local the AIJob goes into, for the chosen namespace. */
+    async refreshAiProject() {
+      if (!this.poolName) {
+        return;
+      }
+      const home = await aiProjectNamespaceFor(this.$store, String(this.$route.params.cluster), this.form.namespace);
+
+      this.facts = { ...this.facts, aiProjectNamespace: home };
+    },
+
     async loadFacts() {
       const facts: Facts = { ...EMPTY_FACTS, fetchErrors: [] };
 
-      // The operator installs the run from the chart built into it: no repository to look up.
-      facts.jobApi = !!this.$store.getters['cluster/schemaFor'](AIJOB_TYPE);
+      // The operator installs the run from the chart built into it: no repository to look up. A run
+      // in a pool is recorded on local, where the operator serves AIJobs whenever it serves pools.
+      facts.pool = this.poolName;
+      facts.poolsAvailable = this.pools.length;
+      facts.jobApi = !!this.poolName || !!this.$store.getters['cluster/schemaFor'](AIJOB_TYPE);
       facts.chart = this.customChartSource();
 
       facts.kueueInstalled = !!this.$store.getters['cluster/schemaFor'](TYPES.LOCAL_QUEUE);
@@ -1103,6 +1158,7 @@ export default defineComponent({
           this.form.scheduler = queueSched;
         }
       }
+      await this.refreshAiProject();
     },
 
     useSuggestedScratch() {
@@ -1180,14 +1236,26 @@ export default defineComponent({
         return;
       }
       try {
-        await this.$store.dispatch('cluster/create', aiJobFor({
-          name: this.form.releaseName, namespace: this.form.namespace, source: this.facts.chart, values: this.effectiveValues
-        })).then((job: any) => job.save());
+        if (this.poolName) {
+          // Recorded on local in the AI project's namespace; the operator runs it in the pool.
+          await createAIJob(this.$store, aiJobFor({
+            name:            this.form.releaseName,
+            namespace:       this.facts.aiProjectNamespace || '', // checked by the pre-flight
+            pool:            this.poolName,
+            targetNamespace: this.form.namespace,
+            source:          this.facts.chart,
+            values:          this.effectiveValues,
+          }));
+        } else {
+          await this.$store.dispatch('cluster/create', aiJobFor({
+            name: this.form.releaseName, namespace: this.form.namespace, source: this.facts.chart, values: this.effectiveValues
+          })).then((job: any) => job.save());
+        }
         this.submitted = true;
         done(true);
         setTimeout(() => {
           this.$router.push({
-            name: `c-cluster-${ PRODUCT_NAME }-${ ENDPOINTS_PAGE }`, params: { cluster: this.$route.params.cluster }, query: { tab: 'training' }
+            name: `c-cluster-${ PRODUCT_NAME }-${ ENDPOINTS_PAGE }`, params: { cluster: this.poolName ? LOCAL_CLUSTER : this.$route.params.cluster }, query: { tab: 'training' }
           });
         }, 1200);
       } catch (e: any) {
@@ -1232,6 +1300,19 @@ export default defineComponent({
       color="success"
       :label="`Submitted job ${form.releaseName}. Redirecting to Training Jobs…`"
     />
+
+    <div
+      v-if="!profileMode && pools.length"
+      class="tj-pool"
+    >
+      <LabeledSelect
+        :value="poolName"
+        :options="poolOptions"
+        label="Compute pool"
+        placeholder="Choose where this job runs"
+        @update:value="choosePool"
+      />
+    </div>
 
     <!-- The operator installs the training chart built into it. A chart of your own is an escape
          hatch, kept out of the way: it must take the same values, and an administrator has to
@@ -2306,6 +2387,7 @@ export default defineComponent({
 
 .tj-submit { padding: 0 20px 20px; }
 .tj-header { margin-bottom: 10px; h1 { margin-bottom: 4px; } }
+.tj-pool { max-width: 520px; margin-bottom: 12px; }
 .tj-custom-chart { margin-bottom: 12px; summary { cursor: pointer; color: var(--muted); } }
 .tj-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: 24px; align-items: start; }
 @media (max-width: 1100px) { .tj-grid { grid-template-columns: 1fr; } }

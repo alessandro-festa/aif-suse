@@ -122,7 +122,7 @@ func newHarnessServing(t *testing.T, kueueVersions []string, objs ...client.Obje
 	h := &harness{t: t, c: c, helm: newFakeHelm(), clock: t0}
 	h.r = &AIJobReconciler{
 		Client: c, Scheme: s, APIReader: c,
-		HelmFor: func(string) (helmClient.HelmClient, error) { return h.helm, nil },
+		HelmFor: func(string, string) (helmClient.HelmClient, error) { return h.helm, nil },
 		Now:     func() time.Time { return h.clock },
 		// The fixture installs a custom chart from gpu-train-charts, which has to be allowed.
 		AllowedCharts: []string{"gpu-train-charts/*"},
@@ -398,7 +398,8 @@ func TestTheKueueWorkloadIsFoundInEitherAPIVersion(t *testing.T) {
 			wl.SetNamespace(ns)
 			wl.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: "train-1", UID: "job-uid"}})
 			h := newHarnessServing(t, []string{served}, aijob("train-1"), exec, wl)
-			o, err := h.r.observe(context.Background(), h.get("train-1"))
+			j := h.get("train-1")
+			o, err := h.r.observe(context.Background(), j, &target{namespace: j.Namespace, reader: h.c})
 			require.NoError(t, err)
 			require.NotNil(t, o.workload)
 			assert.Equal(t, "job-train-1", o.workload.GetName())

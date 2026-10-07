@@ -20,8 +20,10 @@ Branch: `aijob-scheduling` on the alessandro-festa fork (`origin`), based on SUS
 |---|---|---|---|
 | 0 | dstanley's AIJob work cherry-picked; Workloads sub-menu; Compute Pools view; built-in training chart (no repository); design doc | done | `f36a018e` (+ cherry-picks `ce8c1302..9a9fd67e`) |
 | 1 | Scheduler backend table (`schedulers.yaml`) behind chart, operator and UI; Kueue v1beta2; Run:AI held pods | done | `40153155` |
-| 2 | `ComputePool` CRD, discovery of GPU and CPU-only pools on every cluster via the Rancher proxy | done, verified on the lab (local + 2 downstream) | — |
-| 3 | Multi-cluster dispatch (Fleet Bundle of the built-in chart) + observe via the proxy | — | — |
+| 2 | `ComputePool` CRD, discovery of GPU and CPU-only pools on every cluster via the Rancher proxy | done, verified on the lab | `e5ff421d` |
+| 3a | Dispatch: `spec.pool` / `spec.targetNamespace`, Helm install on the pool's cluster through the Rancher proxy, pods kept to the pool's nodes, observe + cleanup there | done, verified end to end on the lab | — |
+| 3b | One local namespace per AI project; RBAC from Rancher project membership; jobs held inside their project | done, verified on the lab | — |
+| 3c | UI: pool picker in Submit/Deploy, jobs in the project namespace, run details from the job's cluster, Projects per cluster, members read pools | built; backend verified on the lab, UI flow to be tried in the browser | — |
 | 4 | Placement controller (meta-scheduler) + global queue + deferred placement | — | — |
 | 5 | Activity controller (Prometheus via the proxy), idle reclaim, per-profile policy, hand-off | — | — |
 | 6 | Volcano backend | — | — |
@@ -119,6 +121,59 @@ early return), the CRD refuses `clusterId: local` (CEL), and the UI hides it, "N
 rows included. A pool's default `displayName` is the cluster name. The Kind (GPU/CPU) and GPU
 model tell a cluster's pools apart, so the page has no separate Cluster column. Reviewer's decision.
 (As a result `RancherAccess` only ever builds proxy clients; the in-cluster local reader is gone.)
+
+**D-20 Jobs reach downstream clusters with Helm through the Rancher proxy, not Fleet.**
+The AIJob controller keeps its in-process Helm install/uninstall and points it at
+`<rancher>/k8s/clusters/<id>` with the Settings token (D-15). dstanley's install-once / cancel /
+retention logic is reused unchanged. Chart preflight errors come back at once and fail the job
+with the real reason. This supersedes the design doc's Fleet Bundle (§6.4).
+*Rejected:* a Fleet Bundle. It survives the operator being briefly down, but errors arrive only
+through BundleDeployment status and the job logic would need rework.
+
+**D-21 Until placement exists, a job names its pool: `spec.pool` (+ `spec.targetNamespace`).**
+Both are immutable (CEL). The pool's node selector is injected as the chart's `poolSelector`
+(required node affinity), overriding submitted values. `status.placement {pool, clusterId,
+namespace}` is recorded *before* the install, so cancel, retention and delete still reach the
+release after the pool is deleted. A job without a pool runs on the operator's cluster, unchanged.
+A job whose pool is missing or disabled, or whose cluster needs a token that isn't set, waits
+Pending with reason `PoolNotFound` / `PoolDisabled` / `NoRancherToken`. Phase 4 fills `spec.pool`
+when it is empty.
+
+**D-22 One namespace on local per AI project holds its AIJobs** (Phase 3b). The count grows with
+projects, not with clusters × namespaces. Members get access through RoleBindings derived from
+Rancher project membership.
+*Rejected:* a single namespace with an admission check (weak read isolation); mirroring every
+downstream namespace on local (namespace count). The reviewer was concerned about the number of
+namespaces on local.
+
+**D-23 An AI project is a Rancher project on a downstream cluster labelled
+`ai-factory.suse.com/ai-project=true`.** Only such projects get a namespace on local
+(`aif-<cluster>-<project>`), so the count is exactly the AI projects. Default/System projects and
+projects on `local` never get one. Owner and member get `aif-aijob-editor` (create, cancel,
+delete); read-only gets `aif-aijob-viewer`; other role templates grant nothing. Subjects are
+written as Rancher writes its own (user ID as `User`, group principal as `Group`). Deleting the
+Rancher project deletes the namespace (job finalizers uninstall the releases). Unmarking keeps
+it, so jobs are never lost by accident. Reviewer's decisions.
+
+**D-24 A job in an AI project's namespace runs only inside that project.** Before installing,
+its pool must be on the project's cluster, and its target namespace there must carry
+`field.cattle.io/projectId: <cluster>:<project>`. Otherwise the job fails at once with
+`NotInProject`; a missing target namespace waits (`TargetNamespaceNotFound`). The operator
+installs with the Settings token (admin power), so this check, not the token, is what keeps a
+project's members inside their project. Jobs outside project namespaces are created by people
+who can create AIJobs anywhere (administrators) and are not restricted.
+
+**D-25 Pages that place runs move to the pool's cluster.** Choosing a pool in Submit/Deploy
+navigates to the same page on the pool's cluster (query `pool=`). Every preflight fact
+(namespaces, queues, GPUs, schedulers) is then read from the cluster the run will use, without
+changing dstanley's preflight code. What lives on local is read through `training/placement.ts`
+regardless of the page's cluster: pools, profiles, the AI project namespace, the AIJob POST. The
+Projects page likewise works per downstream cluster and offers a cluster picker on local.
+
+**D-26 Members read compute pools through one ClusterRoleBinding.** Pools are cluster-scoped,
+so a namespace RoleBinding cannot grant them. The `aiproject` controller keeps
+`aif-computepool-viewers` → `aif-computepool-viewer` with the union of all AI projects' members
+(one object, whatever the number of projects).
 
 ---
 
@@ -243,6 +298,60 @@ unreadable cluster is also logged ("Cannot read cluster for compute pools", with
 simulated GPU labels). All Connected within one resync of the token being set. After D-19,
 `local-cpu` is gone and the API refuses to create a pool on `local` (checked with a server-side dry run).
 
+**F-28 [bug, pre-existing, fixed P3a] Every DRA `lookup` crashed the chart on Kubernetes < 1.34.**
+Five lookups of `resource.k8s.io/v1` (gpuMode auto, the computeDomain and DRA DeviceClass checks,
+ResourceSlices in the disk-pressure and headroom checks) had no check that the API exists. A
+`lookup` of an unserved API is a hard template error, so the install failed even with
+`gpu.mode=device-plugin`. All are now guarded by `gpu-train-job.hasDRA`
+(`.Capabilities.APIVersions.Has "resource.k8s.io/v1"`). Offline renders are unchanged (32-case
+matrix), and live renders work on the lab's downstream clusters. Closes O-1 / F-09.
+
+**F-29 [fact] End-to-end on the lab (P3a):** AIJob `dispatch-smoke-2` was created on the management
+cluster with `pool: c-fg8qv-gpu-l40s`. The operator recorded the placement, installed the release
+on downstream-2 through Rancher, and the pod ran on `downstream-2-worker` (node affinity
+`nvidia.com/gpu.product In [L40S]`). The AIJob went Running → Succeeded, read from downstream-2,
+with `resources: 1 × L40S`. Deleting the AIJob uninstalled the release on downstream-2 (Job, pod
+and Helm release secret gone).
+
+**F-30 [trap] AIJob `spec.category` is an enum** (inference, training, agent, rag, data,
+custom). "test" is refused; test and benchmark runs are `training` with a profile.
+
+**F-31 [fact] Rancher 2.15 PRTBs live in namespaces of two shapes** (`c-fg8qv-p-g6vrf` and
+older `p-bcqsr`). Match PRTBs by their `projectName` field (`<cluster>:<project>`), never by
+namespace.
+
+**F-32 [fact] Lab check (P3b):** a Rancher project created on downstream-2 with the AI-project
+label gave a namespace on local and an `aif-aijob-editor` RoleBinding for its creator's
+`creator-project-owner` PRTB. An AIJob from that namespace targeting `default` (Default project)
+failed with `NotInProject` and installed nothing. Deleting the project removed the namespace and
+the job. Isolation for a *non-admin* member is unverified live (the lab user is a Rancher admin,
+who can do everything anyway): O-13.
+
+**F-33 [trap] A terminating namespace keeps triggering its controller.** Every status update
+during deletion re-enqueues; check `DeletionTimestamp` before deleting again.
+
+**F-34 [trap] The cluster store follows the page's cluster.** On a page moved to a downstream
+cluster, `cluster/schemaFor` / `cluster/findAll` answer for that cluster. Anything on local
+(profiles, ComputePools, AIJobs) must be read with an explicit `/k8s/clusters/local/...` request.
+Submit used one ConfigMap list for both profiles (local) and the user's ConfigMaps (target cluster);
+they are now separate.
+
+**F-35 [trap] Members rarely may list pods cluster-wide downstream.** Placed runs' pods are read
+per namespace (`/api/v1/namespaces/<ns>/pods?labelSelector=ai-factory.suse.com/job-id`), not
+cluster-wide.
+
+**F-36 [fact] Lab state for UI testing:** Rancher project "AI Team" (`c-fg8qv:p-aiteam`, marked)
+with namespace `ai-team` on downstream-2. Its namespace on local `aif-c-fg8qv-p-aiteam` has an
+editor binding for user-2khzq, who is also in `aif-computepool-viewers`. AIJob `team-smoke-1`
+(pool `c-fg8qv-gpu-l40s`, target `ai-team`) ran on downstream-2-worker: the project-boundary
+pass case, live.
+
+**F-37 [trap] With no profiles there is no Deploy.** Compute Profiles shows a tile, and a
+Deploy button, per profile ConfigMap in `ai-profiles` on local. A fresh install has none, and the
+lab had none. Apply `examples/training/profiles/00-namespace-rbac.yaml` and the training profiles
+(10–13, 30–38) to get some. The full form (Submit) is reached from Training Jobs → **New** →
+"Custom training job (full form)".
+
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator
 namespace. Discovery reuses it (D-15).
@@ -358,7 +467,11 @@ kubectl --context kind-sims-datacenter get computepools
 | ComputePool API | `operator/api/v1alpha1/computepool_types.go` | cluster-scoped; `clusterId` immutable (CEL) |
 | Pool discovery | `operator/internal/controller/computepool/` | `discover.go` (pure: `discoverPools`, `poolStatus`, `detectStack`), `access.go` (local vs proxy), `computepool_controller.go` |
 | Chart RBAC | `charts/aif-operator/templates/rbac/manager-role.yaml` | hand-maintained; `tests/rbac-parity.sh` |
-| Fleet delivery (for P3) | `operator/internal/controller/aiworkload/gitchart.go` | `buildGitChartBundle`, `chartTgzToBundleResources` |
+| AI projects | `operator/internal/controller/aiproject/` | namespace per marked project; RoleBindings from PRTBs; `NamespaceFor`, labels |
+| Project RBAC roles | `charts/aif-operator/templates/rbac/aijob-roles.yaml` | `aif-aijob-editor` / `aif-aijob-viewer`; operator may only `bind` these |
+| Cross-cluster UI helpers | `ui/pkg/aif-ui/training/placement.ts` | `fetchPools`, `poolLabel`, `localProfileConfigMaps`, `aiProjectNamespaceFor`, `createAIJob`, `placedPods`, `podsOfPlacedJob` |
+| Job dispatch | `operator/internal/controller/aijob/target.go` | `targetFor` (pool → cluster/namespace, placement wins), `helmFor` / `remoteFor` (proxy clients cached per connection), `unplaced` reasons |
+| Pool affinity (chart) | `charts/gpu-train-job/templates/_helpers.tpl` `gpu-train-job.affinity`, `hasDRA` | `poolSelector` value → required node affinity |
 
 ---
 
@@ -366,7 +479,7 @@ kubectl --context kind-sims-datacenter get computepools
 
 | # | Issue | Where | Phase |
 |---|---|---|---|
-| O-1 | `gpu.mode=auto` errors without `resource.k8s.io/v1` (F-09) | `_helpers.tpl` `gpuMode` | any; small |
+| O-1 | ~~`gpu.mode=auto` errors without `resource.k8s.io/v1` (F-09)~~ fixed in P3a (F-28) | — | — |
 | O-2 | Enable KAI-style shares under Run:AI after testing (F-14) | `schedulers.yaml` | 7 |
 | O-3 | Projects page quota setting is `'kai' \| 'resourcequota'`; it should follow the table's `quota` | `projects.ts`, `Projects.vue`, `resourcequota.ts` | quota editors |
 | O-4 | `AIJob.status.queue` is Kueue/KAI-specific (`kaiQueue` also carries Run:AI's queue) | `aijob_types.go` | 9 |
@@ -378,6 +491,11 @@ kubectl --context kind-sims-datacenter get computepools
 | O-10 | Discovery lists every active pod of every cluster each minute; at scale, aggregate per node or watch | `computepool/access.go` | before production |
 | O-11 | Requested GPUs count `nvidia.com/gpu` only; DRA claims and KAI/HAMi fractions are not in `requested` | `computepool/discover.go` | 4 (placement) / 7 |
 | O-12 | `aijobAllowedCharts` and other operator values on the lab come from chart defaults; the lab runs the branch chart with `crds.manageWithJob=false` | lab | — |
+| O-13 | Verify project isolation live with a non-admin Rancher user (member and read-only) | lab | before release |
+| O-14 | ~~Project members need to read ComputePools~~ done in 3c (D-26) | — | — |
+| O-15 | ~~The Projects page must set the AI-project label~~ done in 3c: creation, Run:AI adoption, and "Make AI project" for existing projects | — | — |
+| O-16 | The Training Jobs list reads AIJobs through the cluster store on local; check what a non-admin member sees (Steve lists namespaces the user can access) | UI | with O-13 |
+| O-17 | The UI's 3c flows (pool picker → cluster switch → submit; Projects on a downstream cluster) are covered by unit tests of their logic, not by component tests; try them in the browser | UI | now |
 
 ---
 
@@ -408,6 +526,50 @@ kubectl --context kind-sims-datacenter get computepools
 - Behaviour changes, all deliberate: unknown `scheduler.type` refused; Run:AI pods reported Queued;
   Kueue Workload found at v1beta2 or v1beta1; no KAI-style shares under Run:AI in the UI (F-14).
 - `isQueueScheduler` was split into the specific questions it stood for.
+
+### Phase 3c — as built
+- Submit/Deploy: a "Compute pool" picker (hidden while authoring a profile); `choosePool` moves the
+  route to the pool's cluster and the page re-fetches. New facts `pool`, `poolsAvailable` and
+  `aiProjectNamespace`, and preflight checks `pool` ("Choose a compute pool") and `project`
+  ("Namespace … is not in an AI project"). Submit POSTs the AIJob to local with `spec.pool` and
+  `spec.targetNamespace`, then returns to Training Jobs on local. Without pools (an older
+  operator), everything works as before.
+- Training Jobs: placed runs get their pods from the placement cluster, per namespace, tagged
+  `__clusterId`. Rows and `Run` carry `clusterId`; RunDetail reads events and logs from it.
+- Projects: a cluster picker on local; on a downstream cluster, "Make an existing Rancher project
+  an AI project". New and Run:AI-adopted projects are marked through the steve project model
+  (Norman creation may not keep labels).
+- Operator: `aif-computepool-viewers` ClusterRoleBinding (D-26); the project roles may `get` their
+  own namespace (Submit checks it exists).
+- Tests: placement helpers (5), the pool/project checks (4), `aiJobFor` with a pool, placed run
+  rows, the pool-viewers binding.
+
+### Phase 3b — as built
+- `aiproject` controller, keyed by the Rancher project. It watches projects, PRTBs (mapped by
+  `projectName`) and its own namespaces. RoleBinding names are derived from the PRTB UID and
+  role. A role change replaces the binding (`roleRef` is immutable); a subject change updates it.
+- The operator chart ships the two ClusterRoles. The operator gets `bind` on exactly those, plus
+  rolebindings CRUD, namespaces create/delete, and read on projects and PRTBs. The RBAC parity
+  check passes.
+- `checkProject` in `target.go` (D-24) runs only before placement. After that, the placement is
+  authoritative.
+- Tests: role mapping (users, groups, custom roles ignored, other projects ignored), membership
+  changes, only marked downstream projects, unmark keeps / delete removes, a same-named foreign
+  namespace left alone; the five boundary cases plus a job outside any project. Then the lab (F-32).
+
+### Phase 3a — as built
+- `target` carries the cluster, namespace and clients (Helm, reader, log reader). Every
+  reconcile path (install, observe, report, cancel, retention, finalize) takes it, so local jobs
+  use exactly the clients they did before. All existing AIJob tests pass unchanged.
+- Helm for a downstream cluster: `cli.EnvSettings` with `KubeAPIServer` / `KubeToken` /
+  `KubeInsecureSkipTLSVerify`. Helm only takes a CA as a file, so it is written once per CA to a
+  temp file. Clients are cached by cluster, namespace and a fingerprint of the connection, so a
+  new token rebuilds them.
+- The chart got `poolSelector` and one shared affinity helper (it replaced two copies of the
+  anti-affinity block); renders without a pool are byte-identical.
+- Tests: install on the pool's cluster and namespace with `poolSelector`; observe from the
+  downstream reader; the three waiting reasons; cleanup after the pool is deleted; deletion of a
+  never-placed job; CEL immutability of `pool` / `targetNamespace`. Then the lab (F-29).
 
 ### Phase 2 — as built
 - Delivered as planned below, plus: an RBAC parity check (F-19, F-20); "Not discovered" rows for

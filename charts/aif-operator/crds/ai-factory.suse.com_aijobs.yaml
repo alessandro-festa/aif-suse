@@ -86,6 +86,12 @@ spec:
               displayName:
                 description: DisplayName is a human-readable name. Informational.
                 type: string
+              pool:
+                description: |-
+                  Pool names the ComputePool the job runs in: it is installed on that pool's
+                  cluster, through Rancher, and its pods are kept to the pool's nodes. Empty:
+                  the operator's own cluster.
+                type: string
               profile:
                 description: Profile names the profile that chose the values. Informational.
                 type: string
@@ -123,6 +129,11 @@ spec:
                 - repoName
                 - version
                 type: object
+              targetNamespace:
+                description: |-
+                  TargetNamespace is the namespace the job runs in on the pool's cluster.
+                  Empty: the AIJob's own namespace.
+                type: string
               values:
                 description: |-
                   Values are the chart values as submitted.
@@ -134,6 +145,12 @@ spec:
             - message: spec.source is immutable; submit a new AIJob
               rule: has(self.source) == has(oldSelf.source) && (!has(self.source)
                 || self.source == oldSelf.source)
+            - message: spec.pool is immutable; submit a new AIJob
+              rule: '(has(self.pool) ? self.pool : '''') == (has(oldSelf.pool) ? oldSelf.pool
+                : '''')'
+            - message: spec.targetNamespace is immutable; submit a new AIJob
+              rule: '(has(self.targetNamespace) ? self.targetNamespace : '''') ==
+                (has(oldSelf.targetNamespace) ? oldSelf.targetNamespace : '''')'
             - message: spec.values is immutable; submit a new AIJob
               rule: has(self.values) == has(oldSelf.values) && (!has(self.values)
                 || self.values == oldSelf.values)
@@ -250,6 +267,22 @@ spec:
                 - Failed
                 - Cancelled
                 type: string
+              placement:
+                description: |-
+                  Placement is where the job was installed, recorded at install so it can be
+                  cleaned up there even if its pool goes away.
+                properties:
+                  clusterId:
+                    type: string
+                  namespace:
+                    type: string
+                  pool:
+                    type: string
+                required:
+                - clusterId
+                - namespace
+                - pool
+                type: object
               podCounts:
                 description: AIJobPodCounts summarises pods by phase when there are
                   too many to list.

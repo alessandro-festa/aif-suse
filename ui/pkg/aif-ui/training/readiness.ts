@@ -34,7 +34,7 @@ const GROUPS: { key: string; label: string; ids: RegExp }[] = [
     key: 'policy', label: 'Profile policy', ids: /^profile/
   },
   {
-    key: 'project', label: 'Project and quota', ids: /^(namespace|queue.*|quota.*|scheduler|runai-project|rbac|kind.*|chart|name|aif|blueprint|required-secret)$/
+    key: 'project', label: 'Project and quota', ids: /^(namespace|queue.*|quota.*|scheduler|runai-project|rbac|kind.*|chart|pool|project|name|aif|blueprint|required-secret)$/
   },
   {
     key: 'capacity', label: 'GPU capacity', ids: /^(gpu|gpu-in-use|gpu-type|gpu-share|capacity|headroom|cd|model-fit)$/

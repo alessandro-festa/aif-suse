@@ -70,6 +70,49 @@ workload (schedulers.yaml): Kueue.
 {{- end -}}
 
 {{/*
+Pod affinity, both kinds: required node affinity for the compute pool's nodes (poolSelector, a label
+selector as in ComputePool.spec.nodeSelector), and a soft spread of a multi-node run's pods over
+nodes. Empty when neither applies.
+*/}}
+{{- define "gpu-train-job.affinity" -}}
+{{- $terms := list -}}
+{{- with .Values.poolSelector -}}
+{{- range $k, $v := (.matchLabels | default dict) -}}
+{{- $terms = append $terms (dict "key" $k "operator" "In" "values" (list $v)) -}}
+{{- end -}}
+{{- range (.matchExpressions | default list) -}}
+{{- $terms = append $terms . -}}
+{{- end -}}
+{{- end -}}
+{{- if $terms }}
+nodeAffinity:
+  requiredDuringSchedulingIgnoredDuringExecution:
+    nodeSelectorTerms:
+      - matchExpressions:
+          {{- toYaml $terms | nindent 10 }}
+{{- end }}
+{{- if gt (int .Values.job.nodes) 1 }}
+podAntiAffinity:
+  preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        topologyKey: kubernetes.io/hostname
+        labelSelector:
+          matchLabels:
+            {{- include "gpu-train-job.selectorLabels" . | nindent 12 }}
+{{- end }}
+{{- end -}}
+
+{{/*
+"true" when the cluster serves the DRA API (resource.k8s.io/v1, Kubernetes 1.34+). A `lookup` of an
+API the server does not serve is a hard template error, not an empty result, so every DRA lookup
+is guarded by this.
+*/}}
+{{- define "gpu-train-job.hasDRA" -}}
+{{- if .Capabilities.APIVersions.Has "resource.k8s.io/v1" }}true{{ end -}}
+{{- end -}}
+
+{{/*
 Resolve gpu.mode. "auto" picks device-plugin if any node advertises gpu.resourceName,
 else dra if the DeviceClass exists. Offline (helm template) auto resolves to device-plugin.
 */}}
@@ -91,7 +134,7 @@ kai-fraction
     {{- $cap := index .status.allocatable $.Values.gpu.resourceName | default "0" -}}
     {{- if ne (toString $cap) "0" }}{{ $dp = true }}{{ end -}}
   {{- end -}}
-  {{- if and (not $dp) (lookup "resource.k8s.io/v1" "DeviceClass" "" .Values.gpu.deviceClassName) }}{{ $mode = "dra" }}{{ end -}}
+  {{- if and (not $dp) (include "gpu-train-job.hasDRA" .) (lookup "resource.k8s.io/v1" "DeviceClass" "" .Values.gpu.deviceClassName) }}{{ $mode = "dra" }}{{ end -}}
 {{- end -}}
 {{ $mode }}
 {{- end -}}

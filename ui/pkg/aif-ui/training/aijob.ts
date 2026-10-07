@@ -15,6 +15,9 @@ export interface AIJobInput {
   name: string;
   namespace: string;
   source?: AIJobSource | null;
+  /** The ComputePool to run in, and the namespace there; the AIJob itself lives in `namespace` on local. */
+  pool?: string;
+  targetNamespace?: string;
   values: any;
   displayName?: string;
 }
@@ -41,6 +44,8 @@ export function aiJobFor(i: AIJobInput): any {
       category: 'training',
       ...(profile ? { profile } : {}),
       ...(i.source ? { source: { repoName: i.source.repoName, chartName: i.source.chartName, version: i.source.version } } : {}),
+      ...(i.pool ? { pool: i.pool } : {}),
+      ...(i.targetNamespace ? { targetNamespace: i.targetNamespace } : {}),
       values,
     },
   };

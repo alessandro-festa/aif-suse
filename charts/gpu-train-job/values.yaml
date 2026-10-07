@@ -208,6 +208,10 @@ preflight:
   debug: false           # true = abort with the computed headroom numbers (troubleshooting)
 
 nodeSelector: {}
+# The compute pool's nodes, as a label selector (matchLabels / matchExpressions, the shape of
+# ComputePool.spec.nodeSelector), rendered as required node affinity. AI Factory sets it from the
+# pool an AIJob runs in. Empty = any node.
+poolSelector: {}
 tolerations:
   - key: nvidia.com/gpu
     operator: Exists

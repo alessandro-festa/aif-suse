@@ -3,6 +3,7 @@
 // whose Job is gone (ttlSecondsAfterFinished), with one phase each. Shared by the Jobs page and the Workloads list, so the two cannot disagree on a state.
 
 import { JOB_LABEL, JOB_LABEL_VALUE } from './config';
+import { placementOf, podsOfPlacedJob } from './placement';
 import { KAI_QUEUE_LABEL } from './quota';
 import {
   backendForSchedulerName, POD_HOLDING_SCHEDULERS, podQueueLabel, workloadQueueLabel
@@ -15,6 +16,8 @@ export interface TrainingInput {
   apps: any[];
   pods: any[];
   aiJobs?: any[];
+  // Pods of runs placed on other clusters, marked with their cluster (placement.ts placedPods).
+  placedPods?: any[];
 }
 
 export interface TrainingRun {
@@ -23,6 +26,8 @@ export interface TrainingRun {
   aiJob?: any;
   name: string;
   namespace: string;
+  // The cluster the run's pods are on when it is not this one (a run placed in a compute pool).
+  clusterId?: string;
   phase: string; // Pending, Queued, Suspended, Scheduling, Running, Complete, Failed, Finished
   admitted: boolean | null;
   completions: string;
@@ -167,7 +172,8 @@ function aiJobRows(i: TrainingInput, live: Set<string>): TrainingRun[] {
         scheduler:   v.scheduler?.type || 'none',
         queue:       a.status?.queue?.name || v.scheduler?.queue || '',
         age:         a.metadata.creationTimestamp,
-        pods:        [],
+        clusterId:   placementOf(a)?.clusterId,
+        pods:        podsOfPlacedJob(a, i.placedPods || []),
       };
     });
 }

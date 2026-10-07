@@ -46,6 +46,7 @@ import (
 	"github.com/SUSE/aif-operator/internal/api"
 	"github.com/SUSE/aif-operator/internal/config"
 	aijobctrl "github.com/SUSE/aif-operator/internal/controller/aijob"
+	aiprojectctrl "github.com/SUSE/aif-operator/internal/controller/aiproject"
 	aiworkloadctrl "github.com/SUSE/aif-operator/internal/controller/aiworkload"
 	computepoolctrl "github.com/SUSE/aif-operator/internal/controller/computepool"
 	aiextensionctrl "github.com/SUSE/aif-operator/internal/controller/installaiextension"
@@ -236,7 +237,7 @@ func main() {
 		"Development only: comma-separated <clusterRepo>=<url> used instead of the ClusterRepo's spec.url, for "+
 			"running the operator outside the cluster where an in-cluster repository Service does not resolve.")
 	flag.StringVar(&onlyControllers, "controllers", "",
-		"Development only: comma-separated controllers to run (installaiextension, settings, aiworkload, aijob, computepool). "+
+		"Development only: comma-separated controllers to run (installaiextension, settings, aiworkload, aijob, aiproject, computepool). "+
 			"Empty (default) runs all of them.")
 	opts := zap.Options{
 		Development: true,
@@ -421,8 +422,15 @@ func main() {
 			AllowedCharts:            allowedCharts,
 			RepoURLOverrides:         overrides,
 			AllowInsecureRegistryTLS: allowInsecureRegistryTLS,
+			Connection:               connectionHolder,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "AIJob")
+			os.Exit(1)
+		}
+	}
+	if enabled("aiproject") {
+		if err := (&aiprojectctrl.Reconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "AIProject")
 			os.Exit(1)
 		}
 	}

@@ -97,6 +97,12 @@ export interface Facts {
   jobApi: boolean;
   // A custom chart instead of the built-in one (Advanced). null = the built-in chart.
   chart: { repoName: string; chartName: string; version: string } | null;
+  // The compute pool the run goes to ('' = none chosen), how many there are to choose from, and the
+  // AI project namespace on local its AIJob is recorded in (null: the namespace is in no AI project).
+  // Undefined on pages that do not place runs.
+  pool?: string;
+  poolsAvailable?: number;
+  aiProjectNamespace?: string | null;
   fetchErrors: string[]; // things we could not read (RBAC etc.)
   // Queue hierarchy and live capacity, for the quota checks. Separate from kaiQueues above, which
   // stays a flat list for the picker; quota answers need the whole tree.
@@ -366,6 +372,16 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
     add('chart', 'pass', 'Custom job template', `${ facts.chart.repoName } / ${ facts.chart.chartName } ${ facts.chart.version }`);
   } else {
     add('chart', 'pass', 'Job template built into AI Factory', 'gpu-train-job, installed by the AI Factory operator; no chart repository needed');
+  }
+
+  // 1b. where it runs: a compute pool, and an AI project namespace there
+  if (facts.poolsAvailable && !facts.pool) {
+    add('pool', 'fail', 'Choose a compute pool', 'Training runs on a compute pool of a downstream cluster. Pick one at the top of the page.');
+  } else if (facts.pool && !facts.aiProjectNamespace) {
+    add('project', 'fail', `Namespace ${ form.namespace || '(none)' } is not in an AI project`,
+      'Runs go into a namespace of an AI project, which decides who can see and manage them. Pick a namespace that belongs to one, or make its Rancher project an AI project on the Projects page.');
+  } else if (facts.pool) {
+    add('project', 'pass', 'AI project', `The run is recorded in ${ facts.aiProjectNamespace } on the management cluster.`);
   }
 
   // 2. namespace

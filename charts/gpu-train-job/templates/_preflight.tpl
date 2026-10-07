@@ -149,11 +149,12 @@ real cause instead of leaving a Pending pod with no events. Disable with preflig
     {{- fail (printf "preflight: no node advertises %s (device plugin). This cluster exposes GPUs via DRA — choose gpu.mode=dra." .Values.gpu.resourceName) }}
   {{- end }}
 {{- end }}
-{{- if and .Values.computeDomain.enabled (not (lookup "resource.k8s.io/v1" "DeviceClass" "" .Values.computeDomain.channelDeviceClass)) }}
+{{- if and .Values.computeDomain.enabled (not (and (include "gpu-train-job.hasDRA" .) (lookup "resource.k8s.io/v1" "DeviceClass" "" .Values.computeDomain.channelDeviceClass))) }}
   {{- fail (printf "preflight: DeviceClass %q not found; the DRA driver's compute-domain support is not active on this cluster." .Values.computeDomain.channelDeviceClass) }}
 {{- end }}
 {{- if eq (include "gpu-train-job.gpuMode" .) "dra" }}
-  {{- $dc := lookup "resource.k8s.io/v1" "DeviceClass" "" .Values.gpu.deviceClassName }}
+  {{- $dc := dict }}
+  {{- if include "gpu-train-job.hasDRA" . }}{{ $dc = lookup "resource.k8s.io/v1" "DeviceClass" "" .Values.gpu.deviceClassName }}{{ end }}
   {{- if not $dc }}
     {{- fail (printf "preflight: DRA DeviceClass %q not found (kubectl get deviceclasses). Choose gpu.mode=device-plugin or fix the class name." .Values.gpu.deviceClassName) }}
   {{- end }}
@@ -161,7 +162,8 @@ real cause instead of leaving a Pending pod with no events. Disable with preflig
 {{- /* DiskPressure on GPU nodes: a run there loses its logs and may be evicted */ -}}
 {{- if .Values.preflight.checkDiskPressure }}
   {{- $nodes := (lookup "v1" "Node" "" "").items }}
-  {{- $slices := (lookup "resource.k8s.io/v1" "ResourceSlice" "" "").items }}
+  {{- $slices := list }}
+  {{- if include "gpu-train-job.hasDRA" . }}{{ $slices = (lookup "resource.k8s.io/v1" "ResourceSlice" "" "").items }}{{ end }}
   {{- $gpu := dict }}{{ $pressured := list }}{{ $ok := 0 }}
   {{- range $nodes }}{{ if gt (include "gpu-train-job.cpuMilli" (index .status.allocatable $.Values.gpu.resourceName | default "0") | int) 0 }}{{ $_ := set $gpu .metadata.name true }}{{ end }}{{ end }}
   {{- range $slices }}{{ if and (eq .spec.driver $.Values.gpu.deviceClassName) .spec.nodeName }}{{ $_ := set $gpu .spec.nodeName true }}{{ end }}{{ end }}
@@ -179,7 +181,8 @@ real cause instead of leaving a Pending pod with no events. Disable with preflig
 {{- /* CPU/memory headroom on GPU nodes: allocatable minus requests of non-terminal pods */ -}}
 {{- if .Values.preflight.checkHeadroom }}
   {{- $nodes := (lookup "v1" "Node" "" "").items }}
-  {{- $slices := (lookup "resource.k8s.io/v1" "ResourceSlice" "" "").items }}
+  {{- $slices := list }}
+  {{- if include "gpu-train-job.hasDRA" . }}{{ $slices = (lookup "resource.k8s.io/v1" "ResourceSlice" "" "").items }}{{ end }}
   {{- $pods := (lookup "v1" "Pod" "" "").items }}
   {{- $reqCpu := include "gpu-train-job.cpuMilli" .Values.resources.requests.cpu | int }}
   {{- $reqMem := include "gpu-train-job.memMi" .Values.resources.requests.memory | int }}

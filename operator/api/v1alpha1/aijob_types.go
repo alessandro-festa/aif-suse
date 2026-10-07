@@ -83,6 +83,8 @@ type AIJobRetention struct {
 // AIJobSpec is the whole statement of intent. Source and values are fixed at
 // creation: a change of intent is a new job.
 // +kubebuilder:validation:XValidation:rule="has(self.source) == has(oldSelf.source) && (!has(self.source) || self.source == oldSelf.source)",message="spec.source is immutable; submit a new AIJob"
+// +kubebuilder:validation:XValidation:rule="(has(self.pool) ? self.pool : '') == (has(oldSelf.pool) ? oldSelf.pool : '')",message="spec.pool is immutable; submit a new AIJob"
+// +kubebuilder:validation:XValidation:rule="(has(self.targetNamespace) ? self.targetNamespace : '') == (has(oldSelf.targetNamespace) ? oldSelf.targetNamespace : '')",message="spec.targetNamespace is immutable; submit a new AIJob"
 // +kubebuilder:validation:XValidation:rule="has(self.values) == has(oldSelf.values) && (!has(self.values) || self.values == oldSelf.values)",message="spec.values is immutable; submit a new AIJob"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.cancel) || !oldSelf.cancel || (has(self.cancel) && self.cancel)",message="spec.cancel cannot be undone"
 type AIJobSpec struct {
@@ -100,6 +102,15 @@ type AIJobSpec struct {
 	// which needs no chart repository.
 	// +optional
 	Source *AIJobSource `json:"source,omitempty"`
+	// Pool names the ComputePool the job runs in: it is installed on that pool's
+	// cluster, through Rancher, and its pods are kept to the pool's nodes. Empty:
+	// the operator's own cluster.
+	// +optional
+	Pool string `json:"pool,omitempty"`
+	// TargetNamespace is the namespace the job runs in on the pool's cluster.
+	// Empty: the AIJob's own namespace.
+	// +optional
+	TargetNamespace string `json:"targetNamespace,omitempty"`
 	// Values are the chart values as submitted.
 	// Typed as an object so the immutability rule on the spec can compare it.
 	// +kubebuilder:validation:Type=object
@@ -235,11 +246,22 @@ type AIJobCleanup struct {
 	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
 }
 
+// AIJobPlacement is where a job's execution lives.
+type AIJobPlacement struct {
+	Pool      string `json:"pool"`
+	ClusterID string `json:"clusterId"`
+	Namespace string `json:"namespace"`
+}
+
 // AIJobStatus is written by the operator only. Timestamps are observed facts;
 // durations are computed by readers.
 type AIJobStatus struct {
 	// +optional
 	Phase AIJobPhase `json:"phase,omitempty"`
+	// Placement is where the job was installed, recorded at install so it can be
+	// cleaned up there even if its pool goes away.
+	// +optional
+	Placement *AIJobPlacement `json:"placement,omitempty"`
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// +optional

@@ -408,6 +408,61 @@ rules:
       - update
       - watch
 
+  # AI projects: one namespace on this cluster per Rancher project marked as an AI project, with
+  # RoleBindings that follow the project's members (internal/controller/aiproject).
+  - apiGroups:
+      - management.cattle.io
+    resources:
+      - projects
+      - projectroletemplatebindings
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - rolebindings
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  # Binding a role needs either its permissions or `bind` on it: only these two.
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - clusterroles
+    resourceNames:
+      - aif-aijob-editor
+      - aif-aijob-viewer
+      - aif-computepool-viewer
+    verbs:
+      - bind
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - clusterrolebindings
+    verbs:
+      - create
+      - get
+      - list
+      - patch
+      - update
+      - watch
   # Events on the objects the operator reconciles wherever they live (an AIJob is in
   # its submitter's namespace); the namespaced Roles only cover the operator's own.
   - apiGroups:
