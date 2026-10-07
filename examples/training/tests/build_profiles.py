@@ -42,6 +42,17 @@ CPU_SMOKE = {"image": {"repository": "registry.suse.com/bci/bci-base", "tag": "1
              "resources": {"requests": {"cpu": "1", "memory": "256Mi", "ephemeral-storage": "256Mi"}},
              "env": [{"name": "WORK_SECONDS", "value": "30"}, {"name": "HOLD_SECONDS", "value": "0"}]}
 
+def framework_test(script_name, tag, memory, env):
+    """A multi-node CPU test of a framework on a stock Python image: the script installs the framework
+    (pinned by env) and runs it across the Indexed Job's pods."""
+    return {"image": {"repository": "python", "tag": tag},
+            "job": {"kind": "job", "mode": "custom", "nodes": 2, "gpusPerNode": 0, "command": ["sh", "-c", script(script_name)]},
+            "resources": {"requests": {"cpu": "1", "memory": memory, "ephemeral-storage": "4Gi"}},
+            "env": env}
+
+
+FRAMEWORK_LIMITS = {"nodes": {"min": 1, "max": 4}, "registries": ["python", "docker.io/library/python"], "maxRuntimeHours": 1}
+
 PROFILES = [
     ("12-gpu-smoke", "gpu-smoke", {
         "displayName": "GPU Smoke Test", "purpose": "test", "framework": "CUDA", "status": "ready",
@@ -52,6 +63,21 @@ PROFILES = [
         "description": "About 30 seconds on one CPU, no GPU: the run is placed in a CPU pool, starts and computes. Set HOLD_SECONDS to keep it idle afterwards and watch idle reclaim.",
         "values": CPU_SMOKE, "editable": ["nodes", "env"], "limits": {"nodes": {"min": 1, "max": 4}, "maxRuntimeHours": 2},
         "reclaim": {"policy": "Suspend"}}),
+    ("44-jax-distributed-test", "jax-distributed-test", {
+        "displayName": "JAX Distributed Test (CPU)", "purpose": "test", "framework": "JAX", "gpu": "CPU", "status": "beta",
+        "description": "Two or more CPU pods join one JAX job through jax.distributed on rank 0's stable name, gather every rank and train a small model with gradients averaged across processes. No GPU, no Kubeflow runtime.",
+        "values": framework_test("jax_distributed_test.sh", "3.12-slim", "1Gi", [{"name": "JAX_VERSION", "value": "0.7.2"}]),
+        "editable": ["nodes", "env"], "limits": FRAMEWORK_LIMITS}),
+    ("45-tensorflow-distributed-test", "tensorflow-distributed-test", {
+        "displayName": "TensorFlow Distributed Test (CPU)", "purpose": "test", "framework": "TensorFlow", "gpu": "CPU", "status": "beta",
+        "description": "Two or more CPU pods form a MultiWorkerMirroredStrategy cluster from TF_CONFIG built off the pods' stable names, and train with gradients all-reduced across workers. No GPU, no TFJob operator.",
+        "values": framework_test("tensorflow_distributed_test.sh", "3.12-slim", "2Gi", [{"name": "TF_VERSION", "value": "2.20.0"}]),
+        "editable": ["nodes", "env"], "limits": FRAMEWORK_LIMITS}),
+    ("46-deepspeed-distributed-test", "deepspeed-distributed-test", {
+        "displayName": "DeepSpeed Distributed Test (CPU)", "purpose": "test", "framework": "DeepSpeed", "gpu": "CPU", "status": "beta",
+        "description": "Two or more CPU pods set up torch.distributed from the chart's rendezvous and train with DeepSpeed ZeRO stage 1 over gloo (DeepSpeed's CPU accelerator). No GPU, no MPI or Kubeflow runtime.",
+        "values": framework_test("deepspeed_distributed_test.sh", "3.12", "3Gi", [{"name": "TORCH_VERSION", "value": "2.8.0"}, {"name": "DEEPSPEED_VERSION", "value": "0.17.6"}]),
+        "editable": ["nodes", "env"], "limits": FRAMEWORK_LIMITS}),
     ("30-gpu-smoke-shared", "gpu-smoke-shared", {
         "displayName": "GPU Smoke Test (shared GPU)", "purpose": "test", "framework": "CUDA", "status": "ready",
         "description": "The smoke test on a 1 GiB GPU-memory share, as shared workloads get their GPU: placed by the GPU-sharing scheduler, capped at its share.",

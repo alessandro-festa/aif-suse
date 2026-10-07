@@ -273,5 +273,27 @@ Also in scope:
 
 Out of scope until decided: changing the default runtime away from PyTorch.
 
+**Findings (Phase 10, 2026-10-07).** All three run multi-node on the plain Indexed Job: the chart
+already gives each pod `JOB_COMPLETION_INDEX`, `NNODES` and `RDZV_ENDPOINT` (rank 0's stable name
+through the headless Service, `publishNotReadyAddresses`). No Kubeflow runtime and no new
+`job.mode` are needed; each framework is a profile whose script maps those three onto its own
+bootstrap.
+
+| Framework | Bootstrap from the chart's env | Gotchas found | Lab (2–3 CPU pods, arm64) |
+|---|---|---|---|
+| JAX 0.7.2 | `jax.distributed.initialize(RDZV_ENDPOINT, NNODES, JOB_COMPLETION_INDEX)` | CPU collectives need `jax_cpu_collectives_implementation=gloo`. JAX's own Kubernetes bootstrap (`jax[k8s]`) would list pods (RBAC); the explicit coordinator needs none | pass in 30–40 s |
+| TensorFlow 2.20 | `TF_CONFIG` built from `<job>-<i>.<job>.<ns>.svc:2222`, task index = completion index | Keras 3 `model.fit` does not support `MultiWorkerMirroredStrategy`: use a `strategy.run` loop (or tf-keras / TF_USE_LEGACY_KERAS). Run from a file, not stdin, or autograph cannot read the source | pass in ~50 s |
+| DeepSpeed 0.17.6 (torch 2.8 CPU) | `MASTER_ADDR/PORT` from `RDZV_ENDPOINT`, `RANK`/`WORLD_SIZE` from index/NNODES, `init_distributed("gloo")` | Ships source only (`--no-build-isolation` after torch). Its CPU accelerator JIT-builds a shared-memory comm op at init: needs a C++ toolchain (full `python:3.12`, not slim), and the op is x86_64-only (`immintrin.h`), so on arm64 it is skipped (gloo only) | pass in ~50 s (ZeRO-1) |
+
+Profiles (Compute Profiles → Training, purpose test, beta): `jax-distributed-test`,
+`tensorflow-distributed-test` and `deepspeed-distributed-test`. Each installs its framework
+(version in env, editable) on a stock Python image and reports AIF_RESULT. For real training, use
+images with the framework baked in (NGC JAX/TF containers, a CUDA PyTorch image with DeepSpeed
+ops prebuilt); pip at start is fine for a smoke test, not for production.
+
+Kubeflow Trainer v2 (the training add-on) also ships JAX/DeepSpeed ClusterTrainingRuntimes from
+2.3.0 (Kubernetes ≥ 1.32); using them is the TrainJob path of Phase 9. The Indexed Job path above
+needs no operator at all.
+
 Lab: kind-sims-datacenter (management) plus downstream-1 and downstream-2. Target is a different
 scheduler on each downstream (e.g. KAI on one, Kueue CPU-only on the other).

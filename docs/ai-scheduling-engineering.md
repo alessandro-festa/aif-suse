@@ -35,7 +35,7 @@ Branch: `aijob-scheduling` on the alessandro-festa fork (`origin`), based on SUS
 | 7 | HAMi on the GPU-sharing axis: `sharingLayers` table, `gpu.sharing: hami`, HAMi-aware pool GPU counts, Submit option | done; lab-verified up to scheduling (simulated GPUs: no real HAMi) | — |
 | 8 | Cluster add-ons from Compute Pools: KAI, Kueue, Volcano, HAMi, Kubeflow Trainer v2 (upstream) as Fleet HelmOps | done; KAI, Kueue and Trainer 2.1.0 verified live | — |
 | 9 | Generic `AIJob.status.queue`; Trainer v2 `TrainJob` | — | — |
-| 10 | Exploration: training frameworks beyond PyTorch (JAX, TensorFlow, DeepSpeed); see design doc §8.1 | — (asked 2026-10-07) | — |
+| 10 | Frameworks beyond PyTorch: JAX, TensorFlow, DeepSpeed on the plain Indexed Job; findings in design doc §8.1 | done: three CPU test profiles, all passing on the lab | — |
 
 ---
 
@@ -780,6 +780,13 @@ field 'namespace'"). 2.1.0 (JobSet 0.10.1) installs. Its webhook certificate Sec
 by the controllers, which Fleet saw as drift ("Modified"). Add-ons can list `ownSecrets`, sent as
 Fleet `diff.comparePatches` (remove /data) through `createFleetBundle`; the HelmOp then went 1/1.
 
+**F-71 [fact] Lab check (P10):** jax-test-1, tf-test-2 and ds-test-5 (2 CPU pods each on
+c-xvstz-cpu) and jax-profile-3 (the JAX profile's own values, 3 pods) all Succeeded. The report
+was captured on the AIJob ("3 of 3 … ranks [0, 1, 2] loss 12.922 -> 0.00000"). Failures on the
+way, each now handled in the scripts and listed in design doc §8.1: TensorFlow's Keras 3 fit under
+MWMS; DeepSpeed's missing compiler on slim, then its x86-only shm op on arm64; a test bug where
+DeepSpeed ranks fitted different targets.
+
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator
 namespace. Discovery reuses it (D-15).
@@ -962,6 +969,8 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | O-32 | A HAMi share is one GPU per pod (as KAI's); HAMi allows several slices per pod | chart preflight | later |
 | O-33 | ~~Kubeflow training runtime~~ decided: upstream Kubeflow Trainer v2 for now (D-52); ask SUSE for a training-only mode of its chart (F-67) | add-ons | follow-up with SUSE |
 | O-34 | Add-ons are pinned versions in the UI; upgrading one means editing `services/addons.ts` | add-ons | later |
+| O-35 | GPU variants of the JAX / TensorFlow / DeepSpeed profiles (framework images, NCCL), untested on the lab's simulated GPUs | profiles | with a GPU cluster |
+| O-36 | Phase 9: generic status.queue; TrainJob path to use Trainer v2's JAX/DeepSpeed runtimes | chart / operator | next |
 | O-17 | The UI's 3c flows (pool picker → cluster switch → submit; Projects on a downstream cluster) are covered by unit tests of their logic, not by component tests; try them in the browser | UI | now |
 
 ---

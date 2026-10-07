@@ -27,7 +27,7 @@ const profiles = profilesFrom(docs.filter((d) => d?.kind === 'ConfigMap'), (s: s
 
 describe('sample profiles', () => {
   it('are all found', () => {
-    expect(profiles.map((p) => p.name).sort()).toEqual(['cpu-smoke', 'engine-llamacpp', 'engine-ollama', 'engine-sglang', 'engine-vllm', 'gpu-diagnostics-bundle', 'gpu-diagnostics-bundle-shared', 'gpu-health-check', 'gpu-smoke', 'gpu-smoke-shared', 'nccl-fabric-benchmark', 'pytorch-distributed', 'pytorch-distributed-test', 'pytorch-gpu-test', 'pytorch-gpu-test-shared', 'shared-gpu-dev', 'single-gpu-dev', 'suse-inference-endpoint-qwen', 'suse-inference-endpoint-qwen-shared', 'training-storage-test']);
+    expect(profiles.map((p) => p.name).sort()).toEqual(['cpu-smoke', 'deepspeed-distributed-test', 'engine-llamacpp', 'engine-ollama', 'engine-sglang', 'engine-vllm', 'gpu-diagnostics-bundle', 'gpu-diagnostics-bundle-shared', 'gpu-health-check', 'gpu-smoke', 'gpu-smoke-shared', 'jax-distributed-test', 'nccl-fabric-benchmark', 'pytorch-distributed', 'pytorch-distributed-test', 'pytorch-gpu-test', 'pytorch-gpu-test-shared', 'shared-gpu-dev', 'single-gpu-dev', 'suse-inference-endpoint-qwen', 'suse-inference-endpoint-qwen-shared', 'tensorflow-distributed-test', 'training-storage-test']);
   });
 
   it('have no problems', () => {

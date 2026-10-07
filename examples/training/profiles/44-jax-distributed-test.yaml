@@ -1,0 +1,104 @@
+# JAX Distributed Test (CPU): Two or more CPU pods join one JAX job through jax.distributed on rank 0's stable name, gather every rank and train a small model with gradients averaged across processes. No GPU, no Kubeflow runtime.
+# Built by ../tests/build_profiles.py from ../tests/; edit the script there and rebuild.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jax-distributed-test
+  namespace: ai-profiles
+  labels:
+    trainingjobs/profile: training
+data:
+  profile.yaml: |
+    displayName: JAX Distributed Test (CPU)
+    purpose: test
+    framework: JAX
+    gpu: CPU
+    status: beta
+    description: Two or more CPU pods join one JAX job through jax.distributed on rank 0's stable name, gather every rank and train a small model with gradients averaged across processes. No GPU, no Kubeflow runtime.
+    values:
+      image:
+        repository: python
+        tag: 3.12-slim
+      job:
+        kind: job
+        mode: custom
+        nodes: 2
+        gpusPerNode: 0
+        command:
+        - sh
+        - -c
+        - |
+          #!/bin/sh
+          # JAX Distributed Test (CPU): N processes, one per pod, join through jax.distributed on rank 0's
+          # stable name (RDZV_ENDPOINT, the chart's headless Service), gather every rank, and fit a tiny
+          # linear model with gradients averaged across processes. No GPU, no Kubeflow runtime: the chart's
+          # Indexed Job gives each pod its rank (JOB_COMPLETION_INDEX) and the world size (NNODES).
+          set -e
+          pip install --quiet --no-cache-dir --disable-pip-version-check "jax[cpu]==${JAX_VERSION:-0.7.2}" >/tmp/pip.log 2>&1 || { cat /tmp/pip.log; exit 3; }
+          cat > /tmp/test.py <<'PY'
+          import json, os, time, sys
+          import numpy as np
+          import warnings
+          # the coordinator is given explicitly; JAX's own Kubernetes bootstrap (jax[k8s]) would need pod-list RBAC
+          warnings.filterwarnings("ignore", message="Kubernetes environment detected")
+          import jax
+          jax.config.update("jax_cpu_collectives_implementation", "gloo")
+          rank, world = int(os.environ["JOB_COMPLETION_INDEX"]), int(os.environ["NNODES"])
+          coord = os.environ["RDZV_ENDPOINT"]
+          checks = []
+          def add(name, ok, detail):
+              checks.append({"name": name, "ok": bool(ok), "detail": detail})
+              print(("PASS " if ok else "FAIL ") + f" {name}  {detail}", flush=True)
+
+          t0 = time.time()
+          jax.distributed.initialize(coordinator_address=coord, num_processes=world, process_id=rank)
+          add("Processes joined", jax.process_count() == world, f"{jax.process_count()} of {world} through {coord.split('.')[0]}")
+          add("Devices visible", jax.device_count() == world * jax.local_device_count(), f"{jax.device_count()} CPU devices in total")
+
+          from jax.experimental import multihost_utils
+          ranks = multihost_utils.process_allgather(np.array([rank]))
+          add("All-gather across processes", sorted(ranks.ravel().tolist()) == list(range(world)), f"ranks {sorted(ranks.ravel().tolist())}")
+
+          # each process holds its own slice of the data; gradients are averaged across processes
+          key = jax.random.PRNGKey(rank)
+          x = jax.random.normal(key, (256, 4)); w_true = jax.numpy.array([1.0, -2.0, 0.5, 3.0])
+          y = x @ w_true
+          loss = lambda w: jax.numpy.mean((x @ w - y) ** 2)
+          grad = jax.jit(jax.grad(loss))
+          w = jax.numpy.zeros(4)
+          first = float(loss(w))
+          for _ in range(60):
+              g = np.asarray(grad(w))
+              g = multihost_utils.process_allgather(g).mean(axis=0)
+              w = w - 0.1 * g
+          last = float(loss(w))
+          add("Trains with averaged gradients", last < first * 0.05, f"loss {first:.3f} -> {last:.5f}")
+
+          ok = all(c["ok"] for c in checks)
+          if rank == 0:
+              print("AIF_RESULT " + json.dumps({"test": "JAX Distributed Test", "status": "pass" if ok else "fail", "checks": checks,
+                    "metrics": {"processes": str(world), "seconds": f"{time.time() - t0:.1f}"},
+                    "env": {"jax": jax.__version__, "backend": jax.default_backend(), "node": os.environ.get("NODE_NAME", "")}}), flush=True)
+          multihost_utils.sync_global_devices("done")
+          sys.exit(0 if ok else 1)
+          PY
+          exec python3 /tmp/test.py
+      resources:
+        requests:
+          cpu: '1'
+          memory: 1Gi
+          ephemeral-storage: 4Gi
+      env:
+      - name: JAX_VERSION
+        value: 0.7.2
+    editable:
+    - nodes
+    - env
+    limits:
+      nodes:
+        min: 1
+        max: 4
+      registries:
+      - python
+      - docker.io/library/python
+      maxRuntimeHours: 1
