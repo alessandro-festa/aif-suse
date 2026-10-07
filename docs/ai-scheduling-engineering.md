@@ -28,6 +28,7 @@ Branch: `aijob-scheduling` on the alessandro-festa fork (`origin`), based on SUS
 | 4a | `AIProject` (multi-cluster AI projects) + `AIProjectMembers`; replaces 3b's label-based projects | done, verified on the lab | — |
 | 4b | Placement controller (meta-scheduler) + global queue + deferred placement; CPU-only runs in the chart | done, verified on the lab across two clusters | — |
 | 4c | UI: AI Projects page; project picker + "Automatic" pool in Submit/Deploy | built; requests verified through Rancher; to try in the browser | — |
+| IE | Inference engines: vLLM, Ollama (App Collection), llama.cpp, SGLang ("Inference Engines Apps" custom repo) as inference profiles; inference deploy in an AI project's pool | done; llama.cpp verified end to end on downstream-1; Apps page and deploy page to try in the browser | `50499978`, `06769b24`, `bd31a1cd` |
 | 5 | Activity controller (Prometheus via the proxy), idle reclaim, per-profile policy, hand-off | — | — |
 | 6 | Volcano backend | — | — |
 | 7 | HAMi on the GPU-sharing axis | — | — |
@@ -229,6 +230,43 @@ target namespace is the project's namespace there.
 **D-33 Members of any AI project can read all AIProjects** (the pool-viewer ClusterRole also
 reads `aiprojects`), so the project picker needs no per-project ClusterRoleBinding. Trade-off:
 project names, clusters and owners are visible across projects.
+
+**D-34 Inference engines are inference profiles over Blueprints, one per engine.** vLLM
+(`application-collection/vllm 0.1.10`) and Ollama (`application-collection/ollama 1.76.0`) come
+from the App Collection; llama.cpp and SGLang come from the "Inference Engines Apps". Each engine
+has a one-component Blueprint (`examples/training/blueprints/inference-*`) and a profile
+(`examples/training/profiles/4x-engine-*`). Small defaults that run anywhere: Ollama granite4:350m-h
+and llama.cpp Qwen2.5-0.5B GGUF on CPU; vLLM and SGLang Qwen2.5-1.5B on one GPU.
+
+**D-35 Why a Blueprint even for an App Collection chart.** An App-sourced AIWorkload is installed
+by the UI (it writes the Fleet HelmOp in `fleet-default`), which project members cannot do; a
+Blueprint-sourced one is installed by the operator. The Blueprint also pins the values the profile
+promises (model, GPUs, cache) and that the deploy pre-flight reads. Alternative, not taken: profiles
+naming an App directly, which needs Fleet write for members or an operator change.
+
+**D-36 llama.cpp and SGLang are two charts, served from a branch of their own.**
+`charts/inference-engines/{llama-cpp,sglang}`, published by `git subtree split` to the fork's
+`inference-engines` branch. The AI Factory git custom repo "Inference Engines Apps" (ClusterRepo
+`aif-engines`) points at that branch, so Rancher indexes only these two charts (F-45). A first
+version was one chart with an `engine` switch; replaced at the user's request: separate apps, own
+logos.
+
+**D-37 Inference deploy: project, then a pool, no Automatic.** There is no placement controller for
+AIWorkloads, so the user picks the pool. The page moves to the pool's cluster for the GPU and node
+facts (as D-32); the AIWorkload is recorded on local in `aif-<project>` with `targetClusters` =
+the pool's cluster and `targetNamespace` = the project's namespace there. Without pools the page
+works as before (cluster store, namespace picker).
+
+**D-38 The inference summary reads each engine's values shape.** vLLM: `servingEngineSpec.modelSpec`;
+Ollama: `ollama.models.run`, `ollama.gpu`, `persistentVolume`; llama-cpp/sglang: `model.*`,
+`gpu.count`, `resources`, `cache`. Engines without a router get their Service as the endpoint
+(`<release>.<ns>.svc:<port>/v1`). A CPU engine gets no GPU, model-fit or GPU-node headroom checks.
+
+**D-39 Custom repo app logos come from Rancher's own icon link.** The Apps page renders only raster
+data URLs (no browser request to a publisher host; `utils/catalog-logo.ts`). For custom repos it
+now fetches Rancher's same-origin `?link=icon` with the user's session and inlines it: raster types
+only, at most 50 per load, 64 KiB each. Charts in a git repo reference their icon as
+`file://<chart>/icon.png` (F-46). Logos are the projects' own: llama.cpp (MIT), SGLang (Apache-2.0).
 
 ---
 
@@ -441,6 +479,29 @@ project's clusters), Running then Succeeded on downstream-2-worker; a CPU run �
 **F-43 [fact, pre-existing upstream] The Settings controller reconciles about every 15s** ("Rancher
 catalog client configured" twice per cycle) with nothing changing. Harmless but noisy; not ours.
 
+**F-44 [bug, ours, recurrence of F-34] Compute Profiles and the inference deploy page read through
+the cluster store.** On a downstream cluster page they listed no profiles and no blueprints, and
+the deploy page said AI Factory was not installed. Profiles, Blueprints and AIWorkloads are now
+read from local explicitly (`localProfileConfigMaps`, `localBlueprints`, `localAIWorkloads`).
+
+**F-45 [fact] A git ClusterRepo indexes every Chart.yaml in the branch.** Pointed at
+`aijob-scheduling` it listed aif-operator, aif-ui and gpu-train-job beside the engine. Hence the
+dedicated branch (D-36); marking those charts hidden would hide them in every repo that ships them.
+
+**F-46 [fact] Rancher rewrites every chart's `icon` in the index to its own
+`/v1/catalog.cattle.io.clusterrepos/<repo>?chartName=…&link=icon` URL.** For git repos `link=icon`
+opens the icon as a path in the clone: a `data:` icon fails with 500 ("open …/data:image/png…"),
+`file://<path>` (relative to the branch root) works. HTTP repos' remote icons are fetched by Rancher.
+
+**F-47 [fact] A git ClusterRepo picks up new commits only on its refresh interval or when
+`spec.forceUpdate` is set to a new timestamp** (the `field.cattle.io/forceUpdate` annotation does
+nothing). After `git push origin inference-engines`, patch `spec.forceUpdate`.
+
+**F-48 [fact] Lab check (IE):** AIWorkload `llm-cpu` in `aif-vision`, Blueprint `inference-llamacpp`
+→ `c-xvstz`/`vision`: Fleet Running, pod Ready in about a minute, `/v1/models` lists
+`qwen2.5-0.5b-instruct-q4_k_m`, a chat completion answers. The chart's PVC keeps the model across
+reinstalls (`helm.sh/resource-policy: keep`), so it outlives the endpoint and must be deleted by hand.
+
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator
 namespace. Discovery reuses it (D-15).
@@ -534,6 +595,15 @@ helm --kube-context kind-sims-datacenter upgrade aif-operator ../charts/aif-oper
 kubectl --context kind-sims-datacenter get computepools
 ```
 
+- Inference Engines Apps, after changing `charts/inference-engines/`:
+
+```bash
+git subtree split --prefix=charts/inference-engines -b inference-engines && git push origin inference-engines
+kubectl --context kind-sims-datacenter patch clusterrepo aif-engines --type merge \
+  -p "{\"spec\":{\"forceUpdate\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}}"          # F-47
+kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f examples/training/profiles/
+```
+
 ---
 
 ## 5. Code map
@@ -563,6 +633,11 @@ kubectl --context kind-sims-datacenter get computepools
 | AI projects | `operator/internal/controller/aiproject/` (rewritten in 4a) | `AIProject` → local namespace + RoleBindings, per-cluster Rancher project / namespace / PRTBs via `TokenRancher` |
 | Job dispatch | `operator/internal/controller/aijob/target.go` | `targetFor` (pool → cluster/namespace, placement wins), `helmFor` / `remoteFor` (proxy clients cached per connection), `unplaced` reasons |
 | Pool affinity (chart) | `charts/gpu-train-job/templates/_helpers.tpl` `gpu-train-job.affinity`, `hasDRA` | `poolSelector` value → required node affinity |
+| Inference Engines Apps | `charts/inference-engines/{llama-cpp,sglang}` | published to branch `inference-engines` (README there); `icon.png` per chart |
+| Engine Blueprints / profiles | `examples/training/blueprints/inference-*`, `examples/training/profiles/4x-engine-*` | ClusterRepos `application-collection`, `aif-engines` |
+| Inference summary + checks | `ui/pkg/aif-ui/training/inference.ts` | `summarizeBlueprint` (`vllmSummary`, `otherEngineSummary`), `inferenceChecks`, `endpointUrl`, `aiWorkloadFor(…, recordNamespace)` |
+| Inference deploy | `ui/pkg/aif-ui/training/pages/DeployEndpoint.vue` | project → pool; `createAIWorkload` on local |
+| Custom app logos | `ui/pkg/aif-ui/services/app-collection.ts` | `rancherIconUrl`, `inlineRancherIcon`, in `fetchCustomRepoApps` |
 
 ---
 
@@ -590,6 +665,10 @@ kubectl --context kind-sims-datacenter get computepools
 | O-19 | A placed job that stays unadmitted is not re-placed elsewhere (design §6.3 step 4) | placement | later |
 | O-20 | Picking members by typed user ID or group principal is crude; use Rancher's principal search | `AIProjects.vue` | later |
 | O-21 | The project picker lists every project; filter to the ones the user is a member of | `Submit.vue` | later |
+| O-22 | Members cannot create AIWorkloads in `aif-<project>` (not in `aif-aijob-editor`). Granting it as is would let them target any cluster: needs an AIWorkload check that `targetClusters`/`targetNamespace` are the project's | operator + roles | before members deploy endpoints |
+| O-23 | The Endpoints list (Workloads, inference tab) reads AIWorkloads through the cluster store; the deploy page sends you to it on local | `Workloads.vue` | with O-16 |
+| O-24 | SGLang and vLLM engine profiles are untested on a real GPU (the lab's GPUs are simulated); `lmsysorg/sglang:latest` is not pinned | lab / `charts/inference-engines/sglang` | when a GPU cluster is available |
+| O-25 | The `inference-engines` branch is published by hand (`git subtree split`); automate it, or a chart version bump on push | CI | later |
 | O-17 | The UI's 3c flows (pool picker → cluster switch → submit; Projects on a downstream cluster) are covered by unit tests of their logic, not by component tests; try them in the browser | UI | now |
 
 ---
