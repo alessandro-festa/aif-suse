@@ -56,6 +56,7 @@ export const TYPES = {
   RESOURCE_QUOTA:          'resourcequota',
   // Kubeflow distributed training. KAI's PodGrouper gang-schedules these without extra config.
   PYTORCH_JOB:             'kubeflow.org.pytorchjob',
+  RAY_JOB:                 'ray.io.rayjob',
   // Rancher management types live in the 'management' store, not 'cluster'
   RANCHER_PROJECT:         'management.cattle.io.project',
   PRTB:                    'management.cattle.io.projectroletemplatebinding',

@@ -191,6 +191,9 @@ func schedulerHeld(pods []corev1.Pod) bool {
 // terminalCondition reads the execution's own verdict: Job Complete/Failed,
 // PyTorchJob Succeeded/Failed. Returns the phase and the condition, or "".
 func terminalCondition(ex *unstructured.Unstructured) (v1alpha1.AIJobPhase, map[string]interface{}) {
+	if ex.GetKind() == "RayJob" {
+		return rayJobOutcome(ex)
+	}
 	conds, _, _ := unstructured.NestedSlice(ex.Object, "status", "conditions")
 	for _, c := range conds {
 		m, ok := c.(map[string]interface{})
@@ -471,4 +474,32 @@ func sharingLayerOf(c corev1.Container) string {
 		}
 	}
 	return ""
+}
+
+// rayJobOutcome reads a RayJob's verdict: its job status (SUCCEEDED, FAILED,
+// STOPPED), or a deployment that failed (the Ray cluster could not run it, or its
+// deadline passed). Shaped as a condition for completion: reason, message, time.
+func rayJobOutcome(ex *unstructured.Unstructured) (v1alpha1.AIJobPhase, map[string]interface{}) {
+	jobStatus, _, _ := unstructured.NestedString(ex.Object, "status", "jobStatus")
+	deployment, _, _ := unstructured.NestedString(ex.Object, "status", "jobDeploymentStatus")
+	message, _, _ := unstructured.NestedString(ex.Object, "status", "message")
+	reason, _, _ := unstructured.NestedString(ex.Object, "status", "reason")
+	end, _, _ := unstructured.NestedString(ex.Object, "status", "endTime")
+	cond := func(r string) map[string]interface{} {
+		if reason != "" {
+			r = reason
+		}
+		return map[string]interface{}{"reason": r, "message": message, "lastTransitionTime": end}
+	}
+	switch {
+	case jobStatus == "SUCCEEDED":
+		return v1alpha1.AIJobPhaseSucceeded, cond("Succeeded")
+	case jobStatus == "FAILED":
+		return v1alpha1.AIJobPhaseFailed, cond("Failed")
+	case jobStatus == "STOPPED":
+		return v1alpha1.AIJobPhaseFailed, cond("Stopped")
+	case deployment == "Failed":
+		return v1alpha1.AIJobPhaseFailed, cond("DeploymentFailed")
+	}
+	return "", nil
 }

@@ -249,6 +249,7 @@ the local scheduler (KAI, Kueue, Volcano, Run:ai).
 | 8 | Catalog entries (KAI, Kueue, Volcano, HAMi; Kubeflow training-only preset) + "install a scheduler on this cluster" empty state | install from Compute Pools |
 | 9 | Generic `AIJob.status.queue`; Trainer v2 `TrainJob` template + observer | — |
 | 10 | **Exploration: training frameworks beyond PyTorch** — JAX, TensorFlow, DeepSpeed (§8.1) | a findings section, and per framework a smoke-test profile that runs on the lab or a reason it cannot |
+| 11 | **Ray / KubeRay** as a training runtime: add-on, `job.kind=rayjob`, Ray Train test profile (engineering notes D-54) | ✅ a RayJob trains on the lab and its cluster is removed after |
 
 ### 8.1 Phase 10: frameworks beyond PyTorch (exploration)
 

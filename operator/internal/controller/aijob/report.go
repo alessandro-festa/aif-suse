@@ -25,6 +25,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -168,6 +169,11 @@ func ownedBy(execution metav1.Object, pods []corev1.Pod) []corev1.Pod {
 // Only a pod the execution created reports.
 func (r *AIJobReconciler) captureReport(ctx context.Context, job *v1alpha1.AIJob, tg *target, execution metav1.Object, pods []corev1.Pod) {
 	pod := firstWorker(ownedBy(execution, pods))
+	if u, ok := execution.(*unstructured.Unstructured); ok && u.GetKind() == "RayJob" {
+		// a RayJob's pods belong to its Ray cluster and submitter Job, not to it; the driver's
+		// output is the submitter's log (ray job submit), labelled for the run by the chart
+		pod = raySubmitter(pods)
+	}
 	if tg.logs == nil || pod == nil {
 		return
 	}
@@ -181,4 +187,17 @@ func (r *AIJobReconciler) captureReport(ctx context.Context, job *v1alpha1.AIJob
 		rep.ReportedAt = &t
 		job.Status.Report = rep
 	}
+}
+
+// raySubmitterRole marks the pod that submits a RayJob's driver (the chart's submitterPodTemplate).
+const raySubmitterRole = "ai-factory.suse.com/ray-role"
+
+// raySubmitter is the run's RayJob submitter pod, or nil.
+func raySubmitter(pods []corev1.Pod) *corev1.Pod {
+	for i := range pods {
+		if pods[i].Labels[raySubmitterRole] == "submitter" {
+			return &pods[i]
+		}
+	}
+	return nil
 }

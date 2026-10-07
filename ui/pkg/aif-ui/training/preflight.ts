@@ -122,6 +122,7 @@ export interface Facts {
   // nothing to provision it from and the pod waits forever — see the scratch check.
   storageClasses: StorageClassInfo[];
   pytorchOperatorInstalled: boolean; // Kubeflow Training Operator: required for job.kind=pytorchjob
+  kuberayInstalled?: boolean; // KubeRay operator: required for job.kind=rayjob
   // The AIJob API: the operator installs the run, from the training chart built into it.
   jobApi: boolean;
   // A custom chart instead of the built-in one (Advanced). null = the built-in chart.
@@ -146,7 +147,9 @@ export interface Form {
   releaseName: string;
   image: string;
   tag: string;
-  kind: 'job' | 'pytorchjob'; // Indexed Job, or a Kubeflow PyTorchJob (Master + Workers)
+  kind: 'job' | 'pytorchjob' | 'rayjob'; // Indexed Job, a Kubeflow PyTorchJob (Master + Workers), or a KubeRay RayJob (head + workers)
+  // job.kind=rayjob: the Ray runtime environment (pip packages, env vars) as YAML; ray.runtimeEnv in the chart
+  rayRuntimeEnv: string;
   mode: 'smoke' | 'torchrun' | 'custom';
   nodes: number;
   gpusPerNode: number;
@@ -226,6 +229,7 @@ export const DEFAULT_FORM: Form = {
   image:                  'dp.apps.rancher.io/containers/pytorch',
   tag:                    '2.14.0-nvidia-2.1',
   kind:                   'job',
+  rayRuntimeEnv:          '',
   mode:                   'torchrun',
   nodes:                  1,
   gpusPerNode:            1,
@@ -918,6 +922,19 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
     }
   }
 
+  if (form.kind === 'rayjob') {
+    if (!facts.kuberayInstalled) {
+      add('kind', 'fail', 'KubeRay is not installed on this cluster', 'RayJob objects would be created but nothing would act on them. Install KubeRay (Compute Pools → Cluster add-ons), or choose "Indexed Job".');
+    } else if (form.mode !== 'custom') {
+      add('kind', 'fail', 'A RayJob runs your command as the Ray driver', 'Choose "Custom command" and give the driver, e.g. python train.py.');
+    } else {
+      add('kind', 'pass', `RayJob: a Ray head + ${ form.nodes } worker(s)`, 'The command runs as the Ray driver on the head; the Ray cluster is removed when it ends.');
+    }
+    if (form.image && !/ray/i.test(form.image)) {
+      add('kind-image', 'warn', `Image ${ form.image } may not have Ray`, 'KubeRay starts Ray in every container (ray start): use a Ray image such as rayproject/ray.');
+    }
+  }
+
   // 9. mode-specific hints
   if (form.mode === 'torchrun') {
     // Rendezvous is a Job-path concern: the training-operator supplies MASTER_ADDR/MASTER_PORT.
@@ -1087,6 +1104,7 @@ export function chartValuesFor(f: Form, podsReadable: boolean): any {
       sharedCoresPercent: f.gpuShareMiB > 0 && f.gpuSharing ? f.gpuCoresPercent : 0,
     },
     computeDomain: { enabled: f.computeDomain },
+    ...(f.kind === 'rayjob' ? { ray: { runtimeEnv: f.rayRuntimeEnv } } : {}),
     // Kueue marks a workload that attaches to an existing ResourceClaim Inadmissible ("DRA resource
     // claims not supported"), so a run on a shared GPU would sit Queued forever. It goes straight to
     // the scheduler instead; the shared claim's GPU is already allocated and MPS caps its memory.
@@ -1146,7 +1164,8 @@ export function formFromValues(values: any, base: Form): { form: Form; unmapped:
 
   set('image', doc.image?.repository, str);
   set('tag', doc.image?.tag, str);
-  set('kind', doc.job?.kind, oneOf(['job', 'pytorchjob'] as const, base.kind));
+  set('kind', doc.job?.kind, oneOf(['job', 'pytorchjob', 'rayjob'] as const, base.kind));
+  set('rayRuntimeEnv', doc.ray?.runtimeEnv, str);
   set('mode', doc.job?.mode, oneOf(['smoke', 'torchrun', 'custom'] as const, base.mode));
   set('nodes', doc.job?.nodes, num);
   set('gpusPerNode', doc.job?.gpusPerNode, num);
@@ -1236,6 +1255,7 @@ export function formFromValues(values: any, base: Form): { form: Form; unmapped:
     gpu:              ['mode', 'productName', 'sharedClaim', 'sharedMemoryMiB', 'sharing', 'sharedCoresPercent'],
     computeDomain:    ['enabled'],
     scheduler:        ['type', 'queue', 'priorityClassName'],
+    ray:              ['runtimeEnv'],
     rendezvous:       ['backend', 'endpoint'],
     network:          ['multusNetwork', 'ncclSocketIfname', 'hostNetwork', 'rdma', 'ncclIbHca', 'ncclIbGidIndex'],
     resources:        ['requests'],

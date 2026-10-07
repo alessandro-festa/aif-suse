@@ -854,3 +854,29 @@ describe('HAMi', () => {
     expect(formFromValues({ scheduler: { type: 'volcano', queue: 'team-a' } }, DEFAULT_FORM).form.scheduler).toBe('volcano');
   });
 });
+
+describe('Ray (KubeRay RayJob)', () => {
+  const form: Form = {
+    ...DEFAULT_FORM, namespace: 'default', releaseName: 'ray-1', kind: 'rayjob', mode: 'custom', command: 'python train.py', image: 'rayproject/ray', tag: '2.49.2', gpusPerNode: 0, nodes: 2, rayRuntimeEnv: 'pip: [torch]'
+  };
+  const kind = (f: Form, over: Partial<Facts>) => runPreflight(f, facts(over)).filter((c) => c.id.startsWith('kind')).map((c) => [c.id, c.severity]);
+
+  it('needs KubeRay, a custom command, and a Ray image', () => {
+    expect(kind(form, { kuberayInstalled: true })).toEqual([['kind', 'pass']]);
+    expect(kind(form, {})).toEqual([['kind', 'fail']]);
+    expect(kind({ ...form, mode: 'torchrun' }, { kuberayInstalled: true })).toEqual([['kind', 'fail']]);
+    expect(kind({ ...form, image: 'registry.suse.com/bci/bci-base' }, { kuberayInstalled: true })).toEqual([['kind', 'pass'], ['kind-image', 'warn']]);
+  });
+
+  it('installs as job.kind=rayjob with its runtime environment, and reads back', () => {
+    const v = chartValues(form);
+
+    expect(v.job.kind).toBe('rayjob');
+    expect(v.ray).toEqual({ runtimeEnv: 'pip: [torch]' });
+    expect(chartValues({ ...form, kind: 'job' }).ray).toBeUndefined();
+    const back = formFromValues(v, DEFAULT_FORM);
+
+    expect(back.unmapped).toEqual([]);
+    expect(back.form).toMatchObject({ kind: 'rayjob', rayRuntimeEnv: 'pip: [torch]' });
+  });
+});

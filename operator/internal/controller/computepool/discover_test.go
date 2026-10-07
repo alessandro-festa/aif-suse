@@ -154,6 +154,8 @@ func TestDetectStackReadsTheChartsSchedulerTable(t *testing.T) {
 	assert.Equal(t, []string{"hami"}, detectStack(nil, []corev1.Node{hami}, all, backends).Sharing)
 
 	assert.Equal(t, []string{"training-operator", "trainer-v2"}, detectStack([]string{"kubeflow.org", "trainer.kubeflow.org"}, nil, all, backends).Training)
+	assert.Equal(t, []string{"kuberay"}, detectStack([]string{"ray.io"}, nil, running("quay.io/kuberay/operator:v1.7.1"), backends).Training)
+	assert.Empty(t, detectStack([]string{"ray.io"}, nil, nil, backends).Training, "KubeRay's CRDs left behind")
 	assert.Equal(t, stack{}, detectStack([]string{"apps", "batch"}, nil, all, backends))
 }
 

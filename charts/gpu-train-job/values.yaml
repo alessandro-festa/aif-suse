@@ -31,9 +31,13 @@ job:
   # pytorchjob — one kubeflow.org/v1 PyTorchJob (Master + nodes-1 Workers); the training-operator
   #              injects RANK/WORLD_SIZE/MASTER_ADDR/MASTER_PORT and owns restarts per replica role.
   #              Requires the Kubeflow Training Operator to be installed.
+  # rayjob     — one ray.io/v1 RayJob (KubeRay): a Ray head plus `nodes` workers. The command (custom
+  #              mode) is the Ray driver, run on the head (e.g. a Ray Train script); the cluster is torn
+  #              down when it ends. Requires the KubeRay operator, and a Ray image (rayproject/ray).
   kind: job
   # Number of nodes (pods). Each pod gets gpusPerNode GPUs.
   # With kind=pytorchjob this is 1 Master + (nodes - 1) Workers.
+  # With kind=rayjob this is the number of Ray workers; the head (ray.head) comes on top.
   nodes: 1
   gpusPerNode: 1
   # smoke    — nvidia-smi + hold; proves scheduling, GPU attach, queueing (no torch needed)
@@ -116,6 +120,25 @@ scheduler:
   type: none
   queue: ""
   priorityClassName: ""
+
+# job.kind=rayjob only.
+ray:
+  # The Ray head: the driver (your command), the cluster's control store and dashboard. No GPU.
+  head:
+    resources:
+      requests: { cpu: "1", memory: 2Gi }
+      limits: { cpu: "2", memory: 4Gi }
+  # The pod that submits the driver to the head (ray job submit); its log is the driver's output.
+  submitter:
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: 500m, memory: 512Mi }
+  # Seconds the Ray cluster (head and workers) stays up after the job ends, before KubeRay removes it
+  # and frees the pool. The driver's output stays in the submitter pod's log.
+  shutdownAfterSeconds: 60
+  # Ray runtime environment of the job (pip packages, env_vars, working_dir), as a YAML string;
+  # e.g. "pip: [torch]". Ray installs it on every node before the driver starts.
+  runtimeEnv: ""
 
 rendezvous:
   # c10d    — TCPStore on rank 0 (pod index 0, resolved through the headless Service)

@@ -9,7 +9,7 @@ const byKey = (k: string) => ADDONS.find((a) => a.key === k)!;
 
 describe('cluster add-ons', () => {
   it('are pinned upstream charts', () => {
-    expect(ADDONS.map((a) => a.key)).toEqual(['kai', 'kueue', 'volcano', 'hami', 'kubeflow-trainer']);
+    expect(ADDONS.map((a) => a.key)).toEqual(['kai', 'kueue', 'volcano', 'hami', 'kubeflow-trainer', 'kuberay']);
     expect(addonBundleParams(byKey('kubeflow-trainer'), 'c-abc')).toMatchObject({
       chartRepoUrl: 'oci://ghcr.io/kubeflow/charts', chartName: 'kubeflow-trainer', chartVersion: '2.3.0', targetNamespace: 'kubeflow-system'
     });
@@ -62,7 +62,7 @@ describe('cluster add-ons', () => {
     ];
     const installs = addonInstallsFrom([{ metadata: { name: 'aif-addon-kueue-c-gpu' }, status: {} }]);
 
-    expect(addonsFor('c-cpu', pools, installs).map((a) => a.key)).toEqual(['kai', 'kueue', 'kubeflow-trainer']);
-    expect(addonsFor('c-gpu', pools, installs).map((a) => a.key)).toEqual(['kai', 'volcano', 'hami']);
+    expect(addonsFor('c-cpu', pools, installs).map((a) => a.key)).toEqual(['kai', 'kueue', 'kubeflow-trainer', 'kuberay']);
+    expect(addonsFor('c-gpu', pools, installs).map((a) => a.key)).toEqual(['kai', 'volcano', 'hami', 'kuberay']);
   });
 });

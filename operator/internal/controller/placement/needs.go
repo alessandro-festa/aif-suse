@@ -106,6 +106,23 @@ func NeedsOf(raw []byte) (Needs, error) {
 			r.dst.Add(q)
 		}
 	}
+	// a RayJob runs a head and a submitter beside its workers (job.nodes)
+	if strAt(v, "job", "kind") == "rayjob" {
+		for _, part := range []string{"head", "submitter"} {
+			for _, r := range []struct {
+				key string
+				dst *resource.Quantity
+			}{{"cpu", &n.CPU}, {"memory", &n.Memory}} {
+				if s := strAt(v, "ray", part, "resources", "requests", r.key); s != "" {
+					q, err := resource.ParseQuantity(s)
+					if err != nil {
+						return Needs{}, fmt.Errorf("ray.%s.resources.requests.%s: %w", part, r.key, err)
+					}
+					r.dst.Add(q)
+				}
+			}
+		}
+	}
 	return n, nil
 }
 

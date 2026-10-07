@@ -35,7 +35,8 @@ Branch: `aijob-scheduling` on the alessandro-festa fork (`origin`), based on SUS
 | 7 | HAMi on the GPU-sharing axis: `sharingLayers` table, `gpu.sharing: hami`, HAMi-aware pool GPU counts, Submit option | done; lab-verified up to scheduling (simulated GPUs: no real HAMi) | — |
 | 8 | Cluster add-ons from Compute Pools: KAI, Kueue, Volcano, HAMi, Kubeflow Trainer v2 (upstream) as Fleet HelmOps | done; KAI, Kueue and Trainer 2.1.0 verified live | — |
 | 9 | Generic `AIJob.status.queue`; Trainer v2 `TrainJob` | — | — |
-| 10 | Frameworks beyond PyTorch: JAX, TensorFlow, DeepSpeed on the plain Indexed Job; findings in design doc §8.1 | done: three CPU test profiles, all passing on the lab | — |
+| 10 | Frameworks beyond PyTorch: JAX, TensorFlow, DeepSpeed on the plain Indexed Job; findings in design doc §8.1 | done: three CPU test profiles, all passing on the lab | `5e54cbd2` |
+| 11 | Ray / KubeRay as a training runtime: KubeRay add-on, `job.kind=rayjob`, Ray Train test profile | done, verified on the lab (KubeRay 1.7.1, Ray 2.49.2) | — |
 
 ---
 
@@ -393,6 +394,32 @@ the sharing layer's) must be in a running pod's image: `kueue/kueue`, `kai-sched
 `volcanosh/vc-scheduler` and `projecthami/hami`. Training runtimes need `training-operator` /
 `trainer-controller-manager`. Run:ai stays API-group only (its image is unknown here). Helm leaves
 CRDs behind on uninstall, so the group alone said "installed" forever (F-69).
+
+**D-54 KubeRay is a training runtime, not a scheduler.** Ray's own scheduler places tasks inside
+a Ray cluster whose pods Kubernetes already placed, so it sits beside the plain Job, PyTorchJob and
+Trainer v2, under the cluster schedulers and AI Factory's placement.
+- **Add-on:** KubeRay operator 1.7.1 (upstream helm repo `ray-project.github.io/kuberay-helm`).
+  Detection is `ray.io` served plus a running `kuberay/operator` image; the pool's training shows
+  KubeRay.
+- **Chart, `job.kind=rayjob`:** one `ray.io/v1` RayJob.
+  - The head (`ray.head.resources`, no GPU, `num-cpus: 0`) runs the driver, which is the
+    custom-mode command delivered as a shell-quoted script in a ConfigMap mounted at
+    `/home/ray/aif`.
+  - `job.nodes` workers get the run's resources and GPUs.
+  - `ray.runtimeEnv` (YAML) lets Ray install packages on every node. `shutdownAfterJobFinishes`
+    is set, with `ray.shutdownAfterSeconds` (60) before the cluster is removed and the pool freed.
+- **Scheduler binding** is through the existing table: Kueue's queue label and suspend go on the
+  RayJob; KAI/Run:AI/Volcano's schedulerName, labels and annotations go on the head and worker
+  templates. The KAI GPU-share annotation goes on workers only. A Volcano PodGroup counts the head
+  (minMember = nodes + 1).
+- **The submitter pod** (K8sJobMode) gets the run's labels and `ai-factory.suse.com/ray-role:
+  submitter`. Its log is the driver's output, so the run's report is read there.
+- **Operator:**
+  - it finds the RayJob, skipping KubeRay's submitter Job, which has the same name;
+  - the outcome is `status.jobStatus` SUCCEEDED / FAILED / STOPPED, or a failed deployment;
+  - placement adds the head's and submitter's requests to the workers'.
+- **Profile:** `ray-train-test` (beta, CPU): a TorchTrainer with one training worker per Ray
+  worker pod.
 
 ---
 
@@ -787,6 +814,20 @@ way, each now handled in the scripts and listed in design doc §8.1: TensorFlow'
 MWMS; DeepSpeed's missing compiler on slim, then its x86-only shm op on arm64; a test bug where
 DeepSpeed ranks fitted different targets.
 
+**F-72 [fact] Lab check (P11):**
+- KubeRay 1.7.1 installed on downstream-1 via HelmOp `aif-addon-kuberay-c-xvstz` (1/1); the pool
+  then read training `["trainer-v2","kuberay"]`.
+- `ray-test-1` and `ray-profile-1/2` (the profile's values) each started a head + 2 workers. Ray
+  installed torch 2.8 CPU from the runtime env, and the TorchTrainer ran 2 workers in one process
+  group (loss 19.6 → 0.0000). The runs Succeeded in 70–110 s, with the report from the submitter
+  pod.
+- Two bugs were found and fixed on the way:
+  - the operator first judged KubeRay's same-named submitter **Job** ("CompletionsReached"); it now
+    reads the RayJob ("Succeeded: Job finished successfully.");
+  - the RayJob's TTL came from `job.ttlSecondsAfterFinished` (3600 s), keeping the finished Ray
+    cluster on its pool for an hour. With `ray.shutdownAfterSeconds` the head and workers left
+    ~60–75 s after the job ended.
+
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator
 namespace. Discovery reuses it (D-15).
@@ -971,6 +1012,8 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | O-34 | Add-ons are pinned versions in the UI; upgrading one means editing `services/addons.ts` | add-ons | later |
 | O-35 | GPU variants of the JAX / TensorFlow / DeepSpeed profiles (framework images, NCCL), untested on the lab's simulated GPUs | profiles | with a GPU cluster |
 | O-36 | Phase 9: generic status.queue; TrainJob path to use Trainer v2's JAX/DeepSpeed runtimes | chart / operator | next |
+| O-37 | Ray beyond training: Ray Tune (HPO), RayService / vLLM multi-node serving; Ray autoscaling vs placement (size at max workers) and idle reclaim of long-lived RayClusters | Ray | later |
+| O-38 | GPU Ray Train profile (rayproject/ray-ml or a CUDA image), untested on the simulated GPUs | profiles | with a GPU cluster |
 | O-17 | The UI's 3c flows (pool picker → cluster switch → submit; Projects on a downstream cluster) are covered by unit tests of their logic, not by component tests; try them in the browser | UI | now |
 
 ---

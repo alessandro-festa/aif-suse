@@ -1,0 +1,92 @@
+{{- if eq .Values.job.kind "rayjob" }}
+{{- $full := include "gpu-train-job.fullname" . -}}
+{{- include "gpu-train-job.preflight" . -}}
+{{- /*
+One RayJob (KubeRay) instead of an Indexed Job: KubeRay starts a Ray cluster -- a head and
+job.nodes workers -- runs the driver on the head, and tears the cluster down when it ends.
+
+The driver is the custom-mode command, delivered as a script in a ConfigMap mounted on the head, so
+any command survives quoting. Its output is in the submitter pod's log (ray job submit), which is
+labelled for the run like the head and the workers, so the operator reads the run's report there.
+
+The cluster scheduler binds it as it binds any run: Kueue by the RayJob's queue label and suspend
+(Kueue admits RayJobs), KAI/Run:AI/Volcano by the pod templates' schedulerName, labels and
+annotations (a Volcano PodGroup counts the head too).
+*/ -}}
+{{- if ne .Values.job.mode "custom" }}
+{{- fail "preflight: job.kind=rayjob runs job.command as the Ray driver: set job.mode=custom." }}
+{{- end }}
+{{- if not .Values.job.command }}
+{{- fail "preflight: job.kind=rayjob needs job.command, the Ray driver (e.g. [python, train.py])." }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $full }}-driver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gpu-train-job.labels" . | nindent 4 }}
+data:
+  driver.sh: |
+    {{- include "gpu-train-job.shellCommand" . | nindent 4 }}
+---
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: {{ $full }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gpu-train-job.labels" . | nindent 4 }}
+    {{- with include "gpu-train-job.queueWorkloadLabels" . }}
+    {{- . | nindent 4 }}
+    {{- end }}
+spec:
+  entrypoint: sh /home/ray/aif/driver.sh
+  {{- with .Values.ray.runtimeEnv }}
+  runtimeEnvYAML: {{ . | quote }}
+  {{- end }}
+  {{- if include "gpu-train-job.suspended" . }}
+  {{- /* Kueue admits the RayJob by clearing this */}}
+  suspend: true
+  {{- end }}
+  shutdownAfterJobFinishes: true
+  {{- /* how long the Ray cluster outlives the job: it holds the pool until removed */}}
+  ttlSecondsAfterFinished: {{ int .Values.ray.shutdownAfterSeconds }}
+  {{- if gt (int .Values.job.activeDeadlineSeconds) 0 }}
+  activeDeadlineSeconds: {{ .Values.job.activeDeadlineSeconds }}
+  {{- end }}
+  submissionMode: K8sJobMode
+  submitterPodTemplate:
+    metadata:
+      labels:
+        {{- include "gpu-train-job.podLabels" . | nindent 8 }}
+        ai-factory.suse.com/ray-role: submitter
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: ray-job-submitter
+          image: {{ printf "%s:%s" .Values.image.repository (toString .Values.image.tag) | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
+          resources:
+            {{- toYaml .Values.ray.submitter.resources | nindent 12 }}
+  rayClusterSpec:
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: "0.0.0.0"
+        {{- /* the head runs the driver, not the work: no tasks scheduled on it */}}
+        num-cpus: "0"
+      template:
+        {{- include "gpu-train-job.rayPodTemplate" (dict "ctx" . "role" "head") | trim | nindent 8 }}
+    workerGroupSpecs:
+      - groupName: workers
+        replicas: {{ .Values.job.nodes }}
+        minReplicas: {{ .Values.job.nodes }}
+        maxReplicas: {{ .Values.job.nodes }}
+        rayStartParams: {}
+        template:
+          {{- include "gpu-train-job.rayPodTemplate" (dict "ctx" . "role" "worker") | trim | nindent 10 }}
+{{- end }}

@@ -176,6 +176,37 @@ for bad in "--set scheduler.type=kai --set scheduler.queue=q" "--set gpu.sharedM
   fi
 done
 
+# RayJob: a head (no GPU, runs the driver from its ConfigMap) and job.nodes workers (the GPUs); the
+# scheduler's binding on both pod templates (Kueue's on the RayJob), the head counted in a PodGroup.
+RAY="--set job.kind=rayjob --set job.mode=custom --set job.nodes=2 --set image.repository=rayproject/ray --set image.tag=2.49.2 --set gpu.mode=device-plugin"
+for sched in none kueue kai volcano; do
+  out=$(helm template t . $RAY --set job.command="{python,-c,print('it''s')}" --set scheduler.type=$sched $([ $sched = kueue ] || [ $sched = kai ] && echo --set scheduler.queue=q) 2>&1)
+  if printf '%s\n' "$out" | S=$sched python3 -c '
+import os, sys, yaml
+docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+rj = next(d for d in docs if d["kind"] == "RayJob")
+cm = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "t-driver")
+assert "\x27python\x27" in cm["data"]["driver.sh"], cm["data"]["driver.sh"]
+spec = rj["spec"]; s = os.environ["S"]
+head = spec["rayClusterSpec"]["headGroupSpec"]["template"]; worker = spec["rayClusterSpec"]["workerGroupSpecs"][0]
+assert worker["replicas"] == 2 and spec["shutdownAfterJobFinishes"] and spec["entrypoint"] == "sh /home/ray/aif/driver.sh"
+assert spec["ttlSecondsAfterFinished"] == 60, "the Ray cluster is removed a minute after the job"
+assert "nvidia.com/gpu" not in head["spec"]["containers"][0]["resources"].get("limits", {})
+assert worker["template"]["spec"]["containers"][0]["resources"]["limits"]["nvidia.com/gpu"] == "1"
+assert spec["submitterPodTemplate"]["metadata"]["labels"]["ai-factory.suse.com/ray-role"] == "submitter"
+if s == "kueue":
+    assert rj["metadata"]["labels"]["kueue.x-k8s.io/queue-name"] == "q" and spec["suspend"] is True
+if s in ("kai", "volcano"):
+    for t in (head, worker["template"]):
+        assert t["spec"]["schedulerName"] == {"kai": "kai-scheduler", "volcano": "volcano"}[s]
+if s == "volcano":
+    assert next(d for d in docs if d["kind"] == "PodGroup")["spec"]["minMember"] == 3'; then
+    printf '✓ %s\n' "rayjob under $sched: head without GPU, 2 GPU workers, binding in place"
+  else
+    printf '✗ %s\n' "rayjob under $sched: wrong"; fail=1
+  fi
+done
+
 echo
 [ $fail -eq 0 ] && echo "chart render checks passed" || echo "chart render checks FAILED"
 exit $fail

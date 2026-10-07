@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -265,4 +266,49 @@ func TestAHAMiShareIsRecordedAsOne(t *testing.T) {
 	gpus := gpuFacts([]corev1.Pod{p}, nil, nil)
 	require.Len(t, gpus, 1)
 	assert.Equal(t, "hami", gpus[0].Mode)
+}
+
+func rayJob(jobStatus, deployment string) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{Object: map[string]interface{}{"status": map[string]interface{}{
+		"jobStatus": jobStatus, "jobDeploymentStatus": deployment, "message": "driver said so", "endTime": "2026-10-07T15:00:00Z",
+	}}}
+	u.SetKind("RayJob")
+	return u
+}
+
+func TestARayJobEndsAsItsJobStatusSays(t *testing.T) {
+	for _, c := range []struct {
+		jobStatus, deployment string
+		phase                 v1alpha1.AIJobPhase
+		reason                string
+	}{
+		{"SUCCEEDED", "Complete", v1alpha1.AIJobPhaseSucceeded, "Succeeded"},
+		{"FAILED", "Complete", v1alpha1.AIJobPhaseFailed, "Failed"},
+		{"STOPPED", "Complete", v1alpha1.AIJobPhaseFailed, "Stopped"},
+		{"", "Failed", v1alpha1.AIJobPhaseFailed, "DeploymentFailed"},
+		{"RUNNING", "Running", "", ""},
+	} {
+		phase, cond := terminalCondition(rayJob(c.jobStatus, c.deployment))
+		assert.Equal(t, c.phase, phase, c.jobStatus+"/"+c.deployment)
+		if c.reason != "" {
+			assert.Equal(t, c.reason, cond["reason"])
+			assert.Equal(t, "driver said so", cond["message"])
+		}
+	}
+}
+
+func TestARayRunReportsFromItsSubmitter(t *testing.T) {
+	pods := []corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "r-head", Labels: map[string]string{raySubmitterRole: "head"}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "r-submit", Labels: map[string]string{raySubmitterRole: "submitter"}}},
+	}
+	require.NotNil(t, raySubmitter(pods))
+	assert.Equal(t, "r-submit", raySubmitter(pods).Name)
+	assert.Nil(t, raySubmitter(pods[:1]))
+}
+
+func TestARayJobsSubmitterJobIsNotTheRun(t *testing.T) {
+	sub := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "ray-1", OwnerReferences: []metav1.OwnerReference{{Kind: "RayJob", Name: "ray-1"}}}}
+	assert.True(t, ownedByRayJob(sub))
+	assert.False(t, ownedByRayJob(&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "train-1"}}))
 }

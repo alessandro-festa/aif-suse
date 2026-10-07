@@ -1,7 +1,7 @@
 import { createFleetBundle, type FleetBundleParams } from './fleet-bundle';
 
 // Cluster add-ons for AI scheduling, installed from the Compute Pools page: a scheduler (KAI, Kueue,
-// Volcano), a GPU-sharing layer (HAMi), or the training runtime (Kubeflow Trainer v2). Each is a
+// Volcano), a GPU-sharing layer (HAMi), or a training runtime (Kubeflow Trainer v2, KubeRay). Each is a
 // Fleet HelmOp in fleet-default, from the upstream chart at a pinned version, targeting one
 // downstream cluster. (Trainer v2 is the upstream chart: the SUSE Kubeflow chart cannot install
 // training only; see the engineering notes, F-67.) The operator's pool discovery then reports it on that cluster's
@@ -121,6 +121,20 @@ export const ADDONS: Addon[] = [
     variants:      [{
       minKubernetes: '1.29', version: '2.1.0', values: {}, note: 'Kubernetes before 1.32 gets Trainer 2.1.0, which has no built-in training runtimes.'
     }],
+  },
+  {
+    key:        'kuberay',
+    display:    'KubeRay',
+    kind:       'training',
+    detectedAs: 'kuberay',
+    chartRepo:  '',
+    repoUrl:    'https://ray-project.github.io/kuberay-helm/',
+    chart:      'kuberay-operator',
+    version:    '1.7.1',
+    namespace:  'kuberay-system',
+    release:    'kuberay-operator',
+    values:     {},
+    notes:      'The KubeRay operator (RayJob, RayCluster, ray.io): training runs of kind Ray start a Ray head and workers, run the driver (e.g. a Ray Train script) and remove the cluster at the end. Upstream, not SUSE-supported; runs use Ray images (rayproject/ray).',
   },
 ];
 

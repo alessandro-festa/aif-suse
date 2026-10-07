@@ -112,3 +112,10 @@ func TestACPURunGoesToACPUPool(t *testing.T) {
 	_, why := choose(cpuRun, []*v1alpha1.ComputePool{small}, nil)
 	assert.Contains(t, why, "small: 16 CPU free, 32 needed")
 }
+
+func TestARayRunNeedsItsHeadAndSubmitterToo(t *testing.T) {
+	n, err := NeedsOf([]byte(`{"job":{"kind":"rayjob","nodes":2,"gpusPerNode":1},"resources":{"requests":{"cpu":"4","memory":"8Gi"}}}`))
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n.GPUs(), "the workers' GPUs; the head has none")
+	assert.Equal(t, "9100m", n.CPU.String(), "2 workers × 4 CPU, the head's 1, the submitter's 100m")
+}

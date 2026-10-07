@@ -81,6 +81,7 @@ const (
 var (
 	clusterRepoGVK = schema.GroupVersionKind{Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepo"}
 	pytorchJobGVK  = schema.GroupVersionKind{Group: "kubeflow.org", Version: "v1", Kind: "PyTorchJob"}
+	rayJobGVK      = schema.GroupVersionKind{Group: "ray.io", Version: "v1", Kind: "RayJob"}
 	// Kueue Workloads, newest API version first: Kueue serves v1beta2 from 0.15
 	// and still serves v1beta1, which older releases have alone.
 	workloadGVKs = []schema.GroupVersionKind{
@@ -95,6 +96,7 @@ var (
 // +kubebuilder:rbac:groups=catalog.cattle.io,resources=clusterrepos,verbs=get;list;watch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubeflow.org,resources=pytorchjobs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=ray.io,resources=rayjobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
@@ -672,6 +674,8 @@ func (r *AIJobReconciler) observe(ctx context.Context, job *v1alpha1.AIJob, t *t
 
 	k8sJob := &batchv1.Job{}
 	switch err := reader.Get(ctx, ctrl.ObjectKey{Namespace: ns, Name: name}, k8sJob); {
+	case err == nil && ownedByRayJob(k8sJob):
+		// KubeRay names its submitter Job after the RayJob: the run is the RayJob, found below
 	case err == nil:
 		u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(k8sJob)
 		if err != nil {
@@ -687,6 +691,15 @@ func (r *AIJobReconciler) observe(ctx context.Context, job *v1alpha1.AIJob, t *t
 		ptj.SetGroupVersionKind(pytorchJobGVK)
 		if err := reader.Get(ctx, ctrl.ObjectKey{Namespace: ns, Name: name}, ptj); err == nil {
 			o.execution = ptj
+		} else if !apierrors.IsNotFound(err) && !isNoMatch(err) {
+			return o, err
+		}
+	}
+	if o.execution == nil {
+		rj := &unstructured.Unstructured{}
+		rj.SetGroupVersionKind(rayJobGVK)
+		if err := reader.Get(ctx, ctrl.ObjectKey{Namespace: ns, Name: name}, rj); err == nil {
+			o.execution = rj
 		} else if !apierrors.IsNotFound(err) && !isNoMatch(err) {
 			return o, err
 		}
@@ -801,4 +814,14 @@ func (r *AIJobReconciler) SetupWithManager(mgr controllerruntime.Manager) error 
 		For(&v1alpha1.AIJob{}, builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))).
 		Named("aijob").
 		Complete(r)
+}
+
+// ownedByRayJob says whether a Job is a RayJob's submitter.
+func ownedByRayJob(j *batchv1.Job) bool {
+	for _, ref := range j.OwnerReferences {
+		if ref.Kind == "RayJob" {
+			return true
+		}
+	}
+	return false
 }

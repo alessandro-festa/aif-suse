@@ -441,3 +441,79 @@ spec:
   containers:
     {{- include "gpu-train-job.trainerContainer" (dict "ctx" . "kind" "pytorchjob") | trim | nindent 4 }}
 {{- end -}}
+
+{{/*
+Pod template of a RayJob's head or workers (role). Both get the run's labels, the scheduler's
+binding, the pool affinity and the volumes; only the workers get the GPU (resources, KAI's
+gpu-memory share, the DRA claim). KubeRay supplies the container's command (ray start).
+*/}}
+{{- define "gpu-train-job.rayPodTemplate" -}}
+{{- $ := .ctx -}}
+{{- $worker := eq .role "worker" -}}
+{{- $annotations := include "gpu-train-job.podAnnotations" $ | trim -}}
+{{- if not $worker }}{{ $annotations = regexReplaceAll "(?m)^gpu-memory:.*$\n?" $annotations "" | trim }}{{ end -}}
+metadata:
+  labels:
+    {{- include "gpu-train-job.podLabels" $ | nindent 4 }}
+    {{- with (include "gpu-train-job.queuePodLabels" $ | trim) }}
+      {{- . | nindent 4 }}
+    {{- end }}
+    ai-factory.suse.com/ray-role: {{ .role }}
+  {{- with $annotations }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  terminationGracePeriodSeconds: {{ $.Values.job.terminationGracePeriodSeconds }}
+  {{- with (include "gpu-train-job.podNetwork" $ | trim) }}
+    {{- . | nindent 2 }}
+  {{- end }}
+  {{- with (include "gpu-train-job.podScheduling" $ | trim) }}
+    {{- . | nindent 2 }}
+  {{- end }}
+  {{- with (include "gpu-train-job.affinity" $ | trim) }}
+  affinity:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- if and $worker (eq (include "gpu-train-job.gpuMode" $) "dra") }}
+  resourceClaims:
+    - name: gpu
+      {{- if $.Values.gpu.sharedClaim }}
+      resourceClaimName: {{ $.Values.gpu.sharedClaim }}
+      {{- else }}
+      resourceClaimTemplateName: {{ include "gpu-train-job.fullname" $ }}-gpu
+      {{- end }}
+  {{- end }}
+  containers:
+    - name: ray-{{ .role }}
+      image: {{ printf "%s:%s" $.Values.image.repository (toString $.Values.image.tag) | quote }}
+      imagePullPolicy: {{ $.Values.image.pullPolicy | quote }}
+      env:
+        {{- include "gpu-train-job.commonEnv" $ | trim | nindent 8 }}
+      resources:
+        {{- if $worker }}
+        {{- include "gpu-train-job.resourceBlock" $ | trim | nindent 8 }}
+        {{- else }}
+        {{- toYaml $.Values.ray.head.resources | nindent 8 }}
+        {{- end }}
+      {{- if not $worker }}
+      ports:
+        - { name: gcs, containerPort: 6379 }
+        - { name: dashboard, containerPort: 8265 }
+        - { name: client, containerPort: 10001 }
+      {{- end }}
+      volumeMounts:
+        {{- include "gpu-train-job.volumeMounts" $ | trim | nindent 8 }}
+        {{- if not $worker }}
+        - name: driver
+          mountPath: /home/ray/aif
+          readOnly: true
+        {{- end }}
+  volumes:
+    {{- include "gpu-train-job.volumes" $ | trim | nindent 4 }}
+    {{- if not $worker }}
+    - name: driver
+      configMap:
+        name: {{ include "gpu-train-job.fullname" $ }}-driver
+    {{- end }}
+{{- end -}}

@@ -73,6 +73,9 @@ real cause instead of leaving a Pending pod with no events. Disable with preflig
        and Helm runs as the submitting user (a forbidden lookup is a hard template error). */ -}}
 {{- $online := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- if and .Values.preflight.enabled $online }}
+{{- if and (eq .Values.job.kind "rayjob") (not (.Capabilities.APIVersions.Has "ray.io/v1/RayJob")) (lookup "v1" "Namespace" "" .Release.Namespace) }}
+  {{- fail "preflight: job.kind=rayjob but the KubeRay operator is not installed (no rayjobs.ray.io CRD). Install it (Compute Pools → Cluster add-ons → KubeRay), or use job.kind=job." }}
+{{- end }}
 {{- if eq .Values.job.kind "pytorchjob" }}
   {{- if not (.Capabilities.APIVersions.Has "kubeflow.org/v1/PyTorchJob") }}
     {{- fail "preflight: job.kind=pytorchjob but the Kubeflow Training Operator is not installed (no pytorchjobs.kubeflow.org CRD). Install it, or use job.kind=job (torchrun over an Indexed Job needs no operator)." }}

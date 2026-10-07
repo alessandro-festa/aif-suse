@@ -204,6 +204,9 @@ func detectStack(groups []string, nodes []corev1.Node, pods []corev1.Pod, backen
 	if served["trainer.kubeflow.org"] && runningImage(pods, "trainer-controller-manager") {
 		st.Training = append(st.Training, "trainer-v2")
 	}
+	if served["ray.io"] && runningImage(pods, "kuberay/operator") {
+		st.Training = append(st.Training, "kuberay")
+	}
 	sort.Strings(st.Schedulers)
 	sort.Strings(st.Sharing)
 	return st

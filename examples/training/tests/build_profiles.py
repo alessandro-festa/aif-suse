@@ -51,6 +51,12 @@ def framework_test(script_name, tag, memory, env):
             "env": env}
 
 
+RAY_TORCH_CPU = 'pip:\n  packages: ["torch==2.8.0"]\n  pip_install_options: ["--index-url", "https://download.pytorch.org/whl/cpu"]\n'
+RAY_TRAIN = {"image": {"repository": "rayproject/ray", "tag": "2.49.2"},
+             "job": {"kind": "rayjob", "mode": "custom", "nodes": 2, "gpusPerNode": 0, "command": ["python", "-c", script("ray_train_test.py")]},
+             "resources": {"requests": {"cpu": "1", "memory": "2Gi"}},
+             "ray": {"runtimeEnv": RAY_TORCH_CPU}}
+
 FRAMEWORK_LIMITS = {"nodes": {"min": 1, "max": 4}, "registries": ["python", "docker.io/library/python"], "maxRuntimeHours": 1}
 
 PROFILES = [
@@ -78,6 +84,10 @@ PROFILES = [
         "description": "Two or more CPU pods set up torch.distributed from the chart's rendezvous and train with DeepSpeed ZeRO stage 1 over gloo (DeepSpeed's CPU accelerator). No GPU, no MPI or Kubeflow runtime.",
         "values": framework_test("deepspeed_distributed_test.sh", "3.12", "3Gi", [{"name": "TORCH_VERSION", "value": "2.8.0"}, {"name": "DEEPSPEED_VERSION", "value": "0.17.6"}]),
         "editable": ["nodes", "env"], "limits": FRAMEWORK_LIMITS}),
+    ("47-ray-train-test", "ray-train-test", {
+        "displayName": "Ray Train Distributed Test (CPU)", "purpose": "test", "framework": "Ray", "gpu": "CPU", "status": "beta",
+        "description": "A KubeRay RayJob: a Ray head and two or more CPU workers; a Ray Train TorchTrainer runs one training worker per pod with synchronised gradients, then the Ray cluster is removed. Needs the KubeRay add-on.",
+        "values": RAY_TRAIN, "editable": ["nodes"], "limits": {"nodes": {"min": 1, "max": 4}, "registries": ["rayproject/", "docker.io/rayproject/"], "maxRuntimeHours": 1}}),
     ("30-gpu-smoke-shared", "gpu-smoke-shared", {
         "displayName": "GPU Smoke Test (shared GPU)", "purpose": "test", "framework": "CUDA", "status": "ready",
         "description": "The smoke test on a 1 GiB GPU-memory share, as shared workloads get their GPU: placed by the GPU-sharing scheduler, capped at its share.",

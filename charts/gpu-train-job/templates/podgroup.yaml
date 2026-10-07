@@ -9,7 +9,8 @@ metadata:
   labels:
     {{- include "gpu-train-job.labels" . | nindent 4 }}
 spec:
-  minMember: {{ .Values.job.nodes }}
+  {{- /* a RayJob's head is a pod of the group too */}}
+  minMember: {{ add (int .Values.job.nodes) (ternary 1 0 (eq .Values.job.kind "rayjob")) }}
   queue: {{ include "gpu-train-job.queueName" . | quote }}
   {{- with .Values.scheduler.priorityClassName }}
   priorityClassName: {{ . }}

@@ -78,7 +78,7 @@ export default {
       kai: 'KAI Scheduler', runai: 'Run:ai', kueue: 'Kueue', volcano: 'Volcano'
     }),
     sharingLabels:  () => ({ 'kai-fraction': 'KAI fractions', hami: 'HAMi' }),
-    trainingLabels: () => ({ 'training-operator': 'Kubeflow Training Operator', 'trainer-v2': 'Kubeflow Trainer v2' }),
+    trainingLabels: () => ({ 'training-operator': 'Kubeflow Training Operator', 'trainer-v2': 'Kubeflow Trainer v2', kuberay: 'KubeRay' }),
     /** Downstream clusters the operator cannot read because Settings has no Rancher token. */
     needsToken() {
       return this.pools.some((p) => p.reason === 'NoRancherToken') || this.undiscovered.length > 0;

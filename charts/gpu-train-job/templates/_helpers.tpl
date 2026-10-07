@@ -85,6 +85,21 @@ The sharing layer gpu.sharing names (schedulers.yaml sharingLayers), as YAML; em
 {{- end -}}
 
 {{/*
+job.command as one shell command line, every word single-quoted (a quote inside is closed, escaped
+and reopened), so any command survives being run by `sh`: the RayJob's driver script.
+*/}}
+{{- define "gpu-train-job.shellCommand" -}}
+{{- $words := list -}}
+{{- range .Values.job.command -}}
+{{- $words = append $words (printf "'%s'" (replace "'" "'\\''" (toString .))) -}}
+{{- end -}}
+{{- range .Values.job.args -}}
+{{- $words = append $words (printf "'%s'" (replace "'" "'\\''" (toString .))) -}}
+{{- end -}}
+{{- join " " $words -}}
+{{- end -}}
+
+{{/*
 "true" when the backend admits a run by unsuspending it, so the workload is created suspended.
 */}}
 {{- define "gpu-train-job.suspended" -}}
