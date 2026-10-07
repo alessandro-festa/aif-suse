@@ -27,6 +27,8 @@ export interface AppCollectionItem {
   reference_guide_url?: string;
   source_code_url?: string;
   logo_url?: string;
+  // The chart's icon as Rancher serves it (same origin, ?link=icon); custom repos inline it.
+  rancher_icon_url?: string;
   changelog_url?: string;
   last_updated_at?: string;
   packaging_format?: PackagingFormat;
@@ -74,6 +76,42 @@ export type NvidiaAppsResult = RepoAppsResult;
 
 function normalizeLogoUrl(logo?: string): string | undefined {
   return browserSafeCatalogLogo(logo);
+}
+
+// A custom repo's apps have no bundled logo. Rancher serves each chart's icon from its own origin
+// (?link=icon, read with the user's session), so reading it reaches no publisher host; it is
+// inlined as a raster data URL, capped in count and size since custom repos can be large.
+const RANCHER_ICON_LIMIT = 50;
+const RANCHER_ICON_MAX_BYTES = 64 * 1024;
+
+export function rancherIconUrl(icon?: string): string | undefined {
+  if (!icon || typeof window === 'undefined') return undefined;
+  try {
+    const u = new URL(icon, window.location.origin);
+
+    return u.origin === window.location.origin && u.searchParams.get('link') === 'icon' ? u.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function inlineRancherIcon(url: string): Promise<string | undefined> {
+  try {
+    const res = await fetch(url, { credentials: 'same-origin' });
+    const type = (res.headers.get('content-type') || '').split(';')[0].trim();
+
+    if (!res.ok || !/^image\/(png|gif|jpeg|webp)$/.test(type)) return undefined;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+
+    if (bytes.length > RANCHER_ICON_MAX_BYTES) return undefined;
+    let bin = '';
+
+    bytes.forEach((b) => { bin += String.fromCharCode(b); });
+
+    return browserSafeCatalogLogo(`data:${type};base64,${btoa(bin)}`);
+  } catch {
+    return undefined;
+  }
 }
 
 
@@ -324,6 +362,9 @@ export async function fetchCustomRepoApps($store: any, managedRepos?: ManagedRep
   // Custom repos can be large third-party repositories, so their index gets the
   // wider CATALOG_INDEX budget; built-in repos stay on the hot-path READ budget.
   const apps = await loadAppsFromRepos($store, managed, (repo) => repo.name, failedRepos, TIMEOUT_VALUES.CATALOG_INDEX);
+  await Promise.all(apps.filter((a) => !a.logo_url && a.rancher_icon_url).slice(0, RANCHER_ICON_LIMIT).map(async (a) => {
+    a.logo_url = await inlineRancherIcon(a.rancher_icon_url as string);
+  }));
   return { apps, failedRepos };
 }
 
@@ -508,6 +549,7 @@ export async function fetchAppsFromRepositoryResult(
         project_url:     latestVersion.home || '',
         source_code_url: Array.isArray(latestVersion.sources) ? latestVersion.sources[0] : latestVersion.sources,
         logo_url:        latestVersion.icon ? normalizeLogoUrl(latestVersion.icon) : undefined,
+        rancher_icon_url: rancherIconUrl(latestVersion.icon),
         last_updated_at: latestVersion.created || new Date().toISOString(),
         packaging_format: 'HELM_CHART',
       });
