@@ -38,8 +38,9 @@ type Connection struct {
 // by the Settings controller and read by controllers that reach downstream
 // clusters. nil means no Rancher token is configured.
 type ConnectionHolder struct {
-	mu sync.RWMutex
-	c  *Connection
+	mu       sync.RWMutex
+	c        *Connection
+	resolved bool
 }
 
 // NewConnectionHolder returns an empty holder.
@@ -55,11 +56,24 @@ func (h *ConnectionHolder) Get() *Connection {
 	return h.c
 }
 
-// Set replaces the current connection; nil clears it.
+// Set replaces the current connection; nil clears it. Either way the
+// connection is now resolved.
 func (h *ConnectionHolder) Set(c *Connection) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.c = c
+	h.c, h.resolved = c, true
+}
+
+// Resolved says whether the Settings controller has read Settings yet. Until it
+// has, a nil connection means "not known yet", not "no token": right after the
+// operator starts, controllers run before Settings is read.
+func (h *ConnectionHolder) Resolved() bool {
+	if h == nil {
+		return false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.resolved
 }
 
 // LocalClusterID is the Rancher ID of the cluster Rancher (and the operator)
@@ -69,6 +83,11 @@ const LocalClusterID = "local"
 // ErrNoConnection means a downstream cluster was asked for but no Rancher token
 // is configured in Settings.
 var ErrNoConnection = errors.New("no Rancher API token configured in AI Factory Settings (rancherCatalog.tokenSecretRef)")
+
+// ErrConnectionPending means Settings has not been read yet, so whether there is
+// a Rancher token is not known: try again shortly, and do not report the cluster
+// as unreachable.
+var ErrConnectionPending = errors.New("the Rancher connection from AI Factory Settings is not known yet")
 
 // ClusterConfig is the REST config that reaches a cluster through Rancher's
 // proxy, <rancher>/k8s/clusters/<id>, authenticated with the connection's

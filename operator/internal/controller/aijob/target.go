@@ -66,34 +66,47 @@ type notInProject struct{ msg string }
 
 func (n notInProject) Error() string { return n.msg }
 
-// rancherProjectAnnotation is where Rancher records a namespace's project, as
-// "<cluster>:<project>".
-const rancherProjectAnnotation = "field.cattle.io/projectId"
-
-// checkProject: a job in an AI project's namespace on local (internal/controller/aiproject)
-// must run on that project's cluster, in one of that project's namespaces there. Jobs anywhere
-// else were created by someone who can create AIJobs outside any project, an administrator.
+// checkProject: a job in an AI project's namespace on local (aif-<project>) runs
+// only on a cluster the project spans, in the project's namespace there; with no
+// target namespace it goes there. Jobs anywhere else were created by someone who
+// can create AIJobs outside any project, an administrator.
 func (r *AIJobReconciler) checkProject(ctx context.Context, job *v1alpha1.AIJob, t *target) error {
 	home := &corev1.Namespace{}
 	if err := r.Get(ctx, ctrl.ObjectKey{Name: job.Namespace}, home); err != nil {
 		return ctrl.IgnoreNotFound(err)
 	}
-	cluster, project := home.Labels[aiproject.ClusterLabel], home.Labels[aiproject.ProjectLabel]
-	if cluster == "" || project == "" {
+	name := home.Labels[aiproject.ProjectLabel]
+	if name == "" {
 		return nil
 	}
-	if t.clusterID != cluster {
-		return notInProject{fmt.Sprintf("pool %s is on cluster %s, but this job belongs to project %s:%s", job.Spec.Pool, t.clusterID, cluster, project)}
-	}
-	target := &corev1.Namespace{}
-	switch err := t.reader.Get(ctx, ctrl.ObjectKey{Name: t.namespace}, target); {
-	case apierrors.IsNotFound(err):
-		return unplaced{"TargetNamespaceNotFound", fmt.Sprintf("namespace %s does not exist on cluster %s", t.namespace, t.clusterID)}
-	case err != nil:
+	project := &v1alpha1.AIProject{}
+	if err := r.Get(ctx, ctrl.ObjectKey{Name: name}, project); err != nil {
+		if apierrors.IsNotFound(err) {
+			return notInProject{fmt.Sprintf("AI project %s does not exist", name)}
+		}
 		return err
 	}
-	if got := target.Annotations[rancherProjectAnnotation]; got != cluster+":"+project {
-		return notInProject{fmt.Sprintf("namespace %s on cluster %s is not in project %s:%s", t.namespace, t.clusterID, cluster, project)}
+	var span *v1alpha1.AIProjectCluster
+	for i := range project.Spec.Clusters {
+		if project.Spec.Clusters[i].ClusterID == t.clusterID {
+			span = &project.Spec.Clusters[i]
+		}
+	}
+	if span == nil {
+		return notInProject{fmt.Sprintf("pool %s is on cluster %s, which AI project %s does not span", job.Spec.Pool, t.clusterID, name)}
+	}
+	if job.Spec.TargetNamespace == "" {
+		t.namespace = span.Namespace
+	}
+	if t.namespace != span.Namespace {
+		return notInProject{fmt.Sprintf("namespace %s on cluster %s is not AI project %s's (%s)", t.namespace, t.clusterID, name, span.Namespace)}
+	}
+	ns := &corev1.Namespace{}
+	switch err := t.reader.Get(ctx, ctrl.ObjectKey{Name: t.namespace}, ns); {
+	case apierrors.IsNotFound(err):
+		return unplaced{"TargetNamespaceNotFound", fmt.Sprintf("namespace %s does not exist on cluster %s yet", t.namespace, t.clusterID)}
+	case err != nil:
+		return err
 	}
 	return nil
 }
@@ -106,18 +119,37 @@ func (r *AIJobReconciler) targetFor(ctx context.Context, job *v1alpha1.AIJob) (*
 		t.namespace = job.Spec.TargetNamespace
 	}
 	placed := job.Status.Placement
-	if job.Spec.Pool != "" {
+	// The pool it names, else the one the placement controller chose for it.
+	poolName := job.Spec.Pool
+	if poolName == "" && placed != nil {
+		poolName = placed.Pool
+	}
+	if poolName == "" {
+		home := &corev1.Namespace{}
+		if err := r.Get(ctx, ctrl.ObjectKey{Name: job.Namespace}, home); ctrl.IgnoreNotFound(err) != nil {
+			return nil, err
+		}
+		if home.Labels[aiproject.ProjectLabel] != "" {
+			// An AI project's run goes where the placement controller puts it.
+			msg := job.Status.PlacementMessage
+			if msg == "" {
+				msg = "waiting for a compute pool"
+			}
+			return nil, unplaced{"WaitingForPlacement", msg}
+		}
+	}
+	if poolName != "" {
 		pool := &v1alpha1.ComputePool{}
-		switch err := r.Get(ctx, ctrl.ObjectKey{Name: job.Spec.Pool}, pool); {
+		switch err := r.Get(ctx, ctrl.ObjectKey{Name: poolName}, pool); {
 		case err == nil:
 			if pool.Spec.Disabled && placed == nil {
-				return nil, unplaced{"PoolDisabled", fmt.Sprintf("compute pool %s is disabled", job.Spec.Pool)}
+				return nil, unplaced{"PoolDisabled", fmt.Sprintf("compute pool %s is disabled", poolName)}
 			}
 			t.pool, t.clusterID = pool, pool.Spec.ClusterID
 		case apierrors.IsNotFound(err) && placed != nil:
 			t.clusterID = placed.ClusterID
 		case apierrors.IsNotFound(err):
-			return nil, unplaced{"PoolNotFound", fmt.Sprintf("compute pool %s does not exist", job.Spec.Pool)}
+			return nil, unplaced{"PoolNotFound", fmt.Sprintf("compute pool %s does not exist", poolName)}
 		default:
 			return nil, err
 		}
@@ -131,6 +163,9 @@ func (r *AIJobReconciler) targetFor(ctx context.Context, job *v1alpha1.AIJob) (*
 		t.reader, t.logs = r.APIReader, r.PodLogs
 		t.helm, err = r.helmFor(t.clusterID, t.namespace, nil)
 		return t, err
+	}
+	if !r.Connection.Resolved() {
+		return nil, unplaced{"ConnectingToRancher", "waiting for the Rancher connection from AI Factory Settings"}
 	}
 	conn := r.Connection.Get()
 	if conn == nil {

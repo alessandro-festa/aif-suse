@@ -74,6 +74,7 @@ rules:
   - ai-factory.suse.com
   resources:
   - aijobs
+  - aiprojects
   verbs:
   - get
   - list
@@ -92,6 +93,7 @@ rules:
   - ai-factory.suse.com
   resources:
   - aijobs/status
+  - aiprojects/status
   - aiworkloads/status
   - computepools/status
   - installaiextensions/status
@@ -100,6 +102,15 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - ai-factory.suse.com
+  resources:
+  - aiprojectmembers
+  verbs:
+  - create
+  - get
+  - list
+  - watch
 - apiGroups:
   - ai-factory.suse.com
   resources:
@@ -247,8 +258,6 @@ rules:
   - management.cattle.io
   resources:
   - clusters
-  - projectroletemplatebindings
-  - projects
   verbs:
   - get
   - list
@@ -269,6 +278,7 @@ rules:
   resourceNames:
   - aif-aijob-editor
   - aif-aijob-viewer
+  - aif-aiproject-members-editor
   - aif-computepool-viewer
   resources:
   - clusterroles

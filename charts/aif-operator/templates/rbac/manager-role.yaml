@@ -408,14 +408,33 @@ rules:
       - update
       - watch
 
-  # AI projects: one namespace on this cluster per Rancher project marked as an AI project, with
-  # RoleBindings that follow the project's members (internal/controller/aiproject).
+  # AI projects (internal/controller/aiproject): the project's namespace on this cluster, its
+  # members object, and RoleBindings for its members. Rancher projects and Rancher role bindings
+  # are written through Rancher with the Settings token, not with these permissions.
   - apiGroups:
-      - management.cattle.io
+      - ai-factory.suse.com
     resources:
-      - projects
-      - projectroletemplatebindings
+      - aiprojects
     verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - ai-factory.suse.com
+    resources:
+      - aiprojects/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - ai-factory.suse.com
+    resources:
+      - aiprojectmembers
+    verbs:
+      - create
       - get
       - list
       - watch
@@ -449,6 +468,7 @@ rules:
     resourceNames:
       - aif-aijob-editor
       - aif-aijob-viewer
+      - aif-aiproject-members-editor
       - aif-computepool-viewer
     verbs:
       - bind

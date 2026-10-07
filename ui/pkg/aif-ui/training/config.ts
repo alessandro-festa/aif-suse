@@ -6,7 +6,8 @@ export { EXTENSION_VERSION } from '../utils/constants';
 export const PRODUCT_NAME = PRODUCT_SLUG;
 export const SUBMIT_PAGE = 'submit';
 export const JOBS_PAGE = 'jobs';
-export const PROJECTS_PAGE = 'projects';
+export const PROJECTS_PAGE = 'projects'; // a cluster's Rancher projects, quotas and queues
+export const AIPROJECTS_PAGE = 'aiprojects'; // AI projects across clusters
 export const PROFILES_PAGE = 'profiles';
 export const INFERENCE_PROFILE_PAGE = 'inference-profile'; // create or edit an inference profile
 export const DEPLOY_PAGE = 'deploy'; // reached from a profile's Deploy button, not the nav

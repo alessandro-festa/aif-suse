@@ -49,6 +49,10 @@ import (
 // DefaultResync is how often a cluster's pools are refreshed.
 const DefaultResync = time.Minute
 
+// pendingRetry is how soon a cluster is tried again while the Rancher
+// connection is not known yet (the operator just started).
+const pendingRetry = 5 * time.Second
+
 var clusterGVK = schema.GroupVersionKind{Group: "management.cattle.io", Version: "v3", Kind: "Cluster"}
 
 // +kubebuilder:rbac:groups=ai-factory.suse.com,resources=computepools,verbs=get;list;watch;create;update;patch;delete
@@ -100,6 +104,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	reader, err := r.Access.For(ctx, id)
+	if errors.Is(err, rancher.ErrConnectionPending) {
+		return reconcile.Result{RequeueAfter: pendingRetry}, nil // the pools keep their last figures
+	}
 	if err != nil {
 		return r.disconnected(ctx, pools, err)
 	}

@@ -62,3 +62,14 @@ func TestClusterConfigWithoutATokenSaysSo(t *testing.T) {
 		t.Error("a nil holder has no connection")
 	}
 }
+
+func TestAConnectionIsResolvedOnceSettingsSetsIt(t *testing.T) {
+	h := NewConnectionHolder()
+	if h.Resolved() {
+		t.Fatal("not resolved before Settings has been read")
+	}
+	h.Set(nil) // Settings read: no token
+	if !h.Resolved() || h.Get() != nil {
+		t.Fatal("resolved, with no connection")
+	}
+}

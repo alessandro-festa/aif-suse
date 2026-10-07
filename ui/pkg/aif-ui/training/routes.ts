@@ -1,5 +1,5 @@
 import {
-  PRODUCT_NAME, INFERENCE_PROFILE_PAGE, SUBMIT_PAGE, JOBS_PAGE, PROJECTS_PAGE, PROFILES_PAGE, DEPLOY_PAGE, ENDPOINT_PAGE, ENDPOINTS_PAGE
+  PRODUCT_NAME, AIPROJECTS_PAGE, INFERENCE_PROFILE_PAGE, SUBMIT_PAGE, JOBS_PAGE, PROJECTS_PAGE, PROFILES_PAGE, DEPLOY_PAGE, ENDPOINT_PAGE, ENDPOINTS_PAGE
 } from './config';
 
 const page = (name: string, component: () => Promise<any>) => ({
@@ -13,6 +13,7 @@ export const trainingRoutes = [
   // Training Jobs, Queues & Quotas and Compute Profiles are entries of the Workloads sub-menu
   page(JOBS_PAGE, () => import('./pages/Workloads.vue')),
   page(PROJECTS_PAGE, () => import('./pages/Projects.vue')),
+  page(AIPROJECTS_PAGE, () => import('./pages/AIProjects.vue')),
   page(PROFILES_PAGE, () => import('./pages/Profiles.vue')),
   page(INFERENCE_PROFILE_PAGE, () => import('./pages/InferenceProfile.vue')),
   page(DEPLOY_PAGE, () => import('./pages/Deploy.vue')),

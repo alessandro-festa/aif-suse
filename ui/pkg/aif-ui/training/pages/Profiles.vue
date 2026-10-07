@@ -6,11 +6,12 @@ import StatusPill from '../components/StatusPill.vue';
 import Banner from '@components/Banner/Banner.vue';
 import jsyaml from 'js-yaml';
 import { DEPLOY_PAGE, ENDPOINT_PAGE, INFERENCE_PROFILE_PAGE, PRODUCT_NAME, SUBMIT_PAGE } from '../config';
-import { BLUEPRINT_TYPE, BlueprintSummary, findBlueprint, summarizeBlueprint } from '../inference';
+import { BlueprintSummary, findBlueprint, summarizeBlueprint } from '../inference';
 import {
   filterOptions, filterProfiles, NO_FILTER, Profile, PROFILE_KEY, PROFILE_LABEL, PROFILE_NAMESPACE, ProfileFilter, profilesFrom,
   ProfileType
 } from '../profiles';
+import { localBlueprints, localProfileConfigMaps } from '../placement';
 
 const TABS: { type: ProfileType; label: string; subtitle: string }[] = [
   {
@@ -43,12 +44,12 @@ export default defineComponent({
 
   async fetch() {
     try {
-      const cms = await this.$store.dispatch('cluster/findAll', { type: 'configmap', opt: { force: true } });
+      // Profiles and Blueprints live on local, whatever cluster this page was opened on (a Deploy
+      // into a pool moves the browser to the pool's cluster).
+      const [cms, blueprints] = await Promise.all([localProfileConfigMaps(this.$store), localBlueprints(this.$store).catch(() => [])]);
 
       this.profiles = profilesFrom(cms, (s: string) => jsyaml.load(s));
-      if (this.$store.getters['cluster/schemaFor'](BLUEPRINT_TYPE)) {
-        this.blueprints = await this.$store.dispatch('cluster/findAll', { type: BLUEPRINT_TYPE }).catch(() => []);
-      }
+      this.blueprints = blueprints;
     } catch (e: any) {
       this.error = `Could not list ConfigMaps: ${ e?.message || e }`;
     }

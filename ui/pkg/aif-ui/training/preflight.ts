@@ -16,6 +16,27 @@ export type { SchedulerType } from './schedulers';
 
 export type Severity = 'pass' | 'fail' | 'warn' | 'info';
 
+// Checks that do not depend on a cluster: the ones that still mean something for a run AI Factory
+// places automatically, before it is known which cluster it lands on.
+const CLUSTERLESS_CHECKS = ['chart', 'name', 'image', 'image-torch', 'image-packages', 'command'];
+
+/**
+ * The checks for a run placed automatically in an AI project: the cluster-independent ones, and
+ * what will happen. Queue, capacity and GPU checks are the placement controller's to make, on
+ * every cluster the project spans, when it places the run.
+ */
+export function automaticPlacementChecks(checks: Check[], project: string): Check[] {
+  return [
+    ...checks.filter((c) => CLUSTERLESS_CHECKS.includes(c.id)),
+    {
+      id: 'project', severity: 'pass', title: `AI project ${ project }`, detail: `The run is recorded in ${ project ? `aif-${ project }` : '' } on the management cluster.`
+    },
+    {
+      id: 'pool', severity: 'info', title: 'Placed automatically', detail: 'AI Factory runs it on the compute pool of the project that fits it best, or queues it until one does.'
+    },
+  ];
+}
+
 export interface Check {
   id: string;
   severity: Severity;
@@ -374,14 +395,14 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
     add('chart', 'pass', 'Job template built into AI Factory', 'gpu-train-job, installed by the AI Factory operator; no chart repository needed');
   }
 
-  // 1b. where it runs: a compute pool, and an AI project namespace there
-  if (facts.poolsAvailable && !facts.pool) {
-    add('pool', 'fail', 'Choose a compute pool', 'Training runs on a compute pool of a downstream cluster. Pick one at the top of the page.');
-  } else if (facts.pool && !facts.aiProjectNamespace) {
-    add('project', 'fail', `Namespace ${ form.namespace || '(none)' } is not in an AI project`,
-      'Runs go into a namespace of an AI project, which decides who can see and manage them. Pick a namespace that belongs to one, or make its Rancher project an AI project on the Projects page.');
+  // 1b. where it runs: an AI project, and a compute pool of one of its clusters
+  if (facts.poolsAvailable && !facts.aiProjectNamespace) {
+    add('project', 'fail', 'Choose an AI project',
+      'A run belongs to an AI project, which decides who can see it and the clusters it may run on. Pick one at the top of the page.');
+  } else if (facts.poolsAvailable && !facts.pool) {
+    add('pool', 'fail', 'Choose a compute pool', 'Pick a pool of the project, or Automatic.');
   } else if (facts.pool) {
-    add('project', 'pass', 'AI project', `The run is recorded in ${ facts.aiProjectNamespace } on the management cluster.`);
+    add('project', 'pass', 'AI project', `The run is recorded in ${ facts.aiProjectNamespace } on the management cluster and runs in ${ form.namespace } here.`);
   }
 
   // 2. namespace

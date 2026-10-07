@@ -213,3 +213,17 @@ func TestARemovedClusterIsNotAnError(t *testing.T) {
 	h := newHarness(t, &fakeAccess{})
 	assert.Equal(t, reconcile.Result{}, h.reconcile("c-gone"))
 }
+
+// Right after the operator starts, controllers run before Settings is read: that is not "no token",
+// and must not mark every downstream pool unreachable (placement would avoid them).
+func TestPoolsKeepTheirFiguresWhileTheRancherConnectionIsNotKnownYet(t *testing.T) {
+	access := &fakeAccess{clusters: map[string]*fakeCluster{"c-abc": {nodes: []corev1.Node{h100("g1")}}}}
+	h := newHarness(t, access, rancherCluster("c-abc", "prod"))
+	h.reconcile("c-abc")
+
+	access.err = rancher.ErrConnectionPending
+	res := h.reconcile("c-abc")
+	assert.Equal(t, pendingRetry, res.RequeueAfter, "tried again soon")
+	p := h.pool("c-abc-gpu-nvidia-h100-80gb-hbm3")
+	assert.True(t, meta.IsStatusConditionTrue(p.Status.Conditions, v1alpha1.ComputePoolConditionConnected), "still connected")
+}

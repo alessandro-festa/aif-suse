@@ -170,64 +170,114 @@ func TestAJobNeverPlacedIsDeletedWithoutReachingAnyCluster(t *testing.T) {
 }
 
 // projectNS makes the job's own namespace on local the namespace of AI project
-// c-abc:p-team, as internal/controller/aiproject labels it.
+// "team", as internal/controller/aiproject labels it.
 func projectNS() *corev1.Namespace {
 	n := &corev1.Namespace{}
 	n.Name = ns
-	n.Labels = map[string]string{"ai-factory.suse.com/cluster": downstream, "ai-factory.suse.com/project": "p-team"}
+	n.Labels = map[string]string{"ai-factory.suse.com/aiproject": "team"}
 	return n
 }
 
-func downstreamNS(name, project string) *corev1.Namespace {
+// teamProject spans c-abc (namespace team-a) and c-xyz (namespace team-x).
+func teamProject() *v1alpha1.AIProject {
+	return &v1alpha1.AIProject{
+		ObjectMeta: metav1.ObjectMeta{Name: "team"},
+		Spec: v1alpha1.AIProjectSpec{
+			Clusters: []v1alpha1.AIProjectCluster{{ClusterID: downstream, Namespace: "team-a"}, {ClusterID: "c-xyz", Namespace: "team-x"}},
+			Owners:   []v1alpha1.AIProjectSubject{{Kind: "User", Name: "user-alice"}},
+		},
+	}
+}
+
+func downstreamNS(name string) *corev1.Namespace {
 	n := &corev1.Namespace{}
 	n.Name = name
-	if project != "" {
-		n.Annotations = map[string]string{rancherProjectAnnotation: project}
-	}
 	return n
 }
 
-func TestAProjectsJobRunsOnlyInsideTheProject(t *testing.T) {
-	otherCluster := l40sPool(func(p *v1alpha1.ComputePool) { p.Name, p.Spec.ClusterID = "c-xyz-gpu", "c-xyz" })
+func TestAProjectsJobRunsOnlyWhereTheProjectDoes(t *testing.T) {
+	xyzPool := l40sPool(func(p *v1alpha1.ComputePool) { p.Name, p.Spec.ClusterID = "c-xyz-gpu", "c-xyz" })
+	otherPool := l40sPool(func(p *v1alpha1.ComputePool) { p.Name, p.Spec.ClusterID = "c-zzz-gpu", "c-zzz" })
 	cases := []struct {
 		name     string
 		pool     string
-		targetNS *corev1.Namespace
-		phase    v1alpha1.AIJobPhase
+		targetNS string
+		existing []string
+		project  bool
+		install  string // the namespace it installs in; "" = not installed
 		reason   string
-		install  bool
+		phase    v1alpha1.AIJobPhase
 	}{
-		{"its own namespace on its own cluster", "c-abc-gpu-l40s", downstreamNS("team-a", "c-abc:p-team"), v1alpha1.AIJobPhasePending, "", true},
-		{"another project's namespace", "c-abc-gpu-l40s", downstreamNS("team-a", "c-abc:p-other"), v1alpha1.AIJobPhaseFailed, "NotInProject", false},
-		{"a namespace in no project", "c-abc-gpu-l40s", downstreamNS("team-a", ""), v1alpha1.AIJobPhaseFailed, "NotInProject", false},
-		{"a pool on another cluster", "c-xyz-gpu", downstreamNS("team-a", "c-abc:p-team"), v1alpha1.AIJobPhaseFailed, "NotInProject", false},
-		{"a namespace that does not exist yet", "c-abc-gpu-l40s", nil, v1alpha1.AIJobPhasePending, "TargetNamespaceNotFound", false},
+		{"its namespace on a cluster it spans", "c-abc-gpu-l40s", "team-a", []string{"team-a"}, true, "team-a", "", ""},
+		{"no target namespace: the project's", "c-xyz-gpu", "", []string{"team-x"}, true, "team-x", "", ""},
+		{"another namespace on that cluster", "c-abc-gpu-l40s", "default", []string{"default"}, true, "", "NotInProject", v1alpha1.AIJobPhaseFailed},
+		{"a cluster the project does not span", "c-zzz-gpu", "team-a", []string{"team-a"}, true, "", "NotInProject", v1alpha1.AIJobPhaseFailed},
+		{"its namespace is not there yet", "c-abc-gpu-l40s", "team-a", nil, true, "", "TargetNamespaceNotFound", v1alpha1.AIJobPhasePending},
+		{"the project is gone", "c-abc-gpu-l40s", "team-a", []string{"team-a"}, false, "", "NotInProject", v1alpha1.AIJobPhaseFailed},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			h := newPoolHarness(t, aijob("train-1", inPool, func(j *v1alpha1.AIJob) { j.Spec.Pool = c.pool }), l40sPool(), otherCluster, projectNS())
-			if c.targetNS != nil {
-				require.NoError(t, h.remote.Create(context.Background(), c.targetNS))
+			objs := []client.Object{
+				aijob("train-1", inPool, func(j *v1alpha1.AIJob) { j.Spec.Pool, j.Spec.TargetNamespace = c.pool, c.targetNS }),
+				l40sPool(), xyzPool, otherPool, projectNS(),
+			}
+			if c.project {
+				objs = append(objs, teamProject())
+			}
+			h := newPoolHarness(t, objs...)
+			for _, n := range c.existing {
+				require.NoError(t, h.remote.Create(context.Background(), downstreamNS(n)))
 			}
 			h.reconcile("train-1")
 			j := h.get("train-1")
-			assert.Equal(t, c.install, len(h.helm.ensured) == 1, "installed?")
-			if !c.install {
-				assert.Nil(t, j.Status.Placement)
-				cond := h.installedCondition("train-1")
-				require.NotNil(t, cond)
-				assert.Equal(t, c.reason, cond.Reason)
-				assert.Equal(t, c.phase, j.Status.Phase)
+			if c.install != "" {
+				require.Len(t, h.helm.ensured, 1)
+				assert.Equal(t, c.install, h.helm.ensured[0].Namespace)
+				assert.Equal(t, c.install, j.Status.Placement.Namespace)
+				return
 			}
+			assert.Empty(t, h.helm.ensured, "not installed")
+			assert.Nil(t, j.Status.Placement)
+			cond := h.installedCondition("train-1")
+			require.NotNil(t, cond)
+			assert.Equal(t, c.reason, cond.Reason)
+			assert.Equal(t, c.phase, j.Status.Phase)
 		})
 	}
 }
 
 func TestAJobOutsideAnyProjectIsNotRestricted(t *testing.T) {
 	// The job's namespace on local is not an AI project's: whoever could create it there is an
-	// administrator, and the target namespace's project is not checked.
+	// administrator.
 	h := newPoolHarness(t, aijob("train-1", inPool), l40sPool())
-	require.NoError(t, h.remote.Create(context.Background(), downstreamNS("team-a", "c-abc:p-anything")))
 	h.reconcile("train-1")
 	assert.Len(t, h.helm.ensured, 1)
+}
+
+func TestAProjectsRunWithoutAPoolWaitsForPlacementThenRunsWhereItWasPlaced(t *testing.T) {
+	h := newPoolHarness(t, aijob("train-1", func(j *v1alpha1.AIJob) { j.Spec.Source = nil }), l40sPool(), projectNS(), teamProject())
+	require.NoError(t, h.remote.Create(context.Background(), downstreamNS("team-a")))
+
+	res := h.reconcile("train-1")
+	assert.Equal(t, waitingRequeue, res.RequeueAfter)
+	assert.Empty(t, h.helm.ensured, "not installed anywhere, and not on the operator's cluster")
+	cond := h.installedCondition("train-1")
+	require.NotNil(t, cond)
+	assert.Equal(t, "WaitingForPlacement", cond.Reason)
+
+	// The placement controller explains, then places it.
+	j := h.get("train-1")
+	j.Status.PlacementMessage = "no compute pool fits now (c-abc-gpu-l40s: 0 GPUs free, 1 needed)"
+	require.NoError(t, h.c.Status().Update(context.Background(), j))
+	h.reconcile("train-1")
+	assert.Contains(t, h.installedCondition("train-1").Message, "0 GPUs free")
+
+	j = h.get("train-1")
+	j.Status.Placement = &v1alpha1.AIJobPlacement{Pool: "c-abc-gpu-l40s", ClusterID: downstream, Namespace: "team-a"}
+	require.NoError(t, h.c.Status().Update(context.Background(), j))
+	h.reconcile("train-1")
+	require.Len(t, h.helm.ensured, 1)
+	assert.Equal(t, "team-a", h.helm.ensured[0].Namespace)
+	assert.Equal(t, map[string]interface{}{"matchLabels": map[string]interface{}{"nvidia.com/gpu.product": "L40S"}}, h.helm.ensured[0].Values["poolSelector"])
+	assert.Contains(t, h.helmCalls, [2]string{downstream, "team-a"})
 }

@@ -50,6 +50,7 @@ import (
 	aiworkloadctrl "github.com/SUSE/aif-operator/internal/controller/aiworkload"
 	computepoolctrl "github.com/SUSE/aif-operator/internal/controller/computepool"
 	aiextensionctrl "github.com/SUSE/aif-operator/internal/controller/installaiextension"
+	placementctrl "github.com/SUSE/aif-operator/internal/controller/placement"
 	settingsctrl "github.com/SUSE/aif-operator/internal/controller/settings"
 	"github.com/SUSE/aif-operator/internal/infra/rancher"
 	// +kubebuilder:scaffold:imports
@@ -237,7 +238,7 @@ func main() {
 		"Development only: comma-separated <clusterRepo>=<url> used instead of the ClusterRepo's spec.url, for "+
 			"running the operator outside the cluster where an in-cluster repository Service does not resolve.")
 	flag.StringVar(&onlyControllers, "controllers", "",
-		"Development only: comma-separated controllers to run (installaiextension, settings, aiworkload, aijob, aiproject, computepool). "+
+		"Development only: comma-separated controllers to run (installaiextension, settings, aiworkload, aijob, aiproject, computepool, placement). "+
 			"Empty (default) runs all of them.")
 	opts := zap.Options{
 		Development: true,
@@ -429,8 +430,17 @@ func main() {
 		}
 	}
 	if enabled("aiproject") {
-		if err := (&aiprojectctrl.Reconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		if err := (&aiprojectctrl.Reconciler{
+			Client:  mgr.GetClient(),
+			Rancher: &aiprojectctrl.TokenRancher{Connection: connectionHolder, Scheme: mgr.GetScheme()},
+		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "AIProject")
+			os.Exit(1)
+		}
+	}
+	if enabled("placement") {
+		if err := (&placementctrl.Reconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "Placement")
 			os.Exit(1)
 		}
 	}

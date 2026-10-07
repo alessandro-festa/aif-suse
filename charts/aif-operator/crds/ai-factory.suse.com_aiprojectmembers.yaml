@@ -1,0 +1,84 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: aiprojectmembers.ai-factory.suse.com
+spec:
+  group: ai-factory.suse.com
+  names:
+    kind: AIProjectMembers
+    listKind: AIProjectMembersList
+    plural: aiprojectmembers
+    shortNames:
+    - aiprojmembers
+    singular: aiprojectmembers
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          AIProjectMembers holds the members of the AI project whose namespace on local
+          it is in (aif-<project>), one object named "members". The project's owners
+          may edit it; the operator gives each member their role on every cluster the
+          project spans.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: AIProjectMembersSpec lists a project's members besides its
+              owners.
+            properties:
+              members:
+                items:
+                  description: AIProjectMember is one member and their role.
+                  properties:
+                    kind:
+                      description: |-
+                        Kind is User (a Rancher user ID, e.g. "user-2khzq") or Group (a group
+                        principal, e.g. "github_team://42").
+                      enum:
+                      - User
+                      - Group
+                      type: string
+                    name:
+                      minLength: 1
+                      type: string
+                    role:
+                      description: AIProjectRole is what a member may do in an AI
+                        project.
+                      enum:
+                      - owner
+                      - member
+                      - read-only
+                      type: string
+                  required:
+                  - kind
+                  - name
+                  - role
+                  type: object
+                type: array
+            type: object
+        type: object
+        x-kubernetes-validations:
+        - message: an AI project's members object is named members
+          rule: self.metadata.name == 'members'
+    served: true
+    storage: true

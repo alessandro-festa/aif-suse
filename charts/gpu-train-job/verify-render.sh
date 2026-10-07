@@ -107,6 +107,23 @@ sys.exit(0 if ok else 1)'; then
   fi
 done
 
+# A CPU-only run (job.gpusPerNode=0): no GPU request, no ResourceClaimTemplate, one process per node.
+out=$(helm template t . --set job.gpusPerNode=0 --set job.mode=torchrun 2>&1)
+if printf '%s\n' "$out" | python3 -c '
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+assert not any(d["kind"] == "ResourceClaimTemplate" for d in docs)
+job = next(d for d in docs if d["kind"] == "Job")
+c = job["spec"]["template"]["spec"]["containers"][0]
+res = {**c["resources"].get("requests", {}), **c["resources"].get("limits", {})}
+assert "nvidia.com/gpu" not in res, res
+env = {e["name"]: e.get("value") for e in c["env"]}
+assert env["NPROC_PER_NODE"] == "1", env["NPROC_PER_NODE"]'; then
+  printf '✓ %s\n' "CPU-only run: no GPU request, no claim, NPROC_PER_NODE=1"
+else
+  printf '✗ %s\n' "CPU-only run renders GPU pieces"; fail=1
+fi
+
 echo
 [ $fail -eq 0 ] && echo "chart render checks passed" || echo "chart render checks FAILED"
 exit $fail

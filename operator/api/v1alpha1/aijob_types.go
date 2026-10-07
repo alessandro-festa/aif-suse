@@ -262,6 +262,10 @@ type AIJobStatus struct {
 	// cleaned up there even if its pool goes away.
 	// +optional
 	Placement *AIJobPlacement `json:"placement,omitempty"`
+	// PlacementMessage says why a job waiting for a compute pool has none yet.
+	// Written only by the placement controller.
+	// +optional
+	PlacementMessage string `json:"placementMessage,omitempty"`
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// +optional

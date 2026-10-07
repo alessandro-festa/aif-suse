@@ -283,6 +283,11 @@ spec:
                 - namespace
                 - pool
                 type: object
+              placementMessage:
+                description: |-
+                  PlacementMessage says why a job waiting for a compute pool has none yet.
+                  Written only by the placement controller.
+                type: string
               podCounts:
                 description: AIJobPodCounts summarises pods by phase when there are
                   too many to list.

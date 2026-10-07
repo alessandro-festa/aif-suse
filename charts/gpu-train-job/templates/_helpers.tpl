@@ -118,7 +118,10 @@ else dra if the DeviceClass exists. Offline (helm template) auto resolves to dev
 */}}
 {{- define "gpu-train-job.gpuMode" -}}
 {{- $backend := include "gpu-train-job.backend" . | fromYaml -}}
-{{- if and (has "kai-fraction" $backend.sharing) (gt (int .Values.gpu.sharedMemoryMiB) 0) (not .Values.gpu.sharedClaim) -}}
+{{- if and (eq (int .Values.job.gpusPerNode) 0) (eq (int .Values.gpu.sharedMemoryMiB) 0) -}}
+{{- /* A CPU-only run (a CPU compute pool): no GPU request, no claim, no GPU checks. */ -}}
+none
+{{- else if and (has "kai-fraction" $backend.sharing) (gt (int .Values.gpu.sharedMemoryMiB) 0) (not .Values.gpu.sharedClaim) -}}
 {{- /* A GPU-memory share under KAI: KAI places the pod on a GPU by its gpu-memory annotation and
        HAMi-core / NvFractions caps it. No whole nvidia.com/gpu and no DRA claim: KAI rejects a pod
        that mixes a fraction with a whole-GPU request. */ -}}

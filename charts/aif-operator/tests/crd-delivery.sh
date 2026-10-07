@@ -6,11 +6,11 @@
 set -euo pipefail
 CHART="$(cd "$(dirname "$0")/.." && pwd)"
 
-# 1. The magic crds/ directory must exist and hold all 7 CRDs. Helm installs
+# 1. The magic crds/ directory must exist and hold all 9 CRDs. Helm installs
 #    these before it builds the release manifest; without them, a fresh
 #    `helm install` fails with "no matches for kind Blueprint".
 count=$(ls "$CHART"/crds/ai-factory.suse.com_*.yaml 2>/dev/null | wc -l | tr -d ' ')
-[ "$count" = "7" ] || { echo "FAIL: expected 7 CRDs in crds/, found $count"; exit 1; }
+[ "$count" = "9" ] || { echo "FAIL: expected 9 CRDs in crds/, found $count"; exit 1; }
 if [ -d "$CHART/files/crds" ]; then
   echo "FAIL: stale files/crds/ directory — CRDs must live in crds/ only"; exit 1
 fi
@@ -33,8 +33,8 @@ if grep -Eq '^kind: CustomResourceDefinition' <<< "$render"; then
   echo "FAIL: a CustomResourceDefinition appears as a release object"; exit 1
 fi
 
-# 3. The pre-install/pre-upgrade CRD ConfigMap must carry all 7 CRDs as data keys.
-for crd in aijobs aiworkloads blueprints blueprintcatalogs computepools installaiextensions settings; do
+# 3. The pre-install/pre-upgrade CRD ConfigMap must carry all 9 CRDs as data keys.
+for crd in aijobs aiprojectmembers aiprojects aiworkloads blueprints blueprintcatalogs computepools installaiextensions settings; do
   grep -Eq "ai-factory.suse.com_${crd}\.yaml: \|" <<< "$render" \
     || { echo "FAIL: CRD $crd missing from the crd-apply ConfigMap"; exit 1; }
 done
@@ -50,7 +50,7 @@ grep -q -- '--force-conflicts' <<< "$render" \
 rbac=$(helm template rel "$CHART" --namespace aif-operator --show-only templates/crds/crd-apply-rbac.yaml)
 grep -q 'resourceNames:' <<< "$rbac" \
   || { echo "FAIL: crd-apply ClusterRole is not resourceNames-scoped"; exit 1; }
-for crd in aijobs aiworkloads blueprints blueprintcatalogs installaiextensions settings; do
+for crd in aijobs aiprojectmembers aiprojects aiworkloads blueprints blueprintcatalogs installaiextensions settings; do
   grep -Eq -- "^ +- ${crd}\.ai-factory\.suse\.com$" <<< "$rbac" \
     || { echo "FAIL: CRD $crd missing from ClusterRole resourceNames"; exit 1; }
 done

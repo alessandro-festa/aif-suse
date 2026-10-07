@@ -126,7 +126,7 @@ export const VIRTUAL_TYPES: VirtualTypeConfig[] = [
     name:  PAGE_TYPES.PROJECTS,
     label: 'Projects',
     route: {
-      name:   `c-cluster-${ PRODUCT }-projects`,
+      name:   `c-cluster-${ PRODUCT }-aiprojects`,
       params: { product: PRODUCT, cluster: MANAGEMENT_CLUSTER },
       meta:   { product: PRODUCT }
     }

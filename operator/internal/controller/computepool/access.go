@@ -60,6 +60,9 @@ type cachedClient struct {
 // For returns a proxy reader for the cluster. Proxy clients are reused until
 // the connection changes (a new token, URL or CA).
 func (a *RancherAccess) For(_ context.Context, clusterID string) (ClusterReader, error) {
+	if !a.Connection.Resolved() {
+		return nil, rancher.ErrConnectionPending
+	}
 	conn := a.Connection.Get()
 	if conn == nil {
 		return nil, rancher.ErrNoConnection

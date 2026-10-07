@@ -58,9 +58,32 @@ rules:
     verbs:
       - get
 ---
-# Every member of an AI project may read the compute pools, to choose where a run goes. Pools are
-# cluster-scoped, so the operator binds this through one ClusterRoleBinding (aif-computepool-viewers)
-# whose subjects are all AI projects' members.
+# An AI project's owners edit its members (the AIProjectMembers object named "members" in the
+# project's namespace on this cluster). Bound by the operator in that namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aif-aiproject-members-editor
+  labels:
+    {{- include "aif-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ai-factory.suse.com
+    resources:
+      - aiprojectmembers
+    resourceNames:
+      - members
+    verbs:
+      - get
+      - list
+      - watch
+      - patch
+      - update
+---
+# Every member of an AI project may read the compute pools and the AI projects, to choose where a run
+# goes. Both are cluster-scoped, so the operator binds this through one ClusterRoleBinding
+# (aif-computepool-viewers) whose subjects are all AI projects' members. Members of any project see
+# every project's name, clusters and owners: a deliberate trade for a simple picker.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -72,6 +95,7 @@ rules:
       - ai-factory.suse.com
     resources:
       - computepools
+      - aiprojects
     verbs:
       - get
       - list

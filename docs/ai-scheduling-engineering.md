@@ -24,7 +24,10 @@ Branch: `aijob-scheduling` on the alessandro-festa fork (`origin`), based on SUS
 | 3a | Dispatch: `spec.pool` / `spec.targetNamespace`, Helm install on the pool's cluster through the Rancher proxy, pods kept to the pool's nodes, observe + cleanup there | done, verified end to end on the lab | — |
 | 3b | One local namespace per AI project; RBAC from Rancher project membership; jobs held inside their project | done, verified on the lab | — |
 | 3c | UI: pool picker in Submit/Deploy, jobs in the project namespace, run details from the job's cluster, Projects per cluster, members read pools | built; backend verified on the lab, UI flow to be tried in the browser | — |
-| 4 | Placement controller (meta-scheduler) + global queue + deferred placement | — | — |
+| 3 | (3a/3b/3c committed together) | done | `e0826f92` |
+| 4a | `AIProject` (multi-cluster AI projects) + `AIProjectMembers`; replaces 3b's label-based projects | done, verified on the lab | — |
+| 4b | Placement controller (meta-scheduler) + global queue + deferred placement; CPU-only runs in the chart | done, verified on the lab across two clusters | — |
+| 4c | UI: AI Projects page; project picker + "Automatic" pool in Submit/Deploy | built; requests verified through Rancher; to try in the browser | — |
 | 5 | Activity controller (Prometheus via the proxy), idle reclaim, per-profile policy, hand-off | — | — |
 | 6 | Volcano backend | — | — |
 | 7 | HAMi on the GPU-sharing axis | — | — |
@@ -174,6 +177,58 @@ Projects page likewise works per downstream cluster and offers a cluster picker 
 so a namespace RoleBinding cannot grant them. The `aiproject` controller keeps
 `aif-computepool-viewers` → `aif-computepool-viewer` with the union of all AI projects' members
 (one object, whatever the number of projects).
+
+**D-27 AI projects span clusters: an `AIProject` resource owned by AI Factory** (supersedes
+D-23). It is cluster-scoped, so only admins write it, and holds the display name, the clusters
+it spans (each with its namespace there, optionally adopting an existing Rancher project) and
+its owners. The operator keeps:
+- on local, namespace `aif-<project>` (owned by the AIProject) with the jobs RoleBindings, and an
+  `AIProjectMembers` object named `members`;
+- on each cluster, a Rancher project (adopted or created, labelled `ai-factory.suse.com/aiproject`),
+  the namespace in it, and one Rancher project role binding per member.
+
+Members reach their pods and logs everywhere through Rancher as usual. Deleting an AIProject
+removes what lives on local; Rancher projects and downstream namespaces are left, because they may
+hold data. Reviewer's decision (cross-cluster now).
+
+**D-28 Owners manage members through a namespaced object, not a webhook.** Members beyond the
+owners live in `AIProjectMembers/members` in the project's namespace on local. Owners get a
+RoleBinding to `aif-aiproject-members-editor` (resourceName `members`), so they can change who is
+in the project but never which clusters it spans. No admission webhook is needed.
+
+**D-29 Rancher objects are written through Rancher with the Settings token.** Rancher projects
+and project role bindings are written as the administrator who authorized the token, so
+Rancher's own webhook decides who may grant what. The operator's service account gets no RBAC on
+them.
+
+**D-30 Placement: one queue, most free, first come, with backfill.** A job in an AI project's
+namespace with no `spec.pool` waits (`WaitingForPlacement`) instead of running locally. One
+placement pass (a single reconcile key) runs over every waiting job in submission order:
+- the job's needs come from its values over the built-in chart's defaults;
+- candidates are the pools on the project's clusters;
+- the fitting pool with the most free GPUs (CPU for CPU runs) wins;
+- jobs placed but not started count against their pool, so free capacity is not double-booked
+  before the pool's figures refresh.
+
+A job that doesn't fit doesn't hold back smaller ones (backfill). The pass writes
+`status.placement` (and annotates the job, so the AIJob controller reacts at once), or
+`status.placementMessage` with why nothing fits. Each pool's refusal is spelled out. It decides
+where; the cluster's scheduler decides when. Priority and fair-share are not implemented.
+
+**D-31 The nav's Projects is the AI Projects page; a cluster's Rancher projects and quotas are
+"Quotas".** One concept per name. dstanley's per-cluster page (Rancher projects, ResourceQuota,
+KAI/Kueue queues) stays, reached from each cluster row of an AI project. Its 3c "make AI project"
+label path is removed.
+
+**D-32 Submit/Deploy: project first, then the pool; Automatic by default.** With Automatic the page
+stays on local and shows only the cluster-independent checks (`automaticPlacementChecks`) plus
+"placed automatically"; the placement controller makes the capacity and queue checks on every
+cluster the project spans. Picking a specific pool moves the page to that cluster (D-25), and the
+target namespace is the project's namespace there.
+
+**D-33 Members of any AI project can read all AIProjects** (the pool-viewer ClusterRole also
+reads `aiprojects`), so the project picker needs no per-project ClusterRoleBinding. Trade-off:
+project names, clusters and owners are visible across projects.
 
 ---
 
@@ -352,6 +407,40 @@ lab had none. Apply `examples/training/profiles/00-namespace-rbac.yaml` and the 
 (10–13, 30–38) to get some. The full form (Submit) is reached from Training Jobs → **New** →
 "Custom training job (full form)".
 
+**F-38 [trap] Rancher refuses a duplicate project role binding** ("duplicate prtb not allowed").
+The project's creator already holds `project-owner` through `creator-project-owner`, so adopting
+a project and binding its owner again failed. Only the live lab showed it; fake clients accept
+anything. The operator now treats a role the member already has through a binding it did not make
+as satisfied, and never touches bindings it did not make.
+
+**F-39 [fact] Lab check (P4a):** AIProject `vision` spans downstream-1 and downstream-2. The
+operator created Rancher projects `c-fg8qv:p-v8q79` and `c-xvstz:p-5cdht`, namespace `vision` in
+each, the owner's role bindings, `aif-vision` on local with its members object and RoleBindings,
+and the pool-viewer binding. AIProject `aiteam` adopted `c-fg8qv:p-aiteam` with namespace
+`ai-team`. Both Ready. The 3b-style namespace `aif-c-fg8qv-p-aiteam` was retired.
+
+**F-40 [bug, fixed P4b] Startup race: controllers ran before Settings published the Rancher
+token.** Discovery marked every downstream pool `Connected=False / NoRancherToken` for a minute
+after each operator restart, and a placement pass in that window avoided those clusters (a CPU run
+went to the cluster with half the free CPU). `ConnectionHolder.Resolved()` now tells "no token"
+from "not read yet". Until Settings is read, discovery retries in 5s without touching the pools,
+and jobs wait as `ConnectingToRancher`. Verified: a CPU run submitted right after a restart went
+to the right cluster.
+
+**F-41 [bug, pre-existing, fixed P4b] The training chart could not run a CPU-only job.**
+`gpusPerNode: 0` still ran the GPU preflight ("no node advertises nvidia.com/gpu") and set
+`NPROC_PER_NODE=0`. `gpuMode` now returns `none` with no GPUs and no share, which switches off the
+GPU request, the DRA claim and the GPU checks; `NPROC_PER_NODE` is at least 1. GPU renders are
+byte-identical (32-case matrix); verify-render checks the CPU case.
+
+**F-42 [fact] Lab check (P4b):** in AIProject `vision` (downstream-1 + downstream-2), two jobs
+with no pool were placed by the queue: a 1-GPU run → `c-fg8qv-gpu-l40s` (the only GPU pool on the
+project's clusters), Running then Succeeded on downstream-2-worker; a CPU run →
+`c-xvstz-cpu` (≈19 free CPU against ≈9), Running on downstream-1-worker.
+
+**F-43 [fact, pre-existing upstream] The Settings controller reconciles about every 15s** ("Rancher
+catalog client configured" twice per cycle) with nothing changing. Harmless but noisy; not ours.
+
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator
 namespace. Discovery reuses it (D-15).
@@ -470,6 +559,8 @@ kubectl --context kind-sims-datacenter get computepools
 | AI projects | `operator/internal/controller/aiproject/` | namespace per marked project; RoleBindings from PRTBs; `NamespaceFor`, labels |
 | Project RBAC roles | `charts/aif-operator/templates/rbac/aijob-roles.yaml` | `aif-aijob-editor` / `aif-aijob-viewer`; operator may only `bind` these |
 | Cross-cluster UI helpers | `ui/pkg/aif-ui/training/placement.ts` | `fetchPools`, `poolLabel`, `localProfileConfigMaps`, `aiProjectNamespaceFor`, `createAIJob`, `placedPods`, `podsOfPlacedJob` |
+| Placement (meta-scheduler) | `operator/internal/controller/placement/` | `NeedsOf` (values over chart defaults), `choose` / `refuse` (pure), the queue pass |
+| AI projects | `operator/internal/controller/aiproject/` (rewritten in 4a) | `AIProject` → local namespace + RoleBindings, per-cluster Rancher project / namespace / PRTBs via `TokenRancher` |
 | Job dispatch | `operator/internal/controller/aijob/target.go` | `targetFor` (pool → cluster/namespace, placement wins), `helmFor` / `remoteFor` (proxy clients cached per connection), `unplaced` reasons |
 | Pool affinity (chart) | `charts/gpu-train-job/templates/_helpers.tpl` `gpu-train-job.affinity`, `hasDRA` | `poolSelector` value → required node affinity |
 
@@ -495,6 +586,10 @@ kubectl --context kind-sims-datacenter get computepools
 | O-14 | ~~Project members need to read ComputePools~~ done in 3c (D-26) | — | — |
 | O-15 | ~~The Projects page must set the AI-project label~~ done in 3c: creation, Run:AI adoption, and "Make AI project" for existing projects | — | — |
 | O-16 | The Training Jobs list reads AIJobs through the cluster store on local; check what a non-admin member sees (Steve lists namespaces the user can access) | UI | with O-13 |
+| O-18 | Placement ignores per-node fit (a 4-GPU-per-node run counts pool totals), priority and fair-share | `placement/fit.go` | later |
+| O-19 | A placed job that stays unadmitted is not re-placed elsewhere (design §6.3 step 4) | placement | later |
+| O-20 | Picking members by typed user ID or group principal is crude; use Rancher's principal search | `AIProjects.vue` | later |
+| O-21 | The project picker lists every project; filter to the ones the user is a member of | `Submit.vue` | later |
 | O-17 | The UI's 3c flows (pool picker → cluster switch → submit; Projects on a downstream cluster) are covered by unit tests of their logic, not by component tests; try them in the browser | UI | now |
 
 ---

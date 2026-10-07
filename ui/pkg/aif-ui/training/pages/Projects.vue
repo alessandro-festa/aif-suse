@@ -11,7 +11,7 @@ import {
   ENDPOINTS_PAGE, GPU_RESOURCE, PRODUCT_NAME, SUBMIT_PAGE, TYPES
 } from '../config';
 import { loadClusterLabel } from '../cluster';
-import { AI_PROJECT_LABEL, LOCAL_CLUSTER } from '../placement';
+import { LOCAL_CLUSTER } from '../placement';
 import { getAllClusters } from '../../services/rancher-apps';
 import {
   ClusterCapacity, KAI_QUEUE_LABEL, QueueIndex, QuotaIssue, auditQuotas, buildQueueIndex, clusterCapacity,
@@ -52,9 +52,6 @@ export default defineComponent({
       clusterName: '',
       // AI projects live on downstream clusters: on local the page only offers to pick one.
       downstreamClusters: [] as { id: string; name: string }[],
-      // this cluster's Rancher projects, to offer making one an AI project
-      rancherProjectsHere: [] as any[],
-      projectToMark:      '',
       // project rows opened to show namespaces, members and the scheduler's queue
       openDetails: {} as Record<string, boolean>,
       // queues without a project, and the scheduler default: plumbing, closed by default
@@ -147,12 +144,6 @@ export default defineComponent({
     },
     clusterOptions(): { label: string; value: string }[] {
       return this.downstreamClusters.map((c) => ({ label: c.name, value: c.id }));
-    },
-    /** This cluster's Rancher projects that are not AI projects yet (System never is one). */
-    unmarkedProjects(): { label: string; value: string }[] {
-      return this.rancherProjectsHere
-        .filter((p: any) => p.metadata?.labels?.[AI_PROJECT_LABEL] !== 'true' && p.metadata?.labels?.['authz.management.cattle.io/system-project'] !== 'true')
-        .map((p: any) => ({ label: p.spec?.displayName || p.metadata?.name, value: p.metadata?.name }));
     },
     /** Projects proper: a queue nobody's namespace points at is not one (see unassignedQueues). */
     projectRows(): AiProject[] {
@@ -420,31 +411,6 @@ export default defineComponent({
       this.$router.push({ name: this.$route.name, params: { ...this.$route.params, cluster: id }, query: this.$route.query });
     },
 
-    /**
-     * Make a Rancher project an AI project: the operator gives it a namespace on the management
-     * cluster, where its training runs are recorded, with access for the project's members.
-     */
-    async markAiProject(projectId: string) {
-      const model = await this.$store.dispatch('management/find', { type: TYPES.RANCHER_PROJECT, id: `${ this.clusterId }/${ projectId }`, opt: { force: true } });
-
-      model.metadata.labels = { ...(model.metadata.labels || {}), [AI_PROJECT_LABEL]: 'true' };
-      await model.save();
-    },
-
-    async makeAiProject(done: (ok: boolean) => void) {
-      this.error = '';
-      try {
-        await this.markAiProject(this.projectToMark);
-        this.notice = `"${ this.unmarkedProjects.find((p) => p.value === this.projectToMark)?.label }" is now an AI project: its members can run training jobs in its namespaces.`;
-        this.projectToMark = '';
-        done(true);
-        await this.load();
-      } catch (e: any) {
-        this.error = `Could not make it an AI project: ${ e?.message || e }`;
-        done(false);
-      }
-    },
-
     async load() {
       if (this.refreshing || this.onLocal) {
         return;
@@ -523,7 +489,6 @@ export default defineComponent({
         // Not scoped to this cluster: project ids are unique across Rancher, and a name taken on
         // another cluster is still a name we must not reuse.
         this.rancherProjectNames = rancherProjects.map((p: any) => p.metadata?.name).filter(Boolean);
-        this.rancherProjectsHere = rancherProjects.filter((p: any) => p.metadata?.namespace === this.clusterId);
         this.projects = assembleProjects(
           rancherProjects.filter((p: any) => p.metadata?.namespace === this.clusterId),
           namespaces,
@@ -942,11 +907,6 @@ export default defineComponent({
       try {
         const displayName = this.form.displayName || project.name;
         const rancherProjectId = await this.createRancherProject(displayName, undo);
-        const shortId = shortProjectId(rancherProjectId);
-
-        if (shortId) {
-          await this.markAiProject(shortId);
-        }
         const patch = buildProjectBindingPatch(project.namespace, this.clusterId, rancherProjectId);
 
         // Re-read and merge rather than PUT a manifest: Run:AI's controller owns the rest of this
@@ -1006,11 +966,6 @@ export default defineComponent({
       try {
         const rancherProjectId = this.form.createRancherProject ? await this.createRancherProject(this.form.displayName || name, undo) : null;
 
-        const shortId = rancherProjectId ? shortProjectId(rancherProjectId) : null;
-
-        if (shortId) {
-          await this.markAiProject(shortId);
-        }
 
         if (this.backend === 'kai') {
           const queueManifest = buildQueueManifest(
@@ -1134,7 +1089,7 @@ export default defineComponent({
       v-if="onLocal"
       class="ap-pick-cluster"
     >
-      <p>AI projects live on the clusters that run AI work. Choose one to see and manage its projects.</p>
+      <p>Rancher projects, quotas and queues are per cluster. Choose one; AI projects across clusters are on the Projects page.</p>
       <LabeledSelect
         :value="''"
         :options="clusterOptions"
@@ -1144,24 +1099,7 @@ export default defineComponent({
       />
     </section>
 
-    <section
-      v-else-if="unmarkedProjects.length"
-      class="ap-make-ai"
-    >
-      <LabeledSelect
-        v-model:value="projectToMark"
-        :options="unmarkedProjects"
-        label="Make an existing Rancher project an AI project"
-        placeholder="Choose a project"
-      />
-      <AsyncButton
-        mode="edit"
-        action-label="Make AI project"
-        waiting-label="Saving…"
-        :disabled="!projectToMark"
-        @click="makeAiProject"
-      />
-    </section>
+
 
     <Banner
       v-if="error"
@@ -1879,8 +1817,7 @@ export default defineComponent({
 .ap-assign-select { min-width: 280px; }
 
 .ai-projects { padding: 0 20px 20px; }
-.ap-pick-cluster, .ap-make-ai { max-width: 520px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px; }
-.ap-make-ai { flex-direction: row; align-items: flex-end; gap: 12px; }
+.ap-pick-cluster { max-width: 520px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px; }
 .ap-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; h1 { margin-bottom: 0; } }
 .ap-title { display: flex; align-items: center; gap: 8px; }
 .ap-version { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 10px; padding: 1px 7px; cursor: help; }

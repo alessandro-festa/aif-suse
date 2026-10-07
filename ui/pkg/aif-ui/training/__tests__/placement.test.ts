@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  aiProjectNamespace, aiProjectNamespaceFor, createAIJob, fetchPools, placedPods, placementOf, podsOfPlacedJob, poolLabel
+  createAIJob, fetchPools, fetchProjects, placedPods, placementOf, podsOfPlacedJob, poolLabel, projectClusterNamespace, projectNamespace
 } from '../placement';
 
 // A store whose cluster/request answers from a map of URL -> body, and records what was sent.
@@ -31,10 +31,15 @@ const pool = (name: string, cluster: string, kind: string, extra: any = {}) => (
 });
 
 describe('placement', () => {
-  it('names the AI project namespace after the Rancher project', () => {
-    expect(aiProjectNamespace('c-fg8qv:p-team')).toBe('aif-c-fg8qv-p-team');
-    expect(aiProjectNamespace('')).toBeNull();
-    expect(aiProjectNamespace('c-fg8qv')).toBeNull();
+  it('reads the AI projects from local, and where each runs', async() => {
+    const vision = { metadata: { name: 'vision' }, spec: { displayName: 'Vision', clusters: [{ clusterId: 'c-a', namespace: 'vision' }, { clusterId: 'c-b', namespace: 'vision-b' }] } };
+    const store = fakeStore({ '/k8s/clusters/local/apis/ai-factory.suse.com/v1alpha1/aiprojects': { items: [vision, { metadata: { name: 'alpha' }, spec: {} }] } });
+    const projects = await fetchProjects(store);
+
+    expect(projects.map((p: any) => p.metadata.name)).toEqual(['alpha', 'vision']);
+    expect(projectNamespace('vision')).toBe('aif-vision');
+    expect(projectClusterNamespace(vision, 'c-b')).toBe('vision-b');
+    expect(projectClusterNamespace(vision, 'c-z')).toBe('');
   });
 
   it('lists the usable downstream pools from local', async() => {
@@ -52,20 +57,6 @@ describe('placement', () => {
 
     expect(pools.map((p) => p.name)).toEqual(['c-x-cpu', 'c-x-gpu-l40s']);
     expect(pools.map(poolLabel)).toEqual(['downstream-2 · CPU · 1 node', 'downstream-2 · GPU L40S · 1 of 2 free']);
-  });
-
-  it('finds the AI project namespace of a target namespace, only when the project is an AI project', async() => {
-    const store = fakeStore({
-      '/k8s/clusters/c-x/api/v1/namespaces/team-a':  { metadata: { annotations: { 'field.cattle.io/projectId': 'c-x:p-team' } } },
-      '/k8s/clusters/c-x/api/v1/namespaces/default': { metadata: { annotations: { 'field.cattle.io/projectId': 'c-x:p-default' } } },
-      '/k8s/clusters/c-x/api/v1/namespaces/loose':   { metadata: {} },
-      '/k8s/clusters/local/api/v1/namespaces/aif-c-x-p-team': { metadata: { name: 'aif-c-x-p-team' } },
-    });
-
-    expect(await aiProjectNamespaceFor(store, 'c-x', 'team-a')).toBe('aif-c-x-p-team');
-    expect(await aiProjectNamespaceFor(store, 'c-x', 'default')).toBeNull(); // project not marked
-    expect(await aiProjectNamespaceFor(store, 'c-x', 'loose')).toBeNull(); // in no project
-    expect(await aiProjectNamespaceFor(store, 'local', 'team-a')).toBeNull();
   });
 
   it('creates the AIJob on local, in its namespace there', async() => {

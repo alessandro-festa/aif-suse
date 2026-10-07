@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 // has no field comes back in `unmapped`, and everything else survives a round trip unchanged.
 
 import {
-  chartValuesFor, checksFor, DEFAULT_FORM, Facts, Form, formFromManifest, formFromValues, isTorchlessImage, joinArgs, runPreflight, splitArgs
+  automaticPlacementChecks, chartValuesFor, checksFor, DEFAULT_FORM, Facts, Form, formFromManifest, formFromValues, isTorchlessImage, joinArgs, runPreflight, splitArgs
 } from '../preflight';
 
 // A cluster where nothing is installed and nothing is wrong, so a test can turn on exactly the one
@@ -755,24 +755,21 @@ describe('GPU-memory shares follow the scheduler table', () => {
   });
 });
 
-// Where a run goes: a compute pool, and a namespace of an AI project there.
-describe('compute pool and AI project checks', () => {
-  const form = { ...DEFAULT_FORM, namespace: 'team-a' };
+// Where a run goes: an AI project, and a compute pool of one of its clusters.
+describe('AI project and compute pool checks', () => {
+  const form = { ...DEFAULT_FORM, namespace: 'vision' };
   const check = (f: Facts, id: string) => runPreflight(form, f).find((c) => c.id === id);
 
-  it('asks for a pool when there are pools to choose from', () => {
-    expect(check(facts({ poolsAvailable: 2, pool: '' }), 'pool')?.severity).toBe('fail');
+  it('asks for an AI project first', () => {
+    expect(check(facts({ poolsAvailable: 2, aiProjectNamespace: null }), 'project')?.severity).toBe('fail');
   });
 
-  it('refuses a namespace that is in no AI project', () => {
-    const c = check(facts({ poolsAvailable: 2, pool: 'c-x-gpu', aiProjectNamespace: null }), 'project');
-
-    expect(c?.severity).toBe('fail');
-    expect(c?.title).toContain('team-a');
+  it('then for a pool', () => {
+    expect(check(facts({ poolsAvailable: 2, aiProjectNamespace: 'aif-vision', pool: '' }), 'pool')?.severity).toBe('fail');
   });
 
-  it('passes with a pool and an AI project namespace', () => {
-    const f = facts({ poolsAvailable: 2, pool: 'c-x-gpu', aiProjectNamespace: 'aif-c-x-p-team' });
+  it('passes with both', () => {
+    const f = facts({ poolsAvailable: 2, pool: 'c-a-gpu', aiProjectNamespace: 'aif-vision' });
 
     expect(check(f, 'pool')).toBeUndefined();
     expect(check(f, 'project')?.severity).toBe('pass');
@@ -781,5 +778,16 @@ describe('compute pool and AI project checks', () => {
   it('says nothing on a page that does not place runs', () => {
     expect(check(facts({}), 'pool')).toBeUndefined();
     expect(check(facts({}), 'project')).toBeUndefined();
+  });
+
+  it('keeps only the checks that do not depend on a cluster when placement is automatic', () => {
+    const all = runPreflight({ ...form, releaseName: 'BAD NAME' }, facts({ poolsAvailable: 2, aiProjectNamespace: null }));
+    const auto = automaticPlacementChecks(all, 'vision');
+
+    expect(auto.map((c) => c.id)).toContain('name');
+    expect(auto.find((c) => c.id === 'name')?.severity).toBe('fail');
+    expect(auto.some((c) => ['namespace', 'queue', 'gpu', 'scheduler', 'capacity'].includes(c.id))).toBe(false);
+    expect(auto.find((c) => c.id === 'project')?.severity).toBe('pass');
+    expect(auto.find((c) => c.id === 'pool')?.severity).toBe('info');
   });
 });

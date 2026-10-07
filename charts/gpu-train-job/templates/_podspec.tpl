@@ -212,7 +212,8 @@ MASTER_ADDR/MASTER_PORT/WORLD_SIZE/RANK into every PyTorchJob pod.
 - name: NNODES
   value: {{ .Values.job.nodes | quote }}
 - name: NPROC_PER_NODE
-  value: {{ .Values.job.gpusPerNode | quote }}
+  {{- /* one process per GPU; a CPU-only run still runs one */}}
+  value: {{ max 1 (int .Values.job.gpusPerNode) | toString | quote }}
 - name: SMOKE_HOLD_SECONDS
   value: {{ .Values.job.smokeHoldSeconds | quote }}
 {{- if .Values.storage.scratchSize }}

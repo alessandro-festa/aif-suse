@@ -22,7 +22,7 @@ import {
 } from '../config';
 import {
   chartValuesFor, Check, DEFAULT_FORM, Facts, Form, estimateScratch, formFromManifest, formFromValues, GpuNode,
-  checksFor, parseCpu, parseMem, PvcInfo, resolveGpuMode, runPreflight,
+  automaticPlacementChecks, checksFor, parseCpu, parseMem, PvcInfo, resolveGpuMode, runPreflight,
   StorageClassInfo, summarize
 } from '../preflight';
 import {
@@ -32,7 +32,7 @@ import { pvcRole } from '../checkpoints';
 import { Profile, PROFILE_NAMESPACE, profilesFrom } from '../profiles';
 import { aiJobFor, AIJOB_TYPE } from '../aijob';
 import {
-  aiProjectNamespaceFor, createAIJob, fetchPools, LOCAL_CLUSTER, localProfileConfigMaps, poolLabel
+  createAIJob, fetchPools, fetchProjects, LOCAL_CLUSTER, localProfileConfigMaps, poolLabel, projectClusterNamespace, projectNamespace
 } from '../placement';
 import { getAllClusters } from '../../services/rancher-apps';
 import { backendOf, placesGpuMemoryShares, usesQueueTree } from '../schedulers';
@@ -123,7 +123,8 @@ export default defineComponent({
         enabled: false, repoName: '', chartName: '', version: ''
       },
       allConfigMaps:   [] as any[],
-      // Compute pools on downstream clusters, read from local whatever cluster this page is on.
+      // AI projects and compute pools, read from local whatever cluster this page is on.
+      projects:        [] as any[],
       pools:           [] as any[],
       allSecrets:      [] as any[],
       allPvcs:         [] as any[],
@@ -167,7 +168,9 @@ export default defineComponent({
 
   computed: {
     checks(): Check[] {
-      return checksFor(runPreflight(this.form, this.facts), { profile: !!this.$route.query.authorProfile, scheduler: this.form.scheduler });
+      const checks = checksFor(runPreflight(this.form, this.facts), { profile: !!this.$route.query.authorProfile, scheduler: this.form.scheduler });
+
+      return this.automatic ? automaticPlacementChecks(checks, this.projectName) : checks;
     },
     profileMode(): boolean {
       return !!this.$route.query.authorProfile;
@@ -642,12 +645,32 @@ export default defineComponent({
     },
 
 
+    /** The AI project the run belongs to, from the page's query. */
+    projectName(): string {
+      return String(this.$route.query.project || '');
+    },
+    selectedProject(): any {
+      return this.projects.find((p: any) => p.metadata.name === this.projectName) || null;
+    },
+    projectOptions(): { label: string; value: string }[] {
+      return this.projects.map((p: any) => ({ label: p.spec?.displayName || p.metadata.name, value: p.metadata.name }));
+    },
     /** The pool the run goes to, from the page's query: choosing one moves the page to its cluster. */
     poolName(): string {
       return String(this.$route.query.pool || '');
     },
+    /** A project and no pool: AI Factory places the run on the project's best-fitting pool. */
+    automatic(): boolean {
+      return !!this.projectName && !this.poolName;
+    },
+    /** Automatic, or one of the pools on the clusters the project spans. */
     poolOptions(): { label: string; value: string }[] {
-      return this.pools.map((p: any) => ({ label: poolLabel(p), value: p.name }));
+      const spans = new Set((this.selectedProject?.spec?.clusters || []).map((c: any) => c.clusterId));
+
+      return [
+        { label: 'Automatic — the best fit across the project\'s clusters', value: '' },
+        ...this.pools.filter((p: any) => spans.has(p.clusterId)).map((p: any) => ({ label: poolLabel(p), value: p.name })),
+      ];
     },
 
     submitDisabled(): boolean {
@@ -724,7 +747,6 @@ export default defineComponent({
       this.form.queue = this.queueOptions[0]?.value || '';
     },
     'form.namespace'(ns: string) {
-      this.refreshAiProject();
       if (this.form.scheduler === 'kueue') {
         this.form.queue = this.queueOptions[0]?.value || '';
       }
@@ -903,33 +925,51 @@ export default defineComponent({
     async loadPools() {
       try {
         const clusters = await getAllClusters(this.$store);
+        const [projects, pools] = await Promise.all([
+          fetchProjects(this.$store).catch(() => []),
+          fetchPools(this.$store, Object.fromEntries(clusters.map((c: any) => [c.id, c.name]))),
+        ]);
 
-        this.pools = await fetchPools(this.$store, Object.fromEntries(clusters.map((c: any) => [c.id, c.name])));
+        this.projects = projects;
+        this.pools = pools;
       } catch {
         this.pools = []; // an operator without ComputePool: runs stay on this cluster, as before
       }
     },
 
-    /** Run in a pool: the page moves to the pool's cluster, so every fact below is read there. */
-    choosePool(name: string) {
-      const pool = this.pools.find((p: any) => p.name === name);
+    /** A run belongs to an AI project: choosing one starts over on local, placed automatically. */
+    chooseProject(name: string) {
+      const query: Record<string, any> = { ...this.$route.query, project: name };
 
-      if (!pool) {
-        return;
-      }
-      this.$router.push({
-        name: this.$route.name, params: { ...this.$route.params, cluster: pool.clusterId }, query: { ...this.$route.query, pool: name }
-      });
+      delete query.pool;
+      this.$router.push({ name: this.$route.name, params: { ...this.$route.params, cluster: LOCAL_CLUSTER }, query });
     },
 
-    /** The AI project namespace on local the AIJob goes into, for the chosen namespace. */
-    async refreshAiProject() {
-      if (!this.poolName) {
+    /**
+     * Run in a pool: the page moves to the pool's cluster, so every fact below is read there.
+     * Automatic ('') stays on local: the placement controller chooses the cluster.
+     */
+    choosePool(name: string) {
+      const pool = this.pools.find((p: any) => p.name === name);
+      const query: Record<string, any> = { ...this.$route.query };
+
+      if (pool) {
+        query.pool = name;
+      } else {
+        delete query.pool;
+      }
+      this.$router.push({ name: this.$route.name, params: { ...this.$route.params, cluster: pool?.clusterId || LOCAL_CLUSTER }, query });
+    },
+
+    /** Where the run is recorded, and, in a pool, the project's namespace on the pool's cluster. */
+    refreshAiProject() {
+      if (!this.pools.length) {
         return;
       }
-      const home = await aiProjectNamespaceFor(this.$store, String(this.$route.params.cluster), this.form.namespace);
-
-      this.facts = { ...this.facts, aiProjectNamespace: home };
+      this.facts = { ...this.facts, aiProjectNamespace: this.projectName ? projectNamespace(this.projectName) : null };
+      if (this.poolName && this.selectedProject) {
+        this.form.namespace = projectClusterNamespace(this.selectedProject, String(this.$route.params.cluster)) || this.form.namespace;
+      }
     },
 
     async loadFacts() {
@@ -939,7 +979,7 @@ export default defineComponent({
       // in a pool is recorded on local, where the operator serves AIJobs whenever it serves pools.
       facts.pool = this.poolName;
       facts.poolsAvailable = this.pools.length;
-      facts.jobApi = !!this.poolName || !!this.$store.getters['cluster/schemaFor'](AIJOB_TYPE);
+      facts.jobApi = !!this.projectName || !!this.$store.getters['cluster/schemaFor'](AIJOB_TYPE);
       facts.chart = this.customChartSource();
 
       facts.kueueInstalled = !!this.$store.getters['cluster/schemaFor'](TYPES.LOCAL_QUEUE);
@@ -1158,7 +1198,7 @@ export default defineComponent({
           this.form.scheduler = queueSched;
         }
       }
-      await this.refreshAiProject();
+      this.refreshAiProject();
     },
 
     useSuggestedScratch() {
@@ -1236,13 +1276,14 @@ export default defineComponent({
         return;
       }
       try {
-        if (this.poolName) {
-          // Recorded on local in the AI project's namespace; the operator runs it in the pool.
+        if (this.projectName) {
+          // Recorded on local in the AI project's namespace. In a pool the operator runs it there;
+          // without one the placement controller chooses the pool.
           await createAIJob(this.$store, aiJobFor({
             name:            this.form.releaseName,
-            namespace:       this.facts.aiProjectNamespace || '', // checked by the pre-flight
-            pool:            this.poolName,
-            targetNamespace: this.form.namespace,
+            namespace:       projectNamespace(this.projectName),
+            pool:            this.poolName || undefined,
+            targetNamespace: this.poolName ? this.form.namespace : undefined,
             source:          this.facts.chart,
             values:          this.effectiveValues,
           }));
@@ -1255,7 +1296,7 @@ export default defineComponent({
         done(true);
         setTimeout(() => {
           this.$router.push({
-            name: `c-cluster-${ PRODUCT_NAME }-${ ENDPOINTS_PAGE }`, params: { cluster: this.poolName ? LOCAL_CLUSTER : this.$route.params.cluster }, query: { tab: 'training' }
+            name: `c-cluster-${ PRODUCT_NAME }-${ ENDPOINTS_PAGE }`, params: { cluster: this.projectName ? LOCAL_CLUSTER : this.$route.params.cluster }, query: { tab: 'training' }
           });
         }, 1200);
       } catch (e: any) {
@@ -1306,11 +1347,23 @@ export default defineComponent({
       class="tj-pool"
     >
       <LabeledSelect
+        :value="projectName"
+        :options="projectOptions"
+        label="AI project"
+        placeholder="Choose the project this run belongs to"
+        @update:value="chooseProject"
+      />
+      <LabeledSelect
+        v-if="projectName"
         :value="poolName"
         :options="poolOptions"
         label="Compute pool"
-        placeholder="Choose where this job runs"
         @update:value="choosePool"
+      />
+      <Banner
+        v-if="!projects.length"
+        color="info"
+        label="There is no AI project yet. An administrator creates one on the Projects page."
       />
     </div>
 
@@ -2387,7 +2440,7 @@ export default defineComponent({
 
 .tj-submit { padding: 0 20px 20px; }
 .tj-header { margin-bottom: 10px; h1 { margin-bottom: 4px; } }
-.tj-pool { max-width: 520px; margin-bottom: 12px; }
+.tj-pool { max-width: 520px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
 .tj-custom-chart { margin-bottom: 12px; summary { cursor: pointer; color: var(--muted); } }
 .tj-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); gap: 24px; align-items: start; }
 @media (max-width: 1100px) { .tj-grid { grid-template-columns: 1fr; } }

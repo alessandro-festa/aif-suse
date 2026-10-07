@@ -16,9 +16,10 @@ import {
   profileConfigMap, profilesFrom
 } from '../profiles';
 import {
-  BLUEPRINT_NAME_LABEL, BLUEPRINT_TYPE, BLUEPRINT_VERSION_LABEL, BlueprintSummary, findBlueprint, summarizeBlueprint
+  BLUEPRINT_NAME_LABEL, BLUEPRINT_VERSION_LABEL, BlueprintSummary, findBlueprint, summarizeBlueprint
 } from '../inference';
 import { gib } from '../gpushare';
+import { localBlueprints } from '../placement';
 
 const emptyDraft = (): InferenceProfileDraft => ({
   meta: {
@@ -48,9 +49,7 @@ export default defineComponent({
   async fetch() {
     const name = String(this.$route.query.profile || '');
 
-    if (this.$store.getters['cluster/schemaFor'](BLUEPRINT_TYPE)) {
-      this.blueprints = await this.$store.dispatch('cluster/findAll', { type: BLUEPRINT_TYPE }).catch(() => []);
-    }
+    this.blueprints = await localBlueprints(this.$store).catch(() => []);
     if (name) {
       const cms = await this.$store.dispatch('cluster/findAll', { type: 'configmap', opt: { force: true } }).catch(() => []);
       const p = profilesFrom(cms, (s: string) => jsyaml.load(s)).find((x) => x.name === name && x.type === 'inference');

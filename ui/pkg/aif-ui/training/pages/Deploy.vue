@@ -14,7 +14,7 @@ import Submit from './Submit.vue';
 import ReadinessPanel from '../components/ReadinessPanel.vue';
 import { PRODUCT_NAME, PROFILES_PAGE } from '../config';
 import {
-  chartValuesFor, Check, checksFor, Form, runPreflight, summarize
+  automaticPlacementChecks, chartValuesFor, Check, checksFor, Form, runPreflight, summarize
 } from '../preflight';
 import { availability } from '../quota';
 import { usesQueueTree } from '../schedulers';
@@ -82,7 +82,8 @@ export default defineComponent({
   computed: {
     checks(): Check[] {
       // a deploy into a queueing project waits for room rather than failing on it
-      const cluster = checksFor(runPreflight(this.form, this.facts), { profile: false, scheduler: this.form.scheduler });
+      const all = checksFor(runPreflight(this.form, this.facts), { profile: false, scheduler: this.form.scheduler });
+      const cluster = this.automatic ? automaticPlacementChecks(all, this.projectName) : all;
 
       const code = this.hasCode ? [codeCheck(this.codeSource, this.form)] : [];
 
@@ -308,10 +309,17 @@ export default defineComponent({
         class="tj-pool"
       >
         <LabeledSelect
+          :value="projectName"
+          :options="projectOptions"
+          label="AI project"
+          placeholder="Choose the project this run belongs to"
+          @update:value="chooseProject"
+        />
+        <LabeledSelect
+          v-if="projectName"
           :value="poolName"
           :options="poolOptions"
           label="Compute pool"
-          placeholder="Choose where this runs"
           @update:value="choosePool"
         />
       </div>
@@ -785,7 +793,7 @@ export default defineComponent({
 .tj-title { margin: 0 0 12px; }
 .tj-link { font-size: 13px; }
 
-.tj-pool { max-width: 520px; margin-bottom: 16px; }
+.tj-pool { max-width: 520px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px; }
 .tj-profile-card { border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: var(--border-radius); padding: 12px 16px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 4px; }
 .tj-profile-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .tj-profile-name { font-size: 16px; font-weight: 600; }
