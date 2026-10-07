@@ -12,4 +12,4 @@ AI Factory serves this chart from the "Inference Engines Apps" git custom reposi
 Custom repositories), published from `charts/inference-engines/` of the aif-suse fork; the engine
 Blueprints reference it from there.
 
-The icon is SGLang's own (github.com/sgl-project/sglang, assets/logo_square.png, Apache-2.0).
+The icon is SGLang's own (github.com/sgl-project/sglang, assets/logo_square.png, Apache-2.0). It is icon.png here; Rancher serves it from the git repository and the AI Factory Apps page inlines it.
