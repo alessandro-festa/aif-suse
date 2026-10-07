@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ray-serve.fullname" . }}-app
+  labels:
+    {{- include "ray-serve.labels" . | nindent 4 }}
+data:
+  {{- /* app mode's Serve app, imported as serve_app:app (PYTHONPATH=/home/ray/aif on every pod) */}}
+  serve_app.py: |
+    {{- .Files.Get "files/serve_app.py" | nindent 4 }}

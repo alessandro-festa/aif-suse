@@ -1,0 +1,17 @@
+# A stable address for the endpoint: KubeRay's own serve Service is named after the Ray cluster,
+# which changes when the RayService is updated. Selects the pods running Serve's HTTP proxy.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ray-serve.fullname" . }}
+  labels:
+    {{- include "ray-serve.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "ray-serve.selector" . | nindent 4 }}
+    ray.io/serve: "true"
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: serve
