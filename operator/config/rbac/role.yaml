@@ -91,6 +91,7 @@ rules:
   resources:
   - aijobs/status
   - aiworkloads/status
+  - computepools/status
   - installaiextensions/status
   - settings/status
   verbs:
@@ -102,6 +103,7 @@ rules:
   resources:
   - aiworkloads
   - blueprints
+  - computepools
   - installaiextensions
   - settings
   verbs:
@@ -235,6 +237,14 @@ rules:
   - kueue.x-k8s.io
   resources:
   - workloads
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - management.cattle.io
+  resources:
+  - clusters
   verbs:
   - get
   - list

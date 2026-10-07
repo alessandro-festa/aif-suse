@@ -59,6 +59,12 @@ jobs:
           helm template charts/aif-operator > /dev/null
           helm template charts/gpu-train-job > /dev/null
 
+      # The ClusterRole is maintained by hand; it must grant what the operator's code declares.
+      - name: RBAC parity for the operator chart
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          charts/aif-operator/tests/rbac-parity.sh
+
       # The training chart has no helm-unittest suites: its checks render the combinations AIJobs and
       # profiles use (Job and PyTorchJob, each scheduler, DRA, shares) and assert the structure.
       - name: Render checks for the training chart

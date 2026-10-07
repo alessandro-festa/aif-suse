@@ -53,6 +53,10 @@ type SettingsReconciler struct {
 	// from Settings.Spec.RancherCatalog. The AIWorkload reconciler reads it to
 	// fetch charts from git-backed ClusterRepos. Nil disables that wiring.
 	CatalogHolder *rancher.Holder
+	// ConnectionHolder receives the same Rancher URL, token and CA, for
+	// controllers that reach downstream clusters through Rancher's proxy
+	// (compute pool discovery). Nil disables that wiring.
+	ConnectionHolder *rancher.ConnectionHolder
 }
 
 // +kubebuilder:rbac:groups=ai-factory.suse.com,resources=settings,verbs=get;list;watch;create;update;patch;delete
@@ -152,6 +156,7 @@ func (r *SettingsReconciler) reconcileRancherCatalogClient(ctx context.Context, 
 
 	if rc.TokenSecretRef == nil {
 		r.CatalogHolder.Set(nil)
+		r.setConnection(nil)
 		return
 	}
 	token, err := r.readSecretKey(ctx, s.Namespace, rc.TokenSecretRef)
@@ -163,6 +168,7 @@ func (r *SettingsReconciler) reconcileRancherCatalogClient(ctx context.Context, 
 		l.Info("Rancher catalog client disabled: token secret unavailable; git-backed ClusterRepos will not be installable",
 			"secret", rc.TokenSecretRef.Name, "error", msg)
 		r.CatalogHolder.Set(nil)
+		r.setConnection(nil)
 		return
 	}
 
@@ -172,6 +178,7 @@ func (r *SettingsReconciler) reconcileRancherCatalogClient(ctx context.Context, 
 	if url == "" {
 		url = rancher.DefaultBaseURL
 	}
+	r.setConnection(&rancher.Connection{URL: url, Token: token, CAPEM: caPEM, Insecure: rc.InsecureSkipVerify})
 	client, err := rancher.NewCatalogClient(url, token, caPEM, rc.InsecureSkipVerify)
 	if err != nil {
 		l.Error(err, "failed to build Rancher catalog client")
@@ -180,6 +187,12 @@ func (r *SettingsReconciler) reconcileRancherCatalogClient(ctx context.Context, 
 	}
 	r.CatalogHolder.Set(client)
 	l.Info("Rancher catalog client configured", "url", url, "insecureSkipVerify", rc.InsecureSkipVerify, "customCA", len(caPEM) > 0, "caSource", caSource)
+}
+
+func (r *SettingsReconciler) setConnection(c *rancher.Connection) {
+	if r.ConnectionHolder != nil {
+		r.ConnectionHolder.Set(c)
+	}
 }
 
 // resolveCABundle picks the CA the catalog client should trust, and reports

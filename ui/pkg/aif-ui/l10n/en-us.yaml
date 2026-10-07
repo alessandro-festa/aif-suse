@@ -26,19 +26,25 @@ suseai:
   pages:
     computePools:
       title: Compute Pools
-      description: Every cluster AI Factory can place work on, as a GPU or CPU-only pool, with the schedulers, GPU sharing and training runtime it runs.
-      loading: Discovering clusters...
-      empty: No clusters found.
+      description: The nodes AI Factory can place work on, discovered on every downstream cluster Rancher manages — one pool per GPU model and one for CPU-only nodes, each named after its cluster — with what each has and is using, and the schedulers, GPU sharing and training runtime the cluster runs. Refreshed every minute. Rancher's local cluster runs no AI work and is not listed.
+      loading: Reading compute pools...
+      empty: No compute pools yet. The operator discovers them within a minute of starting.
+      notInstalled: This AI Factory operator does not discover compute pools yet. Upgrade the operator to a version that includes ComputePool.
+      needsToken: Downstream clusters are read through Rancher with the Rancher API token from AI Factory Settings. Without one they cannot be discovered. Authorize it under Settings → Rancher API Access.
+      openSettings: Open Settings
+      undiscovered: The operator has not been able to read this cluster yet, so its pools are unknown.
+      notDiscovered: Not discovered
       cols:
-        cluster: Cluster
-        kind: Pool
+        pool: Pool
+        kind: Kind
         nodes: Nodes
-        cpu: CPU
-        memory: Memory
-        gpuMemory: GPU memory
+        cpu: CPU used / total
+        memory: Memory used / total
+        gpus: GPUs used / total
         schedulers: Schedulers
         sharing: GPU sharing
         training: Training runtime
+        status: Status
     about:
       title: About
       sections:
@@ -247,7 +253,7 @@ suseai:
               keyNameLabel: CA Bundle Key
         rancherCatalog:
           title: Rancher API Access
-          description: 'Credentials the operator uses to call the Rancher API. Currently this is needed only to fetch charts from git-backed ClusterRepos, which expose no HTTP or OCI URL. Those charts do not show up under Apps — the token only lets a Blueprint deploy them. Create a token in Rancher under Account & API Keys, store it in a Secret in the operator namespace, then reference that Secret below.'
+          description: 'Credentials the operator uses to call the Rancher API: to fetch charts from git-backed ClusterRepos, which expose no HTTP or OCI URL (those charts do not show up under Apps — the token only lets a Blueprint deploy them), and to discover the compute pools of downstream clusters through Rancher. Create a token in Rancher under Account & API Keys, store it in a Secret in the operator namespace, then reference that Secret below.'
           authorize: Authorize
           reauthorize: Re-authorize
           authorizing: Authorizing…

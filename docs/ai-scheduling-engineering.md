@@ -19,8 +19,8 @@ Branch: `aijob-scheduling` on the alessandro-festa fork (`origin`), based on SUS
 | Phase | Scope | State | Commit |
 |---|---|---|---|
 | 0 | dstanley's AIJob work cherry-picked; Workloads sub-menu; Compute Pools view; built-in training chart (no repository); design doc | done | `f36a018e` (+ cherry-picks `ce8c1302..9a9fd67e`) |
-| 1 | Scheduler backend table (`schedulers.yaml`) behind chart, operator and UI; Kueue v1beta2; Run:AI held pods | done | see `git log` |
-| 2 | `ComputePool` CRD, discovery of GPU and CPU-only pools on every cluster via the Rancher proxy | in progress | — |
+| 1 | Scheduler backend table (`schedulers.yaml`) behind chart, operator and UI; Kueue v1beta2; Run:AI held pods | done | `40153155` |
+| 2 | `ComputePool` CRD, discovery of GPU and CPU-only pools on every cluster via the Rancher proxy | done, verified on the lab (local + 2 downstream) | — |
 | 3 | Multi-cluster dispatch (Fleet Bundle of the built-in chart) + observe via the proxy | — | — |
 | 4 | Placement controller (meta-scheduler) + global queue + deferred placement | — | — |
 | 5 | Activity controller (Prometheus via the proxy), idle reclaim, per-profile policy, hand-off | — | — |
@@ -97,6 +97,28 @@ in-cluster client and needs no token. Without a token, downstream pools report
 `Connected=False / NoRancherToken`.
 *Rejected:* an operator-minted Rancher token (a long-lived credential the operator created
 itself); Rancher's per-cluster SA tokens in `cattle-global-data` (cluster-admin, Rancher internals).
+
+**D-16 Discovery never rewrites a pool's spec; pools are owned by their Rancher cluster.**
+Discovery creates a pool only when no pool of that name exists. Administrators can edit,
+disable or add pools (an added pool needs the `ai-factory.suse.com/cluster` label to be refreshed).
+Owner reference = `clusters.management.cattle.io`, so a removed cluster takes its pools with it.
+A GPU model that disappears leaves its pool at 0 nodes rather than deleting an object an admin may
+have edited.
+
+**D-17 One reconcile per Rancher cluster, refreshed every minute; status is written every time.**
+Writing on every refresh keeps `observedAt` honest. Status writes don't re-trigger reconciles,
+because both watches use `GenerationChangedPredicate`.
+
+**D-18 A cluster the operator cannot read gets no pools.** There's nothing to discover from
+without its nodes. The UI lists clusters with no pool as "Not discovered", and shows the
+token banner when any of them is a downstream cluster.
+
+**D-19 Rancher's `local` cluster never has compute pools; pools are named after their cluster.**
+`local` hosts Rancher and AI Factory, not AI work. The controller ignores it (event predicate +
+early return), the CRD refuses `clusterId: local` (CEL), and the UI hides it, "Not discovered"
+rows included. A pool's default `displayName` is the cluster name. The Kind (GPU/CPU) and GPU
+model tell a cluster's pools apart, so the page has no separate Cluster column. Reviewer's decision.
+(As a result `RancherAccess` only ever builds proxy clients; the in-cluster local reader is gone.)
 
 ---
 
@@ -180,6 +202,52 @@ fails on macOS.** The x509 error text differs; it fails on pristine `main` too. 
 (rather than literal types) breaks inferred object types in tests. `vitest` passes; `build-pkg`
 fails.
 
+**F-19 [bug, fixed P2] The chart's `manager-role.yaml` holds two documents**: the ClusterRole,
+then a namespaced Role. Rules appended at the end of the file land in the Role and show up only on
+a cluster, as "forbidden". `charts/aif-operator/tests/rbac-parity.sh` (run in chart CI) now checks
+that the ClusterRole grants everything `operator/config/rbac/role.yaml` declares.
+
+**F-20 [bug, pre-existing, fixed P2] The ClusterRole did not grant `events` create/patch.** Only
+the namespaced Roles did, so events on objects in other namespaces (an AIJob in a user's
+namespace) were refused and dropped. The parity check found it.
+
+**F-21 [trap] On the lab, CRD fields are owned by managers `sims` (the original install's client)
+and `aif-operator-crds` (the chart's CRD job).** Applying newer CRDs needs
+`kubectl apply --server-side --force-conflicts --field-manager=aif-operator-crds`. Inspect
+`--show-managed-fields` first: here `sims` wrote at install time, not a separate patch.
+
+**F-22 [trap] `helm upgrade --wait` waits on the `aif-ui` InstallAIExtension**, which becomes
+not-ready when the chart bumps the UI version. The release is marked failed even though the
+operator rolled out. Upgrade without `--wait` and check the Deployment rollout instead.
+
+**F-23 [fact] Live check on the lab:** `local-cpu` reports cpu 10, memory 22841872Ki, requested
+1120m / 636Mi, exactly Rancher's own `clusters.management.cattle.io/local` status. The
+refresh advances `observedAt` within the 60s resync.
+
+**F-25 [trap] A dev-loaded UI is shadowed by an installed UI plugin of the same version.**
+Upgrading the lab operator with the branch chart made it install the published `aif-ui`
+2.3.0-rc.4, the same name and version as the dev build. Rancher then served the published
+plugin and the Workloads sub-menu disappeared. Keep the installed UI on a different version
+(`--set aiExtension.source.helm.version=… --set aiExtension.extension.version=…`), as the runbook
+does.
+
+**F-26 [bug, fixed P2] client-go refuses a CA together with skip-verify** ("specifying a root
+certificates file with the insecure flag is not allowed"). Settings can say
+`insecureSkipVerify: true` while the operator also discovers Rancher's internal CA, so the proxy
+client was never built and every downstream cluster failed silently (no pool, so nowhere to
+record it). `ClusterConfig` now drops the CA under skip-verify, as the catalog client does. Each
+unreadable cluster is also logged ("Cannot read cluster for compute pools", with the reason).
+
+**F-27 [fact] Lab discovery result:** `c-xvstz-cpu` (downstream-1, 2 nodes), and
+`c-fg8qv-cpu` and `c-fg8qv-gpu-l40s` (downstream-2: 1 node, 2 × L40S at 48 GB, from the lab's
+simulated GPU labels). All Connected within one resync of the token being set. After D-19,
+`local-cpu` is gone and the API refuses to create a pool on `local` (checked with a server-side dry run).
+
+**F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
+Authorize creates a Rancher API token as the logged-in user and stores it in the operator
+namespace. Discovery reuses it (D-15).
+
+
 ---
 
 ## 4. Runbook
@@ -252,8 +320,21 @@ A live read-only check: `helm template … --dry-run=server --kube-context kind-
 - Management: `kind-sims-datacenter` (Rancher, AIF operator in `aif-operator`). Downstreams:
   `kind-downstream-1` (`c-xvstz`), `kind-downstream-2` (`c-fg8qv`). No GPUs; Kubernetes < 1.34.
 - Always pass `--context`.
-- Dev operator image: build, `kind load docker-image` into `sims-datacenter`, then `helm upgrade`
-  with the image swapped, and apply new CRDs from `charts/aif-operator/crds` first.
+- Dev operator image, as done in Phase 2:
+
+```bash
+cd operator
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-X main.version=<v> -X main.commit=<sha>" -o /tmp/aif-op-img/manager cmd/main.go
+printf 'FROM gcr.io/distroless/static:nonroot\nWORKDIR /\nCOPY manager .\nUSER 65532:65532\nENTRYPOINT ["/manager"]\n' > /tmp/aif-op-img/Dockerfile
+docker build -t ghcr.io/suse/aif-operator:<tag> /tmp/aif-op-img            # a new tag each time
+kind load docker-image ghcr.io/suse/aif-operator:<tag> --name sims-datacenter
+kubectl --context kind-sims-datacenter apply --server-side --force-conflicts \
+  --field-manager=aif-operator-crds -f ../charts/aif-operator/crds/       # F-21
+helm --kube-context kind-sims-datacenter upgrade aif-operator ../charts/aif-operator -n aif-operator \
+  --set crds.manageWithJob=false --set manager.image.tag=<tag> --set manager.image.pullPolicy=Never \
+  --set aiExtension.source.helm.version=2.3.0-rc.3 --set aiExtension.extension.version=2.3.0-rc.3   # no --wait (F-22); UI ≠ dev build version (F-25)
+kubectl --context kind-sims-datacenter get computepools
+```
 
 ---
 
@@ -273,7 +354,10 @@ A live read-only check: `helm template … --dry-run=server --kube-context kind-
 | Helm client | `operator/internal/infra/helm/` | `ReleaseSpec.ChartArchive`: install from memory |
 | AIJob controller | `operator/internal/controller/aijob/` | `releaseSpec` (built-in vs custom), `observe.go` (`podQueueLabels`, `schedulerHeld`), Workload v1beta2→v1beta1 |
 | AIJob API | `operator/api/v1alpha1/aijob_types.go` | `spec.source` optional (immutable either way) |
-| Rancher client | `operator/internal/infra/rancher/` | catalog client; P2 adds per-cluster proxy clients |
+| Rancher client | `operator/internal/infra/rancher/` | catalog client; `clusters.go`: `Connection`, `ConnectionHolder`, `ClusterConfig` (proxy REST config) |
+| ComputePool API | `operator/api/v1alpha1/computepool_types.go` | cluster-scoped; `clusterId` immutable (CEL) |
+| Pool discovery | `operator/internal/controller/computepool/` | `discover.go` (pure: `discoverPools`, `poolStatus`, `detectStack`), `access.go` (local vs proxy), `computepool_controller.go` |
+| Chart RBAC | `charts/aif-operator/templates/rbac/manager-role.yaml` | hand-maintained; `tests/rbac-parity.sh` |
 | Fleet delivery (for P3) | `operator/internal/controller/aiworkload/gitchart.go` | `buildGitChartBundle`, `chartTgzToBundleResources` |
 
 ---
@@ -290,6 +374,10 @@ A live read-only check: `helm template … --dry-run=server --kube-context kind-
 | O-6 | Kubeflow "training only" values preset | catalog | 8 |
 | O-7 | Make the App Collection PyTorch image the default training image (F-02) | `gpu-train-job` values / profiles | later |
 | O-8 | Run:AI namespace-label preflight branch is only reviewed, never executed (needs a real Namespace) | `_preflight.tpl` | when a Run:AI cluster is available |
+| O-9 | GPU nodes without GFD labels are counted as CPU-only; DRA-only GPU nodes (ResourceSlices, no labels) likewise | `computepool/discover.go` | with DRA support in placement |
+| O-10 | Discovery lists every active pod of every cluster each minute; at scale, aggregate per node or watch | `computepool/access.go` | before production |
+| O-11 | Requested GPUs count `nvidia.com/gpu` only; DRA claims and KAI/HAMi fractions are not in `requested` | `computepool/discover.go` | 4 (placement) / 7 |
+| O-12 | `aijobAllowedCharts` and other operator values on the lab come from chart defaults; the lab runs the branch chart with `crds.manageWithJob=false` | lab | — |
 
 ---
 
@@ -321,7 +409,25 @@ A live read-only check: `helm template … --dry-run=server --kube-context kind-
   Kueue Workload found at v1beta2 or v1beta1; no KAI-style shares under Run:AI in the UI (F-14).
 - `isQueueScheduler` was split into the specific questions it stood for.
 
-### Phase 2 — plan
+### Phase 2 — as built
+- Delivered as planned below, plus: an RBAC parity check (F-19, F-20); "Not discovered" rows for
+  clusters with no pool (D-18); the Settings "Rancher API Access" text now names discovery.
+- Settings publishes `rancher.Connection` (URL, token, CA) through a `ConnectionHolder`, next to the
+  catalog client it already built. `RancherAccess` caches one proxy client per cluster until the
+  connection changes.
+- Pool names: `<cluster>-gpu-<product-slug>`, `<cluster>-gpu` (GPU nodes that do not name their
+  product), `<cluster>-cpu`. The CPU pool selector excludes labelled GPU nodes; cordoned nodes are
+  not counted.
+- Detection reuses `trainchart.Backends()` (`detect.group` / `detect.unless`), the same table as
+  the chart and UI. A scheduler's `sharing` modes are reported when it is installed, and HAMi
+  from its node annotation.
+- Verified: unit tests (discovery, status, stack, reconciler with a fake cluster), envtest for the
+  CRD rules, then the lab (F-23, F-27), after fixing F-26.
+- Compute Pools styling: kind and stack values as outlined tags (GPU in the primary colour),
+  status as a coloured dot with text. Theme variables only (`--border`, `--primary`, `--success`,
+  `--error`, `--info`, `--muted`), so it follows light and dark themes.
+
+### Phase 2 — plan (original)
 - **CRD `ComputePool`** (cluster-scoped, `ai-factory.suse.com/v1alpha1`).
   - spec: `clusterId`, `nodeSelector` (a `metav1.LabelSelector`, so a CPU pool can say "no GPU
     label"), `kind: gpu|cpu`, `enabled`, `displayName`.

@@ -1,0 +1,300 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: computepools.ai-factory.suse.com
+spec:
+  group: ai-factory.suse.com
+  names:
+    kind: ComputePool
+    listKind: ComputePoolList
+    plural: computepools
+    shortNames:
+    - cpool
+    singular: computepool
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.clusterId
+      name: Cluster
+      type: string
+    - jsonPath: .spec.kind
+      name: Kind
+      type: string
+    - jsonPath: .status.nodes
+      name: Nodes
+      type: integer
+    - jsonPath: .status.allocatable.gpus
+      name: GPUs
+      type: integer
+    - jsonPath: .status.conditions[?(@.type=="Connected")].status
+      name: Connected
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ComputePool is a set of nodes on one downstream cluster that AI work can be
+          placed on, GPU or CPU-only. The operator creates one per GPU model and one for
+          the CPU-only nodes of every downstream cluster it can see, named after the
+          cluster, and refreshes what each has.
+          Administrators can edit, add or disable pools; the operator never rewrites a
+          pool's spec.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ComputePoolSpec is which nodes of which cluster form the
+              pool.
+            properties:
+              clusterId:
+                description: |-
+                  ClusterID is the Rancher cluster ID (clusters.management.cattle.io name)
+                  of a downstream cluster, e.g. "c-m-abc123". Never "local": Rancher's own
+                  cluster runs no AI work.
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: Rancher's local cluster has no compute pools
+                  rule: self != 'local'
+              disabled:
+                description: Disabled keeps the pool out of placement. Its status
+                  is still refreshed.
+                type: boolean
+              displayName:
+                description: DisplayName is a human-readable name. Informational.
+                type: string
+              kind:
+                description: Kind says whether the pool runs GPU work or CPU-only
+                  work.
+                enum:
+                - gpu
+                - cpu
+                type: string
+              nodeSelector:
+                description: |-
+                  NodeSelector picks the pool's nodes on that cluster. Empty selects every
+                  node.
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: |-
+                        A label selector requirement is a selector that contains values, a key, and an operator that
+                        relates the key and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: |-
+                            operator represents a key's relationship to a set of values.
+                            Valid operators are In, NotIn, Exists and DoesNotExist.
+                          type: string
+                        values:
+                          description: |-
+                            values is an array of string values. If the operator is In or NotIn,
+                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                            the values array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                      map is equivalent to an element of matchExpressions, whose key field is "key", the
+                      operator is "In", and the values array contains only "value". The requirements are ANDed.
+                    type: object
+                type: object
+                x-kubernetes-map-type: atomic
+            required:
+            - clusterId
+            - kind
+            type: object
+            x-kubernetes-validations:
+            - message: spec.clusterId is immutable
+              rule: self.clusterId == oldSelf.clusterId
+          status:
+            description: ComputePoolStatus is what the operator last read from the
+              pool's nodes.
+            properties:
+              allocatable:
+                description: Allocatable is the sum of the nodes' allocatable resources.
+                properties:
+                  cpu:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  gpus:
+                    description: GPUs counts whole devices (nvidia.com/gpu).
+                    format: int64
+                    type: integer
+                  memory:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                type: object
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              gpu:
+                description: ComputePoolGPU describes the pool's GPUs.
+                properties:
+                  memoryMiB:
+                    description: |-
+                      MemoryMiB is the memory of the smallest GPU in the pool
+                      (nvidia.com/gpu.memory), 0 when the nodes do not say.
+                    format: int64
+                    type: integer
+                  models:
+                    description: Models are the GPU products on the pool's nodes (nvidia.com/gpu.product).
+                    items:
+                      type: string
+                    type: array
+                type: object
+              nodes:
+                description: Nodes is how many nodes the selector matches.
+                format: int32
+                type: integer
+              observedAt:
+                description: ObservedAt is when the nodes were last read.
+                format: date-time
+                type: string
+              requested:
+                description: Requested is the sum of the requests of the pods running
+                  on those nodes.
+                properties:
+                  cpu:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  gpus:
+                    description: GPUs counts whole devices (nvidia.com/gpu).
+                    format: int64
+                    type: integer
+                  memory:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                type: object
+              schedulers:
+                description: |-
+                  Schedulers are the scheduler backends installed on the cluster, by their
+                  scheduler.type name in the training chart's schedulers.yaml.
+                items:
+                  type: string
+                type: array
+              sharing:
+                description: Sharing are the GPU-sharing modes available (kai-fraction,
+                  hami).
+                items:
+                  type: string
+                type: array
+              training:
+                description: |-
+                  Training are the training runtimes installed (training-operator,
+                  trainer-v2).
+                items:
+                  type: string
+                type: array
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

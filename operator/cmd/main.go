@@ -47,6 +47,7 @@ import (
 	"github.com/SUSE/aif-operator/internal/config"
 	aijobctrl "github.com/SUSE/aif-operator/internal/controller/aijob"
 	aiworkloadctrl "github.com/SUSE/aif-operator/internal/controller/aiworkload"
+	computepoolctrl "github.com/SUSE/aif-operator/internal/controller/computepool"
 	aiextensionctrl "github.com/SUSE/aif-operator/internal/controller/installaiextension"
 	settingsctrl "github.com/SUSE/aif-operator/internal/controller/settings"
 	"github.com/SUSE/aif-operator/internal/infra/rancher"
@@ -235,7 +236,7 @@ func main() {
 		"Development only: comma-separated <clusterRepo>=<url> used instead of the ClusterRepo's spec.url, for "+
 			"running the operator outside the cluster where an in-cluster repository Service does not resolve.")
 	flag.StringVar(&onlyControllers, "controllers", "",
-		"Development only: comma-separated controllers to run (installaiextension, settings, aiworkload, aijob). "+
+		"Development only: comma-separated controllers to run (installaiextension, settings, aiworkload, aijob, computepool). "+
 			"Empty (default) runs all of them.")
 	opts := zap.Options{
 		Development: true,
@@ -371,6 +372,9 @@ func main() {
 	// from Settings.Spec.RancherCatalog and swaps it in here; the AIWorkload
 	// reconciler reads it to fetch charts from git-backed ClusterRepos.
 	catalogHolder := rancher.NewHolder()
+	// The same Rancher URL, token and CA, for reaching downstream clusters
+	// through Rancher's proxy (compute pool discovery).
+	connectionHolder := rancher.NewConnectionHolder()
 
 	if enabled("settings") {
 		if err := (&settingsctrl.SettingsReconciler{
@@ -378,6 +382,7 @@ func main() {
 			Scheme:            mgr.GetScheme(),
 			OperatorNamespace: operatorNamespace,
 			CatalogHolder:     catalogHolder,
+			ConnectionHolder:  connectionHolder,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "Settings")
 			os.Exit(1)
@@ -418,6 +423,16 @@ func main() {
 			AllowInsecureRegistryTLS: allowInsecureRegistryTLS,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "AIJob")
+			os.Exit(1)
+		}
+	}
+	if enabled("computepool") {
+		if err := (&computepoolctrl.Reconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+			Access: &computepoolctrl.RancherAccess{Connection: connectionHolder},
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "ComputePool")
 			os.Exit(1)
 		}
 	}

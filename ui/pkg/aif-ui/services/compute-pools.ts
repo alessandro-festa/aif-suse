@@ -1,106 +1,102 @@
 import type { Dispatchable } from '../types/rancher-types';
-import { TIMEOUT_VALUES } from '../utils/constants';
-import { getAllClusterResourceMetrics, type ClusterResourceSummary } from './cluster-resources';
+import { fmtMem, parseCpu, parseMem } from '../training/preflight';
+import { getAllClusters } from './rancher-apps';
 
-// Read-only view of each cluster as a compute pool: what it has (GPU or CPU only) and which
-// scheduling stack runs on it. The ComputePool CRD and placement are designed in
-// docs/design/ai-scheduling.md; this page is the PoC that shows the raw material.
+// The compute pools the AI Factory operator discovers on every downstream cluster Rancher manages
+// (the ComputePool resource): one per GPU model and one for the CPU-only nodes, named after their
+// cluster, with what each has and the scheduling stack the cluster runs. Rancher's own "local"
+// cluster runs no AI work and is never shown. See docs/design/ai-scheduling.md §6.
 
-export type SchedulerBackend = 'kai' | 'runai' | 'kueue' | 'volcano';
-export type SharingBackend = 'hami';
-export type TrainingRuntime = 'training-operator' | 'trainer-v2';
+const LOCAL_CLUSTER = 'local';
 
-export interface PoolStack {
-  schedulers: SchedulerBackend[];
-  sharing:    SharingBackend[];
-  training:   TrainingRuntime[];
+export const COMPUTE_POOL_TYPE = 'ai-factory.suse.com.computepool';
+
+export interface ComputePoolRow {
+  name:          string;
+  displayName:   string;
+  clusterId:     string;
+  clusterName:   string;
+  kind:          'gpu' | 'cpu';
+  disabled:      boolean;
+  /** null until the operator has read the cluster once. */
+  connected:     boolean | null;
+  reason:        string;
+  message:       string;
+  nodes:         number;
+  cpu:           string; // "requested / allocatable" cores
+  memory:        string;
+  gpus:          number;
+  gpusRequested: number;
+  gpuModels:     string[];
+  gpuMemoryMiB:  number;
+  schedulers:    string[];
+  sharing:       string[];
+  training:      string[];
 }
 
-export interface ComputePoolRow extends PoolStack {
-  clusterId: string;
-  name:      string;
-  kind:      'gpu' | 'cpu';
-  status:    ClusterResourceSummary['status'];
-  nodeCount: number;
-  cpu:       number;
-  memoryGB:  number;
-  gpuMemGB:  number;
+/** A ComputePool object as the page shows it. */
+export function poolRow(p: any, clusterNames: Record<string, string> = {}): ComputePoolRow {
+  const spec = p?.spec || {};
+  const st = p?.status || {};
+  const conn = (st.conditions || []).find((c: any) => c?.type === 'Connected');
+  const alloc = st.allocatable || {};
+  const req = st.requested || {};
+  const cores = (q: any) => Math.round(parseCpu(q) * 10) / 10;
+
+  return {
+    name:          p?.metadata?.name || '',
+    displayName:   spec.displayName || clusterNames[spec.clusterId] || spec.clusterId || p?.metadata?.name || '',
+    clusterId:     spec.clusterId || '',
+    clusterName:   clusterNames[spec.clusterId] || spec.clusterId || '',
+    kind:          spec.kind === 'gpu' ? 'gpu' : 'cpu',
+    disabled:      !!spec.disabled,
+    connected:     conn ? conn.status === 'True' : null,
+    reason:        conn?.reason || '',
+    message:       conn?.message || '',
+    nodes:         Number(st.nodes) || 0,
+    cpu:           `${ cores(req.cpu) } / ${ cores(alloc.cpu) }`,
+    memory:        `${ fmtMem(parseMem(req.memory)) } / ${ fmtMem(parseMem(alloc.memory)) }`,
+    gpus:          Number(alloc.gpus) || 0,
+    gpusRequested: Number(req.gpus) || 0,
+    gpuModels:     st.gpu?.models || [],
+    gpuMemoryMiB:  Number(st.gpu?.memoryMiB) || 0,
+    schedulers:    st.schedulers || [],
+    sharing:       st.sharing || [],
+    training:      st.training || [],
+  };
 }
 
-// HAMi has no CRD; its device plugin registers each node's GPUs in this annotation.
-const HAMI_NODE_ANNOTATION = 'hami.io/node-nvidia-register';
-
-/**
- * Which backends a cluster runs, from its API groups and node annotations.
- * Run:AI ships KAI's scheduling.run.ai queue CRD too; only the run.ai group tells them apart.
- */
-export function detectStack(groups: string[], nodeAnnotations: Record<string, string>[]): PoolStack {
-  const has = (g: string) => groups.includes(g);
-  const schedulers: SchedulerBackend[] = [];
-
-  if (has('run.ai')) {
-    schedulers.push('runai');
-  } else if (has('scheduling.run.ai')) {
-    schedulers.push('kai');
-  }
-  if (has('kueue.x-k8s.io')) {
-    schedulers.push('kueue');
-  }
-  if (has('scheduling.volcano.sh')) {
-    schedulers.push('volcano');
-  }
-
-  const training: TrainingRuntime[] = [];
-
-  if (has('kubeflow.org')) {
-    training.push('training-operator');
-  }
-  if (has('trainer.kubeflow.org')) {
-    training.push('trainer-v2');
-  }
-
-  const sharing: SharingBackend[] = nodeAnnotations.some((a) => HAMI_NODE_ANNOTATION in (a || {})) ? ['hami'] : [];
-
-  return { schedulers, sharing, training };
+export interface ComputePools {
+  /** false when the operator on this Rancher does not serve ComputePool yet (an older AI Factory). */
+  installed:    boolean;
+  rows:         ComputePoolRow[];
+  /**
+   * Downstream clusters with no pool at all: the operator has not been able to read them yet,
+   * usually for want of a Rancher token, and they would otherwise not appear anywhere.
+   */
+  undiscovered: { id: string; name: string }[];
 }
 
-async function fetchStack(store: Dispatchable, clusterId: string): Promise<PoolStack> {
-  const base = `/k8s/clusters/${ encodeURIComponent(clusterId) }`;
-  const [apis, nodes] = await Promise.all([
-    store.dispatch('rancher/request', { url: `${ base }/apis`, timeout: TIMEOUT_VALUES.CLUSTER }),
-    store.dispatch('rancher/request', { url: `${ base }/v1/nodes?exclude=metadata.managedFields`, timeout: TIMEOUT_VALUES.CLUSTER }),
+/** Downstream clusters no pool is on. */
+export function undiscoveredClusters(clusters: { id: string; name: string }[], rows: ComputePoolRow[]): { id: string; name: string }[] {
+  const seen = new Set(rows.map((r) => r.clusterId));
+
+  return clusters.filter((c) => c.id !== LOCAL_CLUSTER && !seen.has(c.id)).map((c) => ({ id: c.id, name: c.name }));
+}
+
+/** Every ComputePool, by cluster then name, and the clusters that have none yet. */
+export async function listComputePools(store: Dispatchable & { getters: any }): Promise<ComputePools> {
+  if (!store.getters['cluster/schemaFor']?.(COMPUTE_POOL_TYPE)) {
+    return { installed: false, rows: [], undiscovered: [] };
+  }
+  const [pools, clusters] = await Promise.all([
+    store.dispatch('cluster/findAll', { type: COMPUTE_POOL_TYPE, opt: { force: true } }),
+    getAllClusters(store),
   ]);
-  const groups = (apis?.data?.groups || apis?.groups || []).map((g: { name: string }) => g.name);
-  const items = nodes?.data?.data || nodes?.data || [];
+  const names = Object.fromEntries(clusters.map((c) => [c.id, c.name]));
+  const rows = (pools || []).map((p: any) => poolRow(p, names)).filter((r: ComputePoolRow) => r.clusterId !== LOCAL_CLUSTER);
 
-  return detectStack(groups, items.map((n: any) => n?.metadata?.annotations || {}));
-}
+  rows.sort((a: ComputePoolRow, b: ComputePoolRow) => a.clusterName.localeCompare(b.clusterName) || a.displayName.localeCompare(b.displayName));
 
-export async function listComputePools(store: Dispatchable): Promise<ComputePoolRow[]> {
-  const clusters = await getAllClusterResourceMetrics(store);
-
-  return Promise.all(clusters.map(async(c) => {
-    let stack: PoolStack = { schedulers: [], sharing: [], training: [] };
-
-    if (c.status === 'ready') {
-      try {
-        stack = await fetchStack(store, c.clusterId);
-      } catch {
-        // An unreachable discovery endpoint leaves the stack unknown, not the row missing.
-      }
-    }
-    const gpuMemGB = c.resources.gpu?.total || 0;
-
-    return {
-      clusterId: c.clusterId,
-      name:      c.name,
-      kind:      gpuMemGB > 0 ? 'gpu' : 'cpu',
-      status:    c.status,
-      nodeCount: c.nodeCount,
-      cpu:       c.resources.cpu.total,
-      memoryGB:  c.resources.memory.total,
-      gpuMemGB,
-      ...stack,
-    };
-  }));
+  return { installed: true, rows, undiscovered: undiscoveredClusters(clusters, rows) };
 }

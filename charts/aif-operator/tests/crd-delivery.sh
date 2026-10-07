@@ -6,11 +6,11 @@
 set -euo pipefail
 CHART="$(cd "$(dirname "$0")/.." && pwd)"
 
-# 1. The magic crds/ directory must exist and hold all 6 CRDs. Helm installs
+# 1. The magic crds/ directory must exist and hold all 7 CRDs. Helm installs
 #    these before it builds the release manifest; without them, a fresh
 #    `helm install` fails with "no matches for kind Blueprint".
 count=$(ls "$CHART"/crds/ai-factory.suse.com_*.yaml 2>/dev/null | wc -l | tr -d ' ')
-[ "$count" = "6" ] || { echo "FAIL: expected 6 CRDs in crds/, found $count"; exit 1; }
+[ "$count" = "7" ] || { echo "FAIL: expected 7 CRDs in crds/, found $count"; exit 1; }
 if [ -d "$CHART/files/crds" ]; then
   echo "FAIL: stale files/crds/ directory — CRDs must live in crds/ only"; exit 1
 fi
@@ -33,8 +33,8 @@ if grep -Eq '^kind: CustomResourceDefinition' <<< "$render"; then
   echo "FAIL: a CustomResourceDefinition appears as a release object"; exit 1
 fi
 
-# 3. The pre-install/pre-upgrade CRD ConfigMap must carry all 6 CRDs as data keys.
-for crd in aijobs aiworkloads blueprints blueprintcatalogs installaiextensions settings; do
+# 3. The pre-install/pre-upgrade CRD ConfigMap must carry all 7 CRDs as data keys.
+for crd in aijobs aiworkloads blueprints blueprintcatalogs computepools installaiextensions settings; do
   grep -Eq "ai-factory.suse.com_${crd}\.yaml: \|" <<< "$render" \
     || { echo "FAIL: CRD $crd missing from the crd-apply ConfigMap"; exit 1; }
 done

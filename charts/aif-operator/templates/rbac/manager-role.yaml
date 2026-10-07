@@ -408,6 +408,46 @@ rules:
       - update
       - watch
 
+  # Events on the objects the operator reconciles wherever they live (an AIJob is in
+  # its submitter's namespace); the namespaced Roles only cover the operator's own.
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+  # Compute pools: the operator discovers them from every Rancher cluster and
+  # refreshes their status. Downstream clusters are read through Rancher's proxy
+  # with the Settings token, under that token's own permissions.
+  - apiGroups:
+      - ai-factory.suse.com
+    resources:
+      - computepools
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - ai-factory.suse.com
+    resources:
+      - computepools/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - management.cattle.io
+    resources:
+      - clusters
+    verbs:
+      - get
+      - list
+      - watch
 ---
 
 apiVersion: rbac.authorization.k8s.io/v1
