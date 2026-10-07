@@ -23,6 +23,7 @@ from kubernetes import client as k8s
 from . import install, profiles as prof, workloads
 from .checkpoints import Checkpoints
 from .display import Table
+from .factory import Pools, Projects, project_namespace
 from .kube import Connection
 from .profiles import Profile, ProfileError
 
@@ -43,6 +44,8 @@ class Client:
         self.cluster_id = cluster_id or os.environ.get("RANCHER_CLUSTER") or (self.conn.rancher.cluster_id if self.conn.rancher else "local")
         self._blueprints: dict | None = None
         self.profiles = Profiles(self)
+        self.projects = Projects(self)
+        self.pools = Pools(self)
         self.runs = Runs(self)
         self.endpoints = Endpoints(self)
         self.checkpoints = Checkpoints(self)
@@ -50,6 +53,18 @@ class Client:
     @property
     def project(self) -> str:
         return self.conn.namespace
+
+    def namespace_of(self, project: str | None) -> str:
+        """Where a project's runs are recorded: an AI project's namespace on local (aif-<project>), whose
+        runs AI Factory places on the project's compute pools; else the namespace itself (a single cluster)."""
+        project = project or self.project
+        if project.startswith("aif-"):
+            return project
+        try:
+            self.projects.get(project)
+            return project_namespace(project)
+        except LookupError:
+            return project
 
     @property
     def installer(self):
@@ -137,19 +152,47 @@ class Runs:
         self.c = c
 
     def create(self, profile: str, project: str | None = None, name: str | None = None, wait_for_job: float = 60,
-               dry_run: bool = False, demo: bool = False, **fields: Any) -> workloads.TrainingRun | dict:
+               dry_run: bool = False, demo: bool = False, pool: str | None = None, code: str | None = None,
+               reclaim: dict | None = None, **fields: Any) -> workloads.TrainingRun | dict:
         """Start a training run from a training profile. Fields are the ones the profile opens:
         image ("repo:tag"), workers, gpus_per_worker, command, args, script, env (dict), dataset, checkpoints,
         config_map, gpu_type, gpu_memory (GiB, shared GPU), runtime_hours, priority_class. When the
         profile lets you supply code, pass script= or config_map=, or demo=True for the chart's built-in
-        all-reduce check. dry_run returns the values."""
+        all-reduce check.
+
+        project: an AI project (its runs are placed by AI Factory's queue on the project's compute
+        pools), or a namespace. pool: a compute pool to run in instead of the queue's choice.
+        code: your Python program (a path to a .py file, or its source), run as the run's command
+        (`python -c`; for a Ray profile, the Ray driver) or, for a torchrun profile, as its script.
+        reclaim: {policy: Suspend|Terminate|Never, idleTimeout: "2h"}, else the profile's.
+        dry_run returns the values."""
         p = self.c.profiles.get(profile)
+        if code is not None:
+            source = open(code).read() if os.path.isfile(code) else code
+            mode = (p.values.get("job") or {}).get("mode", "torchrun")
+            if mode == "torchrun" and "script" in p.editable:
+                fields["script"] = source
+            elif "command" in p.editable:
+                fields["command"] = ["python", "-c", source]
+            else:
+                raise ProfileError(f"{profile} does not let you supply code (it opens: {', '.join(p.editable) or 'nothing'}); "
+                                   "pick a profile that opens command or script, e.g. python-cpu-dev or ray-cpu-dev")
         if p.type != "training":
             raise ProfileError(f"{profile} is an inference profile; use endpoints.create")
         if p.problems:
             raise ProfileError(f"profile {profile} has problems: " + "; ".join(p.problems))
-        ns = project or self.c.project
+        ns = self.c.namespace_of(project)
         name = name or (f"{p.name_prefix}-{_suffix()}" if p.name_prefix else f"{p.name[:30].rstrip('-')}-{_suffix()}")
+        placement: dict = {"reclaim": reclaim or p.reclaim}
+        if pool:
+            target = self.c.pools.get(pool)
+            ai_project = next((x for x in self.c.projects.all() if x.namespace == ns), None)
+            if ai_project is None:
+                raise ProfileError(f"pool= needs an AI project; {ns} is not one")
+            there = ai_project.namespace_on(target.cluster_id)
+            if not there:
+                raise ProfileError(f"AI project {ai_project.name} does not span cluster {target.cluster} (pool {pool})")
+            placement.update(pool=pool, target_namespace=there)
         values = prof.resolve(p, fields)
         values.setdefault("job", {})
         problems = prof.check(p, values, name)
@@ -174,7 +217,7 @@ class Runs:
             return values
         if self._exists(ns, name):
             raise ProfileError(f"{name} already exists in {ns}; choose another name")
-        self.c.installer.install(ns, name, values, p.name)
+        self.c.installer.install(ns, name, values, p.name, **placement)
         end = time.time() + wait_for_job
         while True:
             try:
@@ -201,7 +244,7 @@ class Runs:
         return False
 
     def list(self, project: str | None = None, all_projects: bool = False) -> list[workloads.TrainingRun]:
-        return workloads.training_runs(self.c, None if all_projects else (project or self.c.project))
+        return workloads.training_runs(self.c, None if all_projects else self.c.namespace_of(project))
 
     def table(self, project: str | None = None, all_projects: bool = False) -> Table:
         rows = [{"name": r.name, "profile": r.profile or "-", "project": r.namespace, "resources": r.gpus, "state": r.state,
@@ -210,7 +253,7 @@ class Runs:
         return Table(rows, ["name", "profile", "project", "resources", "state", "age"], state_column="state")
 
     def get(self, name: str, project: str | None = None) -> workloads.TrainingRun:
-        ns = project or self.c.project
+        ns = self.c.namespace_of(project)
         r = next((r for r in workloads.training_runs(self.c, ns) if r.name == name), None)
         if not r:
             raise LookupError(f"no training run {name!r} in {ns}")

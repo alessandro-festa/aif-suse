@@ -104,7 +104,7 @@ class RancherInstaller:
             raise RuntimeError(f"chart {CHART_NAME} not found in ClusterRepo {CHART_REPO}; add the repo from the Projects page")
         return versions[0]["version"]
 
-    def install(self, namespace: str, name: str, values: dict, profile: str) -> dict:
+    def install(self, namespace: str, name: str, values: dict, profile: str, **_placement) -> dict:
         body = {
             "charts": [{
                 "chartName": CHART_NAME, "version": self._latest(), "releaseName": name,
@@ -176,7 +176,7 @@ class HelmInstaller:
             args += ["--kube-context", self.conn.context]
         return args
 
-    def install(self, namespace: str, name: str, values: dict, profile: str) -> dict:
+    def install(self, namespace: str, name: str, values: dict, profile: str, **_placement) -> dict:
         with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
             yaml.safe_dump(values, f)
             path = f.name
@@ -268,14 +268,24 @@ def oci_tags(ref: str, insecure: bool = False, timeout: float = 20) -> list[str]
     return [t.replace("_", "+") for t in get(api, {"Authorization": f"Bearer {bearer}"}).get("tags") or []]
 
 
-def aijob_for(namespace: str, name: str, values: dict, profile: str, version: str) -> dict:
-    """The AIJob for a run. Under an operator a chart's install-time capacity check is advice, not a
-    gate: a busy cluster should queue the job, not fail it. The other pre-flight checks stay on."""
+def aijob_for(namespace: str, name: str, values: dict, profile: str, pool: str = "", target_namespace: str = "",
+              reclaim: dict | None = None) -> dict:
+    """The AIJob for a run. The operator installs the training chart built into it (no chart source).
+    In an AI project's namespace with no pool, AI Factory's queue places it on one of the project's
+    compute pools; pool= sends it to that pool (target_namespace: the project's namespace there).
+    Under an operator a chart's install-time capacity check is advice, not a gate: a busy cluster
+    should queue the job, not fail it. The other pre-flight checks stay on."""
     v = dict(values or {})
     v["preflight"] = {**(v.get("preflight") or {}), "checkHeadroom": False}
-    spec = {"category": "training", "source": {"repoName": CHART_REPO, "chartName": CHART_NAME, "version": version}, "values": v}
+    spec: dict = {"category": "training", "values": v}
     if profile:
         spec["profile"] = profile
+    if pool:
+        spec["pool"] = pool
+        if target_namespace:
+            spec["targetNamespace"] = target_namespace
+    if reclaim:
+        spec["reclaim"] = {k: v for k, v in reclaim.items() if v}
     return {"apiVersion": f"{AIJOB[0]}/{AIJOB[1]}", "kind": "AIJob", "metadata": {"name": name, "namespace": namespace}, "spec": spec}
 
 
@@ -285,8 +295,8 @@ class AIJobInstaller:
     def __init__(self, conn: Connection):
         self.conn = conn
 
-    def install(self, namespace: str, name: str, values: dict, profile: str) -> dict:
-        job = aijob_for(namespace, name, values, profile, chart_version(self.conn))
+    def install(self, namespace: str, name: str, values: dict, profile: str, **placement) -> dict:
+        job = aijob_for(namespace, name, values, profile, **placement)
         self.conn.custom.create_namespaced_custom_object(AIJOB[0], AIJOB[1], namespace, AIJOB[2], job)
         return {"aijob": name, "namespace": namespace}
 

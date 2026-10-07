@@ -91,10 +91,20 @@ class Connection:
              raw: bool = False) -> Any:
         """A request with the connection's credentials; JSON in and out. Errors raise ApiException."""
         hdrs = {"Accept": "application/json", "Content-Type": "application/json", **(headers or {})}
-        resp = self.api.call_api(
-            path, method, query_params=list((query or {}).items()), header_params=hdrs, body=body,
-            auth_settings=["BearerToken"], _return_http_data_only=True, _preload_content=False,
-        )
+        if hasattr(self.api, "param_serialize"):
+            # kubernetes >= 33 (openapi-generator 7): serialise the request, then send it
+            m, url, h, b, post = self.api.param_serialize(
+                method=method, resource_path=path, query_params=list((query or {}).items()), header_params=hdrs,
+                body=body, auth_settings=["BearerToken"])
+            resp = self.api.call_api(m, url, header_params=h, body=b, post_params=post)
+            resp.read()
+            if resp.status >= 400:
+                raise client.ApiException(http_resp=resp)
+        else:
+            resp = self.api.call_api(
+                path, method, query_params=list((query or {}).items()), header_params=hdrs, body=body,
+                auth_settings=["BearerToken"], _return_http_data_only=True, _preload_content=False,
+            )
         # The generated client's own deserialisation differs between releases; read the bytes instead.
         if raw:
             return resp
@@ -156,6 +166,22 @@ class Connection:
             if e.status in (403, 404):
                 return []
             raise
+
+    def for_cluster(self, cluster_id: str) -> "Connection":
+        """The same identity on another Rancher cluster (Rancher's proxy, /k8s/clusters/<id>): where a run
+        placed on a compute pool runs. Without Rancher there is only this connection's cluster."""
+        if not self.rancher or cluster_id == self.rancher.cluster_id:
+            return self
+        other = object.__new__(Connection)
+        other.__dict__.update(self.__dict__)
+        cfg = client.Configuration()
+        src = self.api.configuration
+        for k in ("api_key", "api_key_prefix", "ssl_ca_cert", "verify_ssl", "cert_file", "key_file"):
+            setattr(cfg, k, getattr(src, k))
+        cfg.host = f"{self.rancher.url}/k8s/clusters/{cluster_id}"
+        other.api = client.ApiClient(cfg)
+        other._clients()
+        return other
 
     def dashboard(self, path: str) -> str | None:
         """A link into the Rancher UI, when the connection goes through Rancher."""

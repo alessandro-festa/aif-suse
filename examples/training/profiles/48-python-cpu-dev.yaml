@@ -1,0 +1,34 @@
+# Your own Python code on CPU, 1 to 4 pods, on a stock Python image: a data scientist's sandbox for the
+# SDK and CLI (rancher-ai run create --profile python-cpu-dev --code train.py). Each pod gets its rank
+# (JOB_COMPLETION_INDEX), the world size (NNODES) and rank 0's address (RDZV_ENDPOINT). Requeued after
+# an hour idle when another run needs the pool.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: python-cpu-dev
+  namespace: ai-profiles
+  labels:
+    trainingjobs/profile: training
+data:
+  profile.yaml: |
+    displayName: Python CPU Development
+    description: Your own Python program on CPU, one to four pods, on a stock Python image (pip install what it needs at start, or bring an image). Each pod knows its rank, the world size and rank 0's address.
+    framework: Python
+    gpu: CPU
+    status: beta
+    values:
+      image: { repository: python, tag: 3.12-slim }
+      job:
+        kind: job
+        mode: custom
+        nodes: 1
+        gpusPerNode: 0
+        command: [python, -c, "import os; print('hello from rank', os.environ['JOB_COMPLETION_INDEX'], 'of', os.environ['NNODES'])"]
+      resources:
+        requests: { cpu: "1", memory: 2Gi, ephemeral-storage: 4Gi }
+    editable: [command, args, env, nodes, image, tag, runtimeLimitHours]
+    limits:
+      nodes: { min: 1, max: 4 }
+      registries: [python, docker.io/library/python, dp.apps.rancher.io/containers/]
+      maxRuntimeHours: 8
+    reclaim: { policy: Suspend, idleTimeout: 1h }

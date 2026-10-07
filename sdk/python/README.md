@@ -172,6 +172,33 @@ only a pod the run's own Job (or PyTorchJob) created can report for it, the log 
 every value is treated as untrusted text: the Deployments page and notebook cards escape it, and
 `run result` replaces control characters and line breaks before printing.
 
+## Your own code on AI Factory's scheduler
+
+An AI project spans clusters, and each cluster's nodes are compute pools (GPU or CPU, each with its
+own scheduler: KAI, Kueue, Volcano, HAMi or none). You submit to the project, not to a cluster: the
+run is an AIJob in `aif-<project>` on Rancher's local cluster, AI Factory's queue places it on a
+project pool that fits (or holds it until one does), and the pool's scheduler runs it there.
+
+```sh
+rancher-ai projects list                                   # the AI projects you can see
+rancher-ai -p vision pools list                            # its pools: what is free, scheduler, runtimes
+rancher-ai -p vision run create --profile python-cpu-dev --code train.py --workers 2 --wait
+rancher-ai -p vision run create --profile ray-cpu-dev --code my_ray.py --workers 2   # a Ray cluster, the program as its driver
+rancher-ai -p vision run status <name>                     # where it was placed, or why it waits
+```
+
+`--code` takes a file or inline source; `--pool` picks a pool yourself; `--reclaim-policy` and
+`--idle-timeout` override the profile's idle reclaim. Your program reads its rank, the world size
+and rank 0's address from `JOB_COMPLETION_INDEX`, `NNODES` and `RDZV_ENDPOINT`, and may print one
+`AIF_RESULT` line (see above). In Python: `ai.pools.list("vision")`,
+`ai.runs.create("python-cpu-dev", code=src, workers=2, pool=None)`.
+
+A complete demo, as a script and as a notebook:
+[examples/scheduling_demo.py](examples/scheduling_demo.py) (`python examples/scheduling_demo.py
+--project vision [--pool P] [--skip-ray] [--keep]`) and
+[examples/scheduling-demo.ipynb](examples/scheduling-demo.ipynb). The `ray-cpu-dev` profile needs the
+KubeRay add-on on the project's clusters (Compute Pools → Add-ons).
+
 ## Python and Jupyter
 
 ```python
@@ -326,6 +353,7 @@ show why a submitted run is waiting.
 | AI Factory | CLI | Python |
 |---|---|---|
 | Catalog → Training, Inference | `profiles list` | `ai.profiles.list()` |
+| AI projects, Compute Pools | `projects list`, `pools list` | `ai.projects.list()`, `ai.pools.list()` |
 | Deploy a training profile | `run create` | `ai.runs.create()` |
 | Deployments → Training | `run list`, `run status` | `ai.runs.list()`, `run.status()` |
 | A run's logs | `run logs` | `run.logs()` |

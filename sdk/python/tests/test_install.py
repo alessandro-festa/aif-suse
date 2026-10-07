@@ -56,16 +56,24 @@ def test_a_share_in_a_kai_project_needs_no_claim():
 
 def test_aijob_for_names_the_run_and_turns_off_the_capacity_check():
     j = install.aijob_for("team-a", "train-a1b2c", {"preflight": {"enabled": True, "checkHeadroom": True}, "job": {"nodes": 2}},
-                          "single-gpu-dev", "0.1.34")
+                          "single-gpu-dev")
     assert j["kind"] == "AIJob" and j["metadata"] == {"name": "train-a1b2c", "namespace": "team-a"}
-    assert j["spec"]["source"] == {"repoName": "gpu-train-charts", "chartName": "gpu-train-job", "version": "0.1.34"}
+    assert "source" not in j["spec"], "the operator installs the training chart built into it"
     assert j["spec"]["values"]["preflight"] == {"enabled": True, "checkHeadroom": False}
     assert j["spec"]["profile"] == "single-gpu-dev" and j["spec"]["category"] == "training"
+    assert "pool" not in j["spec"], "no pool: AI Factory's queue places it"
+
+
+def test_aijob_for_a_pool_and_a_reclaim_policy():
+    j = install.aijob_for("aif-vision", "r", {}, "", pool="c-xvstz-cpu", target_namespace="vision",
+                          reclaim={"policy": "Suspend", "idleTimeout": ""})
+    assert j["spec"]["pool"] == "c-xvstz-cpu" and j["spec"]["targetNamespace"] == "vision"
+    assert j["spec"]["reclaim"] == {"policy": "Suspend"}
 
 
 def test_aijob_for_leaves_the_values_it_was_given():
     values = {"preflight": {"checkHeadroom": True}}
-    install.aijob_for("team-a", "r", values, "", "1.0.0")
+    install.aijob_for("team-a", "r", values, "")
     assert values["preflight"]["checkHeadroom"] is True
 
 

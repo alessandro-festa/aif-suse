@@ -53,7 +53,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="rancher-ai", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--context", help="kubeconfig context (default: current)")
     ap.add_argument("--kubeconfig", help="kubeconfig file (default: $KUBECONFIG or ~/.kube/config)")
-    ap.add_argument("-p", "--project", help="project namespace (default: the context's namespace, or $RANCHER_AI_PROJECT)")
+    ap.add_argument("-p", "--project", help="AI project (its runs go to AI Factory's queue), or a namespace "
+                    "(default: the context's namespace, or $RANCHER_AI_PROJECT)")
     ap.add_argument("--chart", help="gpu-train-job OCI reference: install with helm instead of through Rancher")
     ap.add_argument("-o", "--output", choices=["table", "json", "yaml"], default="table")
     ap.add_argument("--version", action="version", version=f"rancher-ai {__version__}")
@@ -67,6 +68,10 @@ def main(argv: list[str] | None = None) -> int:
     ps = pp.add_parser("show", help="a profile: what it fixes and what you may set")
     ps.add_argument("name")
 
+    sub.add_parser("projects", aliases=["project"], help="AI projects you can see").add_subparsers(dest="verb", required=True).add_parser("list")
+    op = sub.add_parser("pools", aliases=["pool"], help="compute pools: where runs go").add_subparsers(dest="verb", required=True)
+    op.add_parser("list").add_argument("--for-project", dest="for_project", help="only the pools of this AI project's clusters")
+
     rp = sub.add_parser("run", aliases=["runs"], help="training runs").add_subparsers(dest="verb", required=True)
     rc = rp.add_parser("create", help="start a training run from a training profile")
     rc.add_argument("--profile", required=True)
@@ -77,6 +82,11 @@ def main(argv: list[str] | None = None) -> int:
     rc.add_argument("--command", help="command to run instead of the profile's (custom mode)")
     rc.add_argument("--args", help="arguments for the profile's command (torchrun script args)")
     rc.add_argument("--script", help="inline script file to run (its contents are sent)")
+    rc.add_argument("--code", help="your Python program (a .py file), run as the command, or the Ray driver, or the torchrun script")
+    rc.add_argument("--pool", help="compute pool to run in (default: AI Factory's queue picks one of the project's)")
+    rc.add_argument("--reclaim-policy", dest="reclaim_policy", choices=["Suspend", "Terminate", "Never"],
+                    help="when idle in a pool that reclaims (default: the profile's)")
+    rc.add_argument("--idle-timeout", dest="idle_timeout", help="e.g. 30m, 2h, 1d (up to the pool's ceiling)")
     rc.add_argument("--config-map", dest="config_map", help="ConfigMap with the training code")
     rc.add_argument("--env", action="append", metavar="NAME=VALUE")
     rc.add_argument("--dataset", help="dataset PVC")
@@ -150,6 +160,14 @@ def main(argv: list[str] | None = None) -> int:
             w = ai.whoami()
             emit(w) if a.output != "table" else print("\n".join(f"{k}: {v}" for k, v in w.items() if k != "groups"))
 
+        elif noun in ("projects", "project"):
+            t = ai.projects.table()
+            emit(t.rows) if a.output != "table" else print(t.text())
+
+        elif noun in ("pools", "pool"):
+            t = ai.pools.table(a.for_project)
+            emit(t.rows) if a.output != "table" else print(t.text())
+
         elif noun == "profiles" and a.verb == "list":
             t = ai.profiles.table(a.type)
             emit(t.rows) if a.output != "table" else print(t.text())
@@ -170,7 +188,9 @@ def main(argv: list[str] | None = None) -> int:
             fields["env"] = _env_pairs(a.env)
             if a.script:
                 fields["script"] = open(a.script).read()
-            r = ai.runs.create(a.profile, name=a.name, dry_run=a.dry_run, demo=a.demo, **fields)
+            reclaim = {k: v for k, v in (("policy", a.reclaim_policy), ("idleTimeout", a.idle_timeout)) if v} or None
+            r = ai.runs.create(a.profile, name=a.name, dry_run=a.dry_run, demo=a.demo, pool=a.pool, code=a.code,
+                               reclaim=reclaim, **fields)
             if a.dry_run:
                 print(yaml.safe_dump(r, sort_keys=False, allow_unicode=True), end="")
                 return 0

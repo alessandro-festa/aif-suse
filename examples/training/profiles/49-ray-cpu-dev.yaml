@@ -1,0 +1,34 @@
+# Your own Ray driver on a KubeRay Ray cluster of CPU workers (rancher-ai run create --profile
+# ray-cpu-dev --code my_ray_job.py): Ray Train, Ray Tune, Ray Data, plain tasks. The driver sets what
+# it needs in its own runtime environment (ray.init(runtime_env={"pip": [...]})). Needs the KubeRay
+# add-on; the Ray cluster is removed a minute after the driver ends.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ray-cpu-dev
+  namespace: ai-profiles
+  labels:
+    trainingjobs/profile: training
+data:
+  profile.yaml: |
+    displayName: Ray CPU Development
+    description: Your own Ray driver (Ray Train, Tune, Data or tasks) on a Ray head and one to four CPU workers. The driver installs what it needs through its runtime environment. Needs the KubeRay add-on.
+    framework: Ray
+    gpu: CPU
+    status: beta
+    values:
+      image: { repository: rayproject/ray, tag: 2.49.2 }
+      job:
+        kind: rayjob
+        mode: custom
+        nodes: 2
+        gpusPerNode: 0
+        command: [python, -c, "import ray; ray.init(); print('Ray cluster:', ray.cluster_resources())"]
+      resources:
+        requests: { cpu: "1", memory: 2Gi }
+    editable: [command, args, env, nodes, tag, runtimeLimitHours]
+    limits:
+      nodes: { min: 1, max: 4 }
+      registries: [rayproject/, docker.io/rayproject/]
+      maxRuntimeHours: 8
+    reclaim: { policy: Suspend, idleTimeout: 1h }

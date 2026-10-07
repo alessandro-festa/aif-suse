@@ -113,6 +113,8 @@ class Profile:
     blueprint: dict | None = None
     required_secrets: list[dict] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    # what happens to a run idle in a compute pool that reclaims: {policy, idleTimeout} (AIJob spec.reclaim)
+    reclaim: dict | None = None
 
     # what the profile says about scale, for listings
     @property
@@ -166,6 +168,7 @@ def from_configmap(cm: Any) -> Profile | None:
         editable=[f for f in editable if f in EDITABLE], limits=limits,
         name_prefix=str(doc.get("namePrefix") or ""), blueprint=doc.get("blueprint"),
         required_secrets=doc.get("requiredSecrets") or [], problems=problems,
+        reclaim={k: str(v) for k, v in (doc.get("reclaim") or {}).items() if k in ("policy", "idleTimeout") and v} or None,
     )
 
 

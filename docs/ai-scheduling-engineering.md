@@ -37,6 +37,7 @@ Branch: `aijob-scheduling` on the alessandro-festa fork (`origin`), based on SUS
 | 9 | Generic `AIJob.status.queue`; Trainer v2 `TrainJob` | — | — |
 | 10 | Frameworks beyond PyTorch: JAX, TensorFlow, DeepSpeed on the plain Indexed Job; findings in design doc §8.1 | done: three CPU test profiles, all passing on the lab | `5e54cbd2` |
 | 11 | Ray / KubeRay as a training runtime: KubeRay add-on, `job.kind=rayjob`, Ray Train test profile | done, verified on the lab (KubeRay 1.7.1, Ray 2.49.2) | — |
+| SDK | Data scientists from Python: dstanley's `rancher_ai` SDK on AI projects and pools, `--code`, `python-cpu-dev` / `ray-cpu-dev` profiles, scheduling demo (script + notebook) | done, demo verified on the lab | — |
 
 ---
 
@@ -420,6 +421,16 @@ Trainer v2, under the cluster schedulers and AI Factory's placement.
   - placement adds the head's and submitter's requests to the workers'.
 - **Profile:** `ray-train-test` (beta, CPU): a TorchTrainer with one training worker per Ray
   worker pod.
+
+**D-55 Data scientists reach the scheduler through the SDK, as AIJobs in their AI project.**
+There is no separate endpoint: `rancher_ai` (dstanley's SDK, cherry-picked `2ec50f85`) talks to
+Rancher's local cluster with the user's API key, creates an AIJob in `aif-<project>`, and the
+placement queue does the rest, as for a run from the UI. It gained `projects` / `pools`, `pool=`,
+`reclaim=` and `code=` (a file or source: the profile's editable `script` in torchrun mode, else
+`python -c`), and follows a run on its placed cluster through `/k8s/clusters/<id>`. The AIJob
+names no chart source (the operator uses its built-in chart). Two dev profiles carry your code:
+`python-cpu-dev` (plain Indexed Job, 1–4 pods) and `ray-cpu-dev` (RayJob, your program as the
+driver).
 
 ---
 
@@ -828,6 +839,15 @@ DeepSpeed ranks fitted different targets.
     cluster on its pool for an hour. With `ray.shutdownAfterSeconds` the head and workers left
     ~60–75 s after the job ended.
 
+**F-73 [fact] SDK on the lab:**
+- kubernetes ≥ 33 dropped `ApiClient.call_api(query_params=…)`; `kube.call` now uses
+  `param_serialize` when present (verified with kubernetes 37).
+- Rancher routes by hostname: through its IP it answers 404, which the SDK showed as empty lists
+  ("No resources found") rather than an error (O-39).
+- `scheduling_demo.py --project vision` placed both runs on c-xvstz-cpu: the plain program on 2
+  pods learned w=1.999 b=1.001; the Ray program estimated π≈3.1424 over 2 Ray workers. Logs and
+  AIF_RESULT reports were read from the placed cluster, and the runs deleted.
+
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator
 namespace. Discovery reuses it (D-15).
@@ -1014,6 +1034,7 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | O-36 | Phase 9: generic status.queue; TrainJob path to use Trainer v2's JAX/DeepSpeed runtimes | chart / operator | next |
 | O-37 | Ray beyond training: Ray Tune (HPO), RayService / vLLM multi-node serving; Ray autoscaling vs placement (size at max workers) and idle reclaim of long-lived RayClusters | Ray | later |
 | O-38 | GPU Ray Train profile (rayproject/ray-ml or a CUDA image), untested on the simulated GPUs | profiles | with a GPU cluster |
+| O-39 | SDK: a wrong RANCHER_URL host (e.g. the IP) yields empty lists instead of an error; GPU variants of the dev profiles | SDK | later |
 | O-17 | The UI's 3c flows (pool picker → cluster switch → submit; Projects on a downstream cluster) are covered by unit tests of their logic, not by component tests; try them in the browser | UI | now |
 
 ---

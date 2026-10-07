@@ -23,10 +23,11 @@ TRAINING_STATE = {"Running": "Running", "Scheduling": "Pending", "Pending": "Pen
                   "Suspended": "Suspended", "Complete": "Completed", "Failed": "Failed"}
 ENDPOINT_STATE = {"Running": "Ready", "Ready": "Ready", "Pending": "Deploying", "Deploying": "Deploying",
                   "Degraded": "Degraded", "Failed": "Failed", "Error": "Failed"}
-DONE = {"Completed", "Failed", "Cancelled"}
+DONE = {"Completed", "Failed", "Cancelled", "Reclaimed"}
 # An AIJob's phase in the same vocabulary as a Job's
 AIJOB_STATE = {"Pending": "Pending", "Queued": "Queued", "Admitted": "Pending", "Running": "Running",
-               "Succeeded": "Completed", "Failed": "Failed", "Cancelled": "Cancelled"}
+               "Succeeded": "Completed", "Failed": "Failed", "Cancelled": "Cancelled", "Reclaimed": "Reclaimed"}
+JOB_ID_LABEL = "ai-factory.suse.com/job-id"
 
 
 def age(ts: Any) -> str:
@@ -75,9 +76,27 @@ class TrainingRun:
     id: str = ""
     # the result the run's AIJob kept when it finished (status.report), which outlives its pods
     report: dict | None = field(default=None, repr=False)
+    # where AI Factory placed it: {pool, clusterId, namespace}; None until placed (or on this cluster)
+    placement: dict | None = None
+    # why it is still waiting for a pool, from AI Factory's queue
+    waiting: str = ""
+    # its utilisation in a pool that reclaims idle runs (status.activity)
+    activity: dict | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:
-        return f"<TrainingRun name={self.name!r} id={self.id!r} state={self.state!r}>"
+        where = f" pool={self.placement['pool']!r}" if self.placement else ""
+        return f"<TrainingRun name={self.name!r} id={self.id!r} state={self.state!r}{where}>"
+
+    @property
+    def cluster(self) -> str:
+        """The Rancher cluster the run's pods are on."""
+        return (self.placement or {}).get("clusterId") or self.client.cluster_id
+
+    def _where(self):
+        """The connection and namespace of the run's pods: the pool's cluster once placed."""
+        if self.placement and self.placement.get("clusterId"):
+            return self.client.conn.for_cluster(self.placement["clusterId"]), self.placement.get("namespace") or self.namespace
+        return self.client.conn, self.namespace
 
     # ---- lifecycle
     def refresh(self) -> "TrainingRun":
@@ -100,20 +119,30 @@ class TrainingRun:
         return self.state
 
     def pods(self) -> list:
-        return self.client.conn.core.list_namespaced_pod(self.namespace, label_selector=f"job-name={self.name}").items
+        conn, ns = self._where()
+        pods = conn.core.list_namespaced_pod(ns, label_selector=f"{JOB_ID_LABEL}={self.name}").items
+        return pods or conn.core.list_namespaced_pod(ns, label_selector=f"job-name={self.name}").items
 
     def logs(self, tail: int | None = 100, rank: int = 0, follow: bool = False, print_: bool = True,
              runtime_messages: bool = False) -> str | None:
         """Logs of one rank (default rank 0). follow=True streams until the pod ends. The GPU-sharing
         runtime's own informational lines (HAMi-core "Msg") are left out unless runtime_messages;
         its errors (e.g. an allocation refused at the cap) are always kept."""
-        pods = sorted(self.pods(), key=lambda p: int((p.metadata.annotations or {}).get("batch.kubernetes.io/job-completion-index", 0)))
-        pod = next((p for p in pods if int((p.metadata.annotations or {}).get("batch.kubernetes.io/job-completion-index", -1)) == rank), None)
+        all_pods = self.pods()
+        # a Ray run's output is its driver's, in the submitter pod's log
+        pod = next((p for p in all_pods if (p.metadata.labels or {}).get("ai-factory.suse.com/ray-role") == "submitter"), None)
+        if pod is None:
+            pods = sorted(all_pods, key=lambda p: int((p.metadata.annotations or {}).get("batch.kubernetes.io/job-completion-index", 0)))
+            pod = next((p for p in pods if int((p.metadata.annotations or {}).get("batch.kubernetes.io/job-completion-index", -1)) == rank), None)
+            if pod is None and rank == 0 and pods:
+                pod = pods[0]
         if not pod:
-            raise LookupError(f"{self.name}: no pod for rank {rank} yet (state {self.state})")
-        core = self.client.conn.core
+            where = f" (waiting: {self.waiting})" if self.waiting else ""
+            raise LookupError(f"{self.name}: no pod for rank {rank} yet (state {self.state}){where}")
+        conn, ns = self._where()
+        core = conn.core
         if follow:
-            resp = core.read_namespaced_pod_log(pod.metadata.name, self.namespace, follow=True, tail_lines=tail,
+            resp = core.read_namespaced_pod_log(pod.metadata.name, ns, follow=True, tail_lines=tail,
                                                 _preload_content=False)
             for chunk in resp.stream():
                 text = chunk.decode(errors="replace")
@@ -121,7 +150,7 @@ class TrainingRun:
             return None
         # the raw body: some client releases hand back str(bytes) for this call otherwise
         # read extra so the tail still holds `tail` lines of the job's own output once runtime lines go
-        resp = core.read_namespaced_pod_log(pod.metadata.name, self.namespace, tail_lines=None if tail is None or runtime_messages is False else tail,
+        resp = core.read_namespaced_pod_log(pod.metadata.name, ns, tail_lines=None if tail is None or runtime_messages is False else tail,
                                             _preload_content=False)
         text = resp.data.decode(errors="replace")
         if not runtime_messages:
@@ -183,6 +212,15 @@ class RunStatus:
             ("GPU allocation", run.gpus or "-"), ("Queue", run.queue or "-"), ("Image", run.image),
             ("Created", run.created), ("Dashboard", run.dashboard or "-"),
         ]
+        p = getattr(run, "placement", None)
+        if p:
+            self.rows.insert(2, ("Placed in", f"pool {p.get('pool')} (cluster {p.get('clusterId')}, namespace {p.get('namespace')})"))
+        elif getattr(run, "waiting", ""):
+            self.rows.insert(2, ("Waiting", run.waiting))
+        a = getattr(run, "activity", None) or {}
+        if a.get("sampledAt"):
+            idle = f", idle since {a.get('idleSince')}" if a.get("idleSince") else ""
+            self.rows.append(("Activity", f"{a.get('utilisation', 0)}% of its {'GPUs' if str(a.get('source', '')).startswith('gpu') else 'CPU request'}{idle}"))
 
     def __repr__(self) -> str:
         w = max(len(k) for k, _ in self.rows)
@@ -367,6 +405,7 @@ def training_runs(c: "Client", namespace: str | None = None) -> list[TrainingRun
         if key in by_key:
             by_key[key].profile = by_key[key].profile or spec.get("profile", "")
             by_key[key].report = st.get("report")
+            by_key[key].placement, by_key[key].activity = st.get("placement"), st.get("activity")
             continue
         v = spec.get("values") or {}
         img = v.get("image") or {}
@@ -375,11 +414,14 @@ def training_runs(c: "Client", namespace: str | None = None) -> list[TrainingRun
         out.append(TrainingRun(
             client=c, name=key[1], namespace=key[0], state=AIJOB_STATE.get(st.get("phase", ""), "Pending"), profile=spec.get("profile", ""),
             workers=int((v.get("job") or {}).get("nodes") or 1),
+            # from the run's pod counts (its pods may be on another cluster, or gone)
+            ready=int((st.get("podCounts") or {}).get("succeeded" if st.get("phase") == "Succeeded" else "running") or 0),
             gpus=f"{share / 1024:.1f} GiB GPU share" if share else f"{count} GPU" if count else "-",
             queue=((st.get("queue") or {}).get("kaiQueue") or (st.get("queue") or {}).get("localQueue") or (v.get("scheduler") or {}).get("queue", "")),
             image=f"{img.get('repository', '')}:{img.get('tag', '')}" if img.get("repository") else "",
             created=_ts(md.get("creationTimestamp")), id=f"run-{(md.get('uid') or '')[:8]}",
-            report=st.get("report"),
+            report=st.get("report"), placement=st.get("placement"),
+            waiting=st.get("placementMessage", "") if not st.get("placement") else "", activity=st.get("activity"),
         ))
         by_key[key] = out[-1]
     # Releases whose Job is gone (ttlSecondsAfterFinished): finished, kept so they can be seen and removed.
