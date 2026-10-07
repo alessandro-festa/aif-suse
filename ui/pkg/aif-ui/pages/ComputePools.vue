@@ -4,7 +4,7 @@ import { Checkbox } from '@components/Form/Checkbox';
 import AsyncButton from '@shell/components/AsyncButton.vue';
 import LabeledSelect from '@shell/components/form/LabeledSelect.vue';
 import {
-  addonsFor, canInstallAddons, installAddon, listAddonInstalls, uninstallAddon
+  addonRelease, addonsFor, canInstallAddons, clusterVersions, installAddon, listAddonInstalls, uninstallAddon
 } from '../services/addons';
 import {
   canEditPools, listComputePools, reclaimDraft, reclaimErrors, reclaimSpec, reclaimText, savePoolReclaim
@@ -29,19 +29,22 @@ export default {
       // pools whose consumers are shown
       open: {},
       // cluster add-ons: what is installed (Fleet HelmOps), and the install panel
-      installs: [], canInstall: false, adding: false, addCluster: '', addKey: '', addError: '',
+      installs: [], canInstall: false, adding: false, addCluster: '', addKey: '', addError: '', versions: {},
       timer: null
     };
   },
 
   async fetch() {
     try {
-      const [{ installed, rows, undiscovered }, canEdit, installs, canInstall] = await Promise.all([
+      const [{ installed, rows, undiscovered }, canEdit, installs, canInstall, versions] = await Promise.all([
         listComputePools(this.$store),
         canEditPools(this.$store),
         listAddonInstalls(this.$store),
         canInstallAddons(this.$store),
+        clusterVersions(this.$store),
       ]);
+
+      this.versions = versions;
 
       this.installs = installs;
       this.canInstall = canInstall;
@@ -92,10 +95,15 @@ export default {
       return [...seen].map(([value, label]) => ({ label, value }));
     },
     addonOptions() {
-      return this.addCluster ? addonsFor(this.addCluster, this.pools, this.installs).map((a) => ({ label: `${ a.display } ${ a.version }`, value: a.key })) : [];
+      const k8s = this.versions[this.addCluster] || '';
+
+      return this.addCluster ? addonsFor(this.addCluster, this.pools, this.installs, k8s).map((a) => ({ label: `${ a.display } ${ addonRelease(a, k8s)?.version }`, value: a.key })) : [];
     },
     addAddon() {
-      return addonsFor(this.addCluster, this.pools, this.installs).find((a) => a.key === this.addKey) || null;
+      return addonsFor(this.addCluster, this.pools, this.installs, this.versions[this.addCluster] || '').find((a) => a.key === this.addKey) || null;
+    },
+    addRelease() {
+      return this.addAddon ? addonRelease(this.addAddon, this.versions[this.addCluster] || '') : null;
     },
   },
 
@@ -107,7 +115,7 @@ export default {
     async install(done) {
       this.addError = '';
       try {
-        await installAddon(this.$store, this.addAddon, this.addCluster);
+        await installAddon(this.$store, this.addAddon, this.addCluster, this.versions[this.addCluster] || '');
         done(true);
         this.adding = false;
         this.addKey = '';
@@ -562,8 +570,11 @@ export default {
           v-if="addAddon"
           class="pool-addon-notes"
         >
-          <span class="pool-tag">{{ addAddon.chart }} {{ addAddon.version }} → {{ addAddon.namespace }}</span>
+          <span class="pool-tag">{{ addAddon.chart }} {{ addRelease && addRelease.version }} → {{ addAddon.namespace }}</span>
           {{ addAddon.notes }}
+          <template v-if="addRelease && addRelease.note">
+            <br><span class="text-warning">{{ addRelease.note }}</span>
+          </template>
         </p>
         <Banner
           v-if="addError"
@@ -596,7 +607,7 @@ export default {
           :key="`${ i.clusterId }/${ i.addon.key }`"
         >
           <td>{{ clusterLabel(i.clusterId) }}</td>
-          <td>{{ i.addon.display }} <span class="text-muted">{{ i.addon.version }}</span></td>
+          <td>{{ i.addon.display }}</td>
           <td>
             <span
               v-clean-tooltip="i.message"

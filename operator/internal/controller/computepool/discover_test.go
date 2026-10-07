@@ -124,25 +124,49 @@ func TestPoolStatusWithoutSelectorTakesEveryNode(t *testing.T) {
 	assert.Equal(t, int64(23034), st.GPU.MemoryMiB, "the smallest GPU")
 }
 
+// running is a running pod of each image: what tells an installed component from leftover CRDs.
+func running(images ...string) []corev1.Pod {
+	var out []corev1.Pod
+	for _, img := range images {
+		out = append(out, corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Image: img}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning}})
+	}
+	return out
+}
+
 func TestDetectStackReadsTheChartsSchedulerTable(t *testing.T) {
 	backends, err := trainchart.Backends()
 	require.NoError(t, err)
+	all := running("ghcr.io/kai-scheduler/kai-scheduler/scheduler:v0.18.3", "registry.k8s.io/kueue/kueue:v0.20.0",
+		"docker.io/volcanosh/vc-scheduler:v1.15.3", "docker.io/projecthami/hami:v2.10.0",
+		"kubeflow/training-operator:v1-5170a36", "ghcr.io/kubeflow/trainer/trainer-controller-manager:v2.1.0")
 
-	assert.Equal(t, []string{"kai"}, detectStack([]string{"scheduling.run.ai", "apps"}, nil, backends).Schedulers)
-	runai := detectStack([]string{"scheduling.run.ai", "run.ai"}, nil, backends)
-	assert.Equal(t, []string{"runai"}, runai.Schedulers, "Run:AI ships KAI's queue CRD; it is not KAI")
+	assert.Equal(t, []string{"kai"}, detectStack([]string{"scheduling.run.ai", "apps"}, nil, all, backends).Schedulers)
+	runai := detectStack([]string{"scheduling.run.ai", "run.ai"}, nil, nil, backends)
+	assert.Equal(t, []string{"runai"}, runai.Schedulers, "Run:AI ships KAI's queue CRD; it is not KAI (and is detected by its API group alone)")
 	assert.Empty(t, runai.Sharing)
 
-	kai := detectStack([]string{"scheduling.run.ai", "kueue.x-k8s.io"}, nil, backends)
+	kai := detectStack([]string{"scheduling.run.ai", "kueue.x-k8s.io"}, nil, all, backends)
 	assert.Equal(t, []string{"kai", "kueue"}, kai.Schedulers)
 	assert.Equal(t, []string{"kai-fraction"}, kai.Sharing)
-	assert.Equal(t, []string{"volcano"}, detectStack([]string{"scheduling.volcano.sh", "batch.volcano.sh"}, nil, backends).Schedulers)
+	assert.Equal(t, []string{"volcano"}, detectStack([]string{"scheduling.volcano.sh", "batch.volcano.sh"}, nil, all, backends).Schedulers)
 
 	hami := corev1.Node{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{hamiNodeAnnotation: "GPU-0,10,24576,100,NVIDIA-L4,0,true"}}}
-	assert.Equal(t, []string{"hami"}, detectStack(nil, []corev1.Node{hami}, backends).Sharing)
+	assert.Equal(t, []string{"hami"}, detectStack(nil, []corev1.Node{hami}, all, backends).Sharing)
 
-	assert.Equal(t, []string{"training-operator", "trainer-v2"}, detectStack([]string{"kubeflow.org", "trainer.kubeflow.org"}, nil, backends).Training)
-	assert.Equal(t, stack{}, detectStack([]string{"apps", "batch"}, nil, backends))
+	assert.Equal(t, []string{"training-operator", "trainer-v2"}, detectStack([]string{"kubeflow.org", "trainer.kubeflow.org"}, nil, all, backends).Training)
+	assert.Equal(t, stack{}, detectStack([]string{"apps", "batch"}, nil, all, backends))
+}
+
+func TestCRDsLeftByAnUninstallAreNotAnInstall(t *testing.T) {
+	backends, err := trainchart.Backends()
+	require.NoError(t, err)
+	hami := corev1.Node{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{hamiNodeAnnotation: "GPU-0,10,24576,100,NVIDIA-L4,0,true"}}}
+	leftover := detectStack([]string{"kueue.x-k8s.io", "scheduling.volcano.sh", "trainer.kubeflow.org"}, []corev1.Node{hami}, nil, backends)
+	assert.Equal(t, stack{}, leftover, "API groups and a node registration, but no controller running")
+
+	stopped := running("registry.k8s.io/kueue/kueue:v0.20.0")
+	stopped[0].Status.Phase = corev1.PodPending
+	assert.Empty(t, detectStack([]string{"kueue.x-k8s.io"}, nil, stopped, backends).Schedulers, "a controller that is not running")
 }
 
 func TestATaintedNodeIsNotCapacityUnlessRunsTolerateIt(t *testing.T) {
@@ -252,7 +276,7 @@ func TestHAMiGPUsAreCountedAsDevicesAndSharesTakeNoWholeGPU(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), st.Allocatable.GPUs, "two physical GPUs, not twenty slots")
 	assert.Equal(t, int64(1), st.Requested.GPUs, "the share takes a slot, not a GPU")
-	assert.Equal(t, []string{"hami"}, detectStack(nil, []corev1.Node{n}, nil).Sharing)
+	assert.Equal(t, []string{"hami"}, detectStack(nil, []corev1.Node{n}, running("projecthami/hami:v2.10.0"), nil).Sharing)
 }
 
 func TestATerminatingPodIsNoLongerAConsumer(t *testing.T) {

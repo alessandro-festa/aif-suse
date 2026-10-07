@@ -124,7 +124,9 @@ func (h *harness) pools() []v1alpha1.ComputePool {
 func TestDiscoveryCreatesAPoolPerGPUModelAndOneForCPUAndFillsTheirStatus(t *testing.T) {
 	access := &fakeAccess{clusters: map[string]*fakeCluster{"c-abc": {
 		nodes:  []corev1.Node{h100("g1"), cpuNode("c1")},
-		pods:   []corev1.Pod{pod("g1", corev1.PodRunning, "4", "16Gi", 2)},
+		// the KAI scheduler and the training operator are running, not just their CRDs
+		pods: append([]corev1.Pod{pod("g1", corev1.PodRunning, "4", "16Gi", 2)},
+			running("ghcr.io/kai-scheduler/kai-scheduler/scheduler:v0.18.3", "kubeflow/training-operator:v1")...),
 		groups: []string{"scheduling.run.ai", "kubeflow.org"},
 	}}}
 	h := newHarness(t, access, rancherCluster("c-abc", "prod"))

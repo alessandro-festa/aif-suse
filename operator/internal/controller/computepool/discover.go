@@ -163,7 +163,7 @@ type stack struct {
 // the training chart's schedulers.yaml (the table the chart and the UI use),
 // HAMi from node annotations, and the Kubeflow training runtimes from their
 // API groups.
-func detectStack(groups []string, nodes []corev1.Node, backends map[string]trainchart.Backend) stack {
+func detectStack(groups []string, nodes []corev1.Node, pods []corev1.Pod, backends map[string]trainchart.Backend) stack {
 	served := map[string]bool{}
 	for _, g := range groups {
 		served[g] = true
@@ -174,6 +174,9 @@ func detectStack(groups []string, nodes []corev1.Node, backends map[string]train
 		if b.Detect == nil || !served[b.Detect.Group] || (b.Detect.Unless != "" && served[b.Detect.Unless]) {
 			continue
 		}
+		if b.Detect.Image != "" && !runningImage(pods, b.Detect.Image) {
+			continue // its CRDs are left over from an uninstall
+		}
 		st.Schedulers = append(st.Schedulers, name)
 		for _, s := range b.Sharing {
 			sharing[s] = true
@@ -182,6 +185,9 @@ func detectStack(groups []string, nodes []corev1.Node, backends map[string]train
 	// sharing layers (HAMi) are installed where a node carries their device registration
 	layers, _ := trainchart.SharingLayers()
 	for name, l := range layers {
+		if l.Detect.Image != "" && !runningImage(pods, l.Detect.Image) {
+			continue
+		}
 		for _, n := range nodes {
 			if _, ok := n.Annotations[l.Detect.NodeAnnotation]; ok && l.Detect.NodeAnnotation != "" {
 				sharing[name] = true
@@ -192,10 +198,10 @@ func detectStack(groups []string, nodes []corev1.Node, backends map[string]train
 	for s := range sharing {
 		st.Sharing = append(st.Sharing, s)
 	}
-	if served["kubeflow.org"] {
+	if served["kubeflow.org"] && runningImage(pods, "training-operator") {
 		st.Training = append(st.Training, "training-operator")
 	}
-	if served["trainer.kubeflow.org"] {
+	if served["trainer.kubeflow.org"] && runningImage(pods, "trainer-controller-manager") {
 		st.Training = append(st.Training, "trainer-v2")
 	}
 	sort.Strings(st.Schedulers)
@@ -445,6 +451,22 @@ func isShare(c corev1.Container) bool {
 		}
 		if _, ok := c.Resources.Requests[r]; ok {
 			return true
+		}
+	}
+	return false
+}
+
+// runningImage says whether a running pod has a container whose image contains
+// hint: what tells an installed component from CRDs it left behind.
+func runningImage(pods []corev1.Pod, hint string) bool {
+	for _, p := range pods {
+		if p.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		for _, c := range p.Spec.Containers {
+			if strings.Contains(c.Image, hint) {
+				return true
+			}
 		}
 	}
 	return false

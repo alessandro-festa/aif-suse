@@ -7,7 +7,8 @@
 #
 # Fields:
 #   display        name shown to people
-#   detect         installed when the cluster serves API group `group` (and not `unless`)
+#   detect         installed when the cluster serves API group `group` (and not `unless`) and, when
+#                  `image` is set, a running pod's image contains it: CRDs outlive an uninstall
 #   schedulerName  pod spec.schedulerName; "" = the default kube-scheduler
 #   queue          how a run names its queue: `target` pod (a label on every pod template) or
 #                  workload (a label on the Job / PyTorchJob); `label` is the key.
@@ -41,6 +42,7 @@ backends:
     display: Kueue
     detect:
       group: kueue.x-k8s.io
+      image: kueue/kueue
     schedulerName: ""
     queue:
       target: workload
@@ -56,6 +58,7 @@ backends:
       group: scheduling.run.ai
       # Run:AI is built on KAI and ships the same queue CRD; only the run.ai group tells them apart.
       unless: run.ai
+      image: kai-scheduler/scheduler
     schedulerName: kai-scheduler
     queue:
       target: pod
@@ -84,6 +87,7 @@ backends:
     display: Volcano
     detect:
       group: scheduling.volcano.sh
+      image: volcanosh/vc-scheduler
     schedulerName: volcano
     queue:
       target: pod
@@ -100,7 +104,8 @@ backends:
 # GPU-sharing layers a run can use beside its scheduler (gpu.sharing names one). A layer splits a
 # GPU into memory/compute slices that its own device plugin advertises and its own scheduler places.
 #   display        name shown to people
-#   detect         installed when a node carries `nodeAnnotation` (the layer's device registration)
+#   detect         installed when a node carries `nodeAnnotation` (the layer's device registration) and,
+#                  when `image` is set, a running pod's image contains it (the annotation can outlive it)
 #   schedulerName  pod spec.schedulerName for a run under a scheduler that sets none
 #   resources      the extended resources a pod asks for: one GPU slot (gpu), MiB of GPU memory
 #                  (memory), percent of the GPU's compute (cores)
@@ -109,6 +114,7 @@ sharingLayers:
     display: HAMi
     detect:
       nodeAnnotation: hami.io/node-nvidia-register
+      image: projecthami/hami
     schedulerName: hami-scheduler
     resources:
       gpu: nvidia.com/gpu

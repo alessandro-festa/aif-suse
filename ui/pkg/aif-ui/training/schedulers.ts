@@ -7,8 +7,11 @@ export type SchedulerType = 'none' | 'kueue' | 'kai' | 'runai' | 'volcano';
 
 export interface SchedulerBackend {
   display: string;
-  /** Installed when the cluster serves API group `group` and not `unless`. null: always there. */
-  detect: { group: string; unless?: string } | null;
+  /**
+   * Installed when the cluster serves API group `group` and not `unless`, and (image) a running pod's
+   * image contains it. null: always there.
+   */
+  detect: { group: string; unless?: string; image?: string } | null;
   /** Pod spec.schedulerName; '' is the default kube-scheduler. */
   schedulerName: string;
   /**
@@ -34,8 +37,8 @@ export type SharingLayerName = 'hami';
 /** A GPU-sharing layer a run can use beside its scheduler (schedulers.yaml sharingLayers). */
 export interface SharingLayer {
   display: string;
-  /** Installed when a node carries this annotation (the layer's device registration). */
-  detect: { nodeAnnotation: string };
+  /** Installed when a node carries this annotation (the layer's device registration) and a pod runs its image. */
+  detect: { nodeAnnotation: string; image?: string };
   /** Pod spec.schedulerName for a run under a scheduler that sets none. */
   schedulerName: string;
   /** Extended resources a pod asks for: one GPU slot, MiB of GPU memory, percent of compute. */
@@ -45,7 +48,7 @@ export interface SharingLayer {
 export const SHARING_LAYERS: Record<SharingLayerName, SharingLayer> = {
   hami: {
     display:       'HAMi',
-    detect:        { nodeAnnotation: 'hami.io/node-nvidia-register' },
+    detect:        { nodeAnnotation: 'hami.io/node-nvidia-register', image: 'projecthami/hami' },
     schedulerName: 'hami-scheduler',
     resources:     {
       gpu: 'nvidia.com/gpu', memory: 'nvidia.com/gpumem', cores: 'nvidia.com/gpucores'
@@ -78,7 +81,7 @@ export const SCHEDULER_BACKENDS: Record<SchedulerType, SchedulerBackend> = {
   },
   kueue: {
     display:       'Kueue',
-    detect:        { group: 'kueue.x-k8s.io' },
+    detect:        { group: 'kueue.x-k8s.io', image: 'kueue/kueue' },
     schedulerName: '',
     queue:         { target: 'workload', label: 'kueue.x-k8s.io/queue-name' },
     admission:     'suspend',
@@ -89,7 +92,7 @@ export const SCHEDULER_BACKENDS: Record<SchedulerType, SchedulerBackend> = {
   },
   kai: {
     display:       'KAI scheduler',
-    detect:        { group: 'scheduling.run.ai', unless: 'run.ai' },
+    detect:        { group: 'scheduling.run.ai', unless: 'run.ai', image: 'kai-scheduler/scheduler' },
     schedulerName: 'kai-scheduler',
     queue:         { target: 'pod', label: 'kai.scheduler/queue' },
     admission:     'scheduler',
@@ -111,7 +114,7 @@ export const SCHEDULER_BACKENDS: Record<SchedulerType, SchedulerBackend> = {
   },
   volcano: {
     display:       'Volcano',
-    detect:        { group: 'scheduling.volcano.sh' },
+    detect:        { group: 'scheduling.volcano.sh', image: 'volcanosh/vc-scheduler' },
     schedulerName: 'volcano',
     queue:         {
       target: 'pod', label: 'scheduling.volcano.sh/queue-name', as: 'annotation', default: 'default'

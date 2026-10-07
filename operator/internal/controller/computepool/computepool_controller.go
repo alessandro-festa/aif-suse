@@ -139,7 +139,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if err != nil {
 		return reconcile.Result{}, err
 	}
-	st := detectStack(groups, nodes, backends)
+	st := detectStack(groups, nodes, pods, backends)
 	usage := readUsage(ctx, reader, nodes)
 	now := r.now()
 	for i := range pools {

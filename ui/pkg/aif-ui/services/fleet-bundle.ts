@@ -53,6 +53,9 @@ export interface FleetBundleParams {
   targetClusterIds:        string[];
   additionalPullSecretNames?: string[]; // pre-created pull secrets for extra registries (e.g. subchart registries)
   library?:                'suse-ai' | 'nvidia'; // library source to determine imagePullSecrets handling
+  // Fleet's diff options (e.g. comparePatches for objects the installed app rewrites itself, such as
+  // webhook certificate Secrets), so they do not read as drift
+  diff?:                   Record<string, any>;
 }
 
 // BUNDLE_NAME_MAX is the K8s metadata.name (DNS-1123 label) limit a Fleet
@@ -433,6 +436,9 @@ export async function createFleetBundle(store: any, params: FleetBundleParams): 
   // any cluster-scoped resource (ClusterRole, CRD, webhook), which breaks
   // operator/CRD-bearing charts.
   const baseSpec: Record<string, any> = { defaultNamespace: params.targetNamespace, helm: helmSpec };
+  if (params.diff) {
+    baseSpec.diff = params.diff;
+  }
   if (pullCreds && secretRef) {
     baseSpec.helmSecretName = secretRef.name;
   }

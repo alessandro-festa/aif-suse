@@ -1,9 +1,10 @@
 import { createFleetBundle, type FleetBundleParams } from './fleet-bundle';
 
 // Cluster add-ons for AI scheduling, installed from the Compute Pools page: a scheduler (KAI, Kueue,
-// Volcano) or a GPU-sharing layer (HAMi). Each is a Fleet HelmOp in fleet-default, from the upstream
-// chart at a pinned version, targeting one downstream cluster. (A Kubeflow training runtime is not
-// offered yet: the SUSE chart cannot install training only; see the engineering notes, F-67.) The operator's pool discovery then reports it on that cluster's
+// Volcano), a GPU-sharing layer (HAMi), or the training runtime (Kubeflow Trainer v2). Each is a
+// Fleet HelmOp in fleet-default, from the upstream chart at a pinned version, targeting one
+// downstream cluster. (Trainer v2 is the upstream chart: the SUSE Kubeflow chart cannot install
+// training only; see the engineering notes, F-67.) The operator's pool discovery then reports it on that cluster's
 // pools. Installing writes HelmOps, so only users who may do that see the action.
 
 export type AddonKind = 'scheduler' | 'sharing' | 'training';
@@ -26,6 +27,14 @@ export interface Addon {
   notes:        string;
   /** Only on clusters with GPU pools. */
   gpuOnly?:     boolean;
+  /**
+   * Older chart versions for older Kubernetes, newest first: a cluster below the add-on's own
+   * minKubernetes gets the first variant it meets.
+   */
+  minKubernetes?: string;
+  variants?:    { minKubernetes: string; version: string; values: Record<string, any>; note: string }[];
+  /** Secrets the add-on fills in itself after install (webhook certificates): not drift for Fleet. */
+  ownSecrets?:  string[];
 }
 
 export const ADDONS: Addon[] = [
@@ -35,7 +44,8 @@ export const ADDONS: Addon[] = [
     kind:       'scheduler',
     detectedAs: 'kai',
     chartRepo:  '',
-    repoUrl:    'oci://ghcr.io/kai-scheduler/kai-scheduler',
+    // a single-chart OCI repository: the URL ends in the chart's name and is used as is
+    repoUrl:    'oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler',
     chart:      'kai-scheduler',
     version:    'v0.18.3',
     namespace:  'kai-scheduler',
@@ -87,6 +97,31 @@ export const ADDONS: Addon[] = [
     notes:      'Shares a GPU by memory and compute. Its device plugin replaces NVIDIA\'s on GPU nodes: turn the GPU Operator\'s device plugin off there first (devicePlugin.enabled=false), or the two fight over the GPUs.',
     gpuOnly:    true,
   },
+  {
+    key:        'kubeflow-trainer',
+    display:    'Kubeflow Trainer v2',
+    kind:       'training',
+    detectedAs: 'trainer-v2',
+    chartRepo:  '',
+    repoUrl:    'oci://ghcr.io/kubeflow/charts',
+    chart:      'kubeflow-trainer',
+    version:    '2.3.0',
+    namespace:  'kubeflow-system',
+    release:    'kubeflow-trainer',
+    // the runtimes AI Factory's training profiles use: PyTorch, DeepSpeed and JAX
+    values:     {
+      runtimes: {
+        torchDistributed: { enabled: true }, deepspeedDistributed: { enabled: true }, jaxDistributed: { enabled: true }
+      }
+    },
+    notes:      'Upstream Kubeflow Trainer (TrainJob, trainer.kubeflow.org) with JobSet and its PyTorch, DeepSpeed and JAX training runtimes. Not SUSE-supported. Skip it where JobSet is already installed.',
+    // 2.2+ ships JobSet CRDs whose validation rules Kubernetes 1.31 cannot compile
+    ownSecrets:    ['jobset-webhook-server-cert', 'kubeflow-trainer-webhook-cert'],
+    minKubernetes: '1.32',
+    variants:      [{
+      minKubernetes: '1.29', version: '2.1.0', values: {}, note: 'Kubernetes before 1.32 gets Trainer 2.1.0, which has no built-in training runtimes.'
+    }],
+  },
 ];
 
 /** The Fleet HelmOp an add-on is installed as on a cluster. */
@@ -94,24 +129,71 @@ export function addonBundleName(a: Addon, clusterId: string): string {
   return `aif-addon-${ a.key }-${ clusterId }`.slice(0, 63).replace(/-+$/, '');
 }
 
+/** "v1.31.0+k3s1" -> [1, 31]. */
+function minor(v: string): [number, number] {
+  const m = String(v || '').match(/(\d+)\.(\d+)/);
+
+  return m ? [Number(m[1]), Number(m[2])] : [0, 0];
+}
+
+function atLeast(have: string, want: string): boolean {
+  const [a, b] = minor(have);
+  const [c, d] = minor(want);
+
+  return a > c || (a === c && b >= d);
+}
+
+/**
+ * The chart version and values an add-on installs on a cluster of this Kubernetes version (''
+ * when unknown: the add-on's own). null when the cluster is too old for every version.
+ */
+export function addonRelease(a: Addon, kubernetes = ''): { version: string; values: Record<string, any>; note: string } | null {
+  if (!kubernetes || !a.minKubernetes || atLeast(kubernetes, a.minKubernetes)) {
+    return { version: a.version, values: a.values, note: '' };
+  }
+  const v = (a.variants || []).find((x) => atLeast(kubernetes, x.minKubernetes));
+
+  return v ? { version: v.version, values: v.values, note: v.note } : null;
+}
+
 /** What createFleetBundle needs to install the add-on on one cluster. */
-export function addonBundleParams(a: Addon, clusterId: string): FleetBundleParams {
+export function addonBundleParams(a: Addon, clusterId: string, kubernetes = ''): FleetBundleParams {
+  const r = addonRelease(a, kubernetes) || { version: a.version, values: a.values };
+
   return {
     bundleName:       addonBundleName(a, clusterId),
     release:          a.release,
     chartRepo:        a.chartRepo,
     chartRepoUrl:     a.repoUrl,
     chartName:        a.chart,
-    chartVersion:     a.version,
-    values:           a.values,
+    chartVersion:     r.version,
+    values:           r.values,
     targetNamespace:  a.namespace,
     targetClusterIds: [clusterId],
+    ...(a.ownSecrets?.length ? {
+      diff: {
+        comparePatches: a.ownSecrets.map((name) => ({
+          apiVersion: 'v1', kind: 'Secret', namespace: a.namespace, name, operations: [{ op: 'remove', path: '/data' }]
+        }))
+      }
+    } : {}),
     ...(a.chartRepo === 'suse-ai-registry' ? { library: 'suse-ai' as const } : {}),
   };
 }
 
-export async function installAddon(store: any, a: Addon, clusterId: string): Promise<void> {
-  await createFleetBundle(store, addonBundleParams(a, clusterId));
+export async function installAddon(store: any, a: Addon, clusterId: string, kubernetes = ''): Promise<void> {
+  await createFleetBundle(store, addonBundleParams(a, clusterId, kubernetes));
+}
+
+/** Each downstream cluster's Kubernetes version, from Rancher's cluster objects. */
+export async function clusterVersions(store: any): Promise<Record<string, string>> {
+  try {
+    const all: any[] = await store.dispatch('management/findAll', { type: 'management.cattle.io.cluster' });
+
+    return Object.fromEntries((all || []).map((c: any) => [c.id, c.status?.version?.gitVersion || '']));
+  } catch {
+    return {};
+  }
 }
 
 const HELMOPS = '/k8s/clusters/local/apis/fleet.cattle.io/v1alpha1/namespaces/fleet-default/helmops';
@@ -143,15 +225,20 @@ export function addonInstallsFrom(helmOps: any[]): AddonInstall[] {
         continue;
       }
       const st = h.status || {};
-      const ready = (st.conditions || []).find((c: any) => c?.type === 'Ready');
-      const state = String(st.display?.state || (ready?.status === 'True' ? 'Ready' : 'Pending'));
-      const problem = (st.conditions || []).find((c: any) => c?.status === 'False' && c?.message);
+      const conds: any[] = st.conditions || [];
+      // Fleet can say Ready while it could not even fetch the chart (Accepted False, 0/0 deployed):
+      // ready means accepted and every bundle deployment ready
+      const problem = conds.find((c: any) => c?.status === 'False' && c?.message);
+      const counts = String(st.display?.readyBundleDeployments || '').match(/^(\d+)\/(\d+)$/);
+      const deployed = !!counts && Number(counts[2]) > 0 && counts[1] === counts[2];
+      const ready = !problem && deployed;
+      const state = ready ? 'Ready' : problem ? (problem.type === 'Accepted' ? 'Not accepted' : String(st.display?.state || 'Error')) : 'Installing';
 
       out.push({
         addon:     a,
         clusterId: name.slice(prefix.length),
         state,
-        ready:     ready?.status === 'True' || state === 'Ready',
+        ready,
         message:   String(problem?.message || st.display?.message || ''),
       });
     }
@@ -197,11 +284,11 @@ export async function canInstallAddons(store: any): Promise<boolean> {
  * The add-ons a cluster could still get: not detected on its pools and not being installed there.
  * GPU-only ones need a GPU pool on the cluster.
  */
-export function addonsFor(clusterId: string, pools: { clusterId: string; kind: string; schedulers: string[]; sharing: string[]; training: string[] }[], installs: AddonInstall[]): Addon[] {
+export function addonsFor(clusterId: string, pools: { clusterId: string; kind: string; schedulers: string[]; sharing: string[]; training: string[] }[], installs: AddonInstall[], kubernetes = ''): Addon[] {
   const mine = pools.filter((p) => p.clusterId === clusterId);
   const detected = new Set(mine.flatMap((p) => [...p.schedulers, ...p.sharing, ...p.training]));
   const pending = new Set(installs.filter((i) => i.clusterId === clusterId).map((i) => i.addon.key));
   const hasGpu = mine.some((p) => p.kind === 'gpu');
 
-  return ADDONS.filter((a) => !detected.has(a.detectedAs) && !pending.has(a.key) && (!a.gpuOnly || hasGpu));
+  return ADDONS.filter((a) => !detected.has(a.detectedAs) && !pending.has(a.key) && (!a.gpuOnly || hasGpu) && addonRelease(a, kubernetes) !== null);
 }

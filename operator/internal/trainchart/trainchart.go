@@ -65,6 +65,8 @@ type SharingLayer struct {
 	Detect  struct {
 		// NodeAnnotation is the layer's device registration on a node.
 		NodeAnnotation string `json:"nodeAnnotation"`
+		// Image, when set, must be in a running pod's image too.
+		Image string `json:"image,omitempty"`
 	} `json:"detect"`
 	SchedulerName string `json:"schedulerName"`
 	Resources     struct {
@@ -79,6 +81,8 @@ type SharingLayer struct {
 type BackendProbe struct {
 	Group  string `json:"group"`
 	Unless string `json:"unless,omitempty"`
+	// Image, when set, must be in a running pod's image too: CRDs outlive an uninstall.
+	Image string `json:"image,omitempty"`
 }
 
 // BackendQueue is how a run names its queue: a Label on the pods ("pod") or on
