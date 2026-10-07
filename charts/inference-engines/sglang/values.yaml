@@ -1,0 +1,51 @@
+# SGLang, serving a Hugging Face model with OpenAI's API on NVIDIA GPUs.
+
+model:
+  # A Hugging Face model ID.
+  id: Qwen/Qwen2.5-1.5B-Instruct
+  # The name clients use in /v1/chat/completions and see in /v1/models. Empty: the model ID.
+  servedName: ""
+  # Maximum context length in tokens. 0: the model's own.
+  contextLength: 8192
+
+# GPUs per replica, at least 1. More than 1 splits the model across them (tensor parallel).
+gpu:
+  count: 1
+  resourceName: nvidia.com/gpu
+
+# A Secret with an HF_TOKEN key, for gated or private models. Empty: anonymous downloads.
+hfTokenSecret: ""
+
+resources:
+  requests:
+    cpu: "2"
+    memory: 8Gi
+  limits:
+    cpu: "4"
+    memory: 16Gi
+
+# Where downloaded models are kept, so a restart does not download again.
+cache:
+  enabled: true
+  size: 20Gi
+  storageClass: ""
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# Arguments added to the server's command line.
+extraArgs: []
+# Image override; empty uses lmsysorg/sglang:latest.
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicas: 1
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podLabels: {}
+podAnnotations: {}

@@ -1,8 +1,8 @@
-# Inference engine: SGLang 1.0.0, the generic inference-engine chart (charts/inference-engine)
-# with engine=sglang, Qwen2.5-1.5B on one GPU. Its inference profile is
-# ../profiles/43-engine-sglang.yaml.
+# Inference engine: SGLang 1.0.0, the sglang chart (charts/inference-engines/sglang), Qwen2.5-1.5B on one GPU.
+# Its inference profile is ../profiles/43-engine-sglang.yaml.
 #
-# Needs the chart in a ClusterRepo named aif-engines (a git custom repo in AI Factory Settings).
+# Needs the "Inference Engines Apps" git custom repo (ClusterRepo aif-engines) in AI Factory Settings;
+# it serves the inference-engines branch, published from charts/inference-engines.
 {
   "apiVersion": "ai-factory.suse.com/v1alpha1",
   "kind": "Blueprint",
@@ -18,19 +18,17 @@
     "displayName": "SGLang",
     "version": "1.0.0",
     "source": "Custom",
-    "description": "SGLang's OpenAI-compatible server on one NVIDIA GPU, serving\nQwen2.5-1.5B-Instruct from Hugging Face.\n\nNEEDS the inference-engine chart in a ClusterRepo named aif-engines: add it in\nAI Factory Settings as a git custom repository pointing at the repository that\nholds charts/inference-engine.",
+    "description": "SGLang's OpenAI-compatible server on one NVIDIA GPU, serving\nQwen2.5-1.5B-Instruct from Hugging Face.\n\nNEEDS the sglang chart from the \"Inference Engines Apps\" git custom repository\n(ClusterRepo aif-engines) in AI Factory Settings.",
     "components": [
       {
-        "chartName": "inference-engine",
+        "chartName": "sglang",
         "chartRepo": "aif-engines",
         "chartVersion": "0.1.0",
         "values": {
-          "engine": "sglang",
           "model": {
             "id": "Qwen/Qwen2.5-1.5B-Instruct",
             "contextLength": 8192
           },
-          "hfTokenSecret": "",
           "gpu": {
             "count": 1
           },

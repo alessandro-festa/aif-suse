@@ -26,7 +26,7 @@ const profiles = profilesFrom(docs.filter((d) => d?.kind === 'ConfigMap'), (s: s
 
 describe('sample profiles', () => {
   it('are all found', () => {
-    expect(profiles.map((p) => p.name).sort()).toEqual(['gpu-diagnostics-bundle', 'gpu-diagnostics-bundle-shared', 'gpu-health-check', 'gpu-smoke', 'gpu-smoke-shared', 'nccl-fabric-benchmark', 'pytorch-distributed', 'pytorch-distributed-test', 'pytorch-gpu-test', 'pytorch-gpu-test-shared', 'shared-gpu-dev', 'single-gpu-dev', 'suse-inference-endpoint-qwen', 'suse-inference-endpoint-qwen-shared', 'training-storage-test']);
+    expect(profiles.map((p) => p.name).sort()).toEqual(['engine-llamacpp', 'engine-ollama', 'engine-sglang', 'engine-vllm', 'gpu-diagnostics-bundle', 'gpu-diagnostics-bundle-shared', 'gpu-health-check', 'gpu-smoke', 'gpu-smoke-shared', 'nccl-fabric-benchmark', 'pytorch-distributed', 'pytorch-distributed-test', 'pytorch-gpu-test', 'pytorch-gpu-test-shared', 'shared-gpu-dev', 'single-gpu-dev', 'suse-inference-endpoint-qwen', 'suse-inference-endpoint-qwen-shared', 'training-storage-test']);
   });
 
   it('have no problems', () => {

@@ -1,5 +1,5 @@
-# SGLang from the inference-engine chart, blueprint inference-sglang 1.0.0. Needs the chart in a
-# ClusterRepo named aif-engines: a git custom repository in AI Factory Settings.
+# SGLang from the Inference Engines Apps, blueprint inference-sglang 1.0.0. Needs the
+# "Inference Engines Apps" git custom repository (ClusterRepo aif-engines) in AI Factory Settings.
 apiVersion: v1
 kind: ConfigMap
 metadata:

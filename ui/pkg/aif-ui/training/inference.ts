@@ -30,7 +30,7 @@ export const WORKLOAD_PROFILE_LABEL = 'trainingjobs/profile';
 
 export interface BlueprintRef { name: string; version: string }
 
-/** The model servers a blueprint can be read for: vLLM and Ollama from the Application Collection, llama.cpp and SGLang from the inference-engine chart. */
+/** The model servers a blueprint can be read for: vLLM and Ollama from the Application Collection, llama.cpp and SGLang from the Inference Engines Apps. */
 export type InferenceEngine = 'vllm' | 'ollama' | 'llamacpp' | 'sglang';
 
 /** What one blueprint serves, read from its model server component. Empty fields = no model server found. */
@@ -115,11 +115,11 @@ function vllmSummary(bp: any, ref: BlueprintRef, comps: any[], vllm: any): Bluep
 }
 
 /**
- * Ollama (the Application Collection chart) or the inference-engine chart (llama.cpp, SGLang): one
+ * Ollama (the Application Collection chart), llama.cpp or SGLang (the Inference Engines Apps): one
  * model server behind its own Service, sized by its resources. null when the blueprint has neither.
  */
 function otherEngineSummary(bp: any, ref: BlueprintRef, comps: any[]): BlueprintSummary | null {
-  const i = comps.findIndex((c) => c?.chartName === 'ollama' || c?.chartName === 'inference-engine');
+  const i = comps.findIndex((c) => ['ollama', 'llama-cpp', 'sglang'].includes(c?.chartName));
 
   if (i < 0) {
     return null;
@@ -142,7 +142,7 @@ function otherEngineSummary(bp: any, ref: BlueprintRef, comps: any[]): Blueprint
     cacheSize = v.persistentVolume?.enabled ? String(v.persistentVolume.size || '') : '';
     storageClass = String(v.persistentVolume?.storageClass || '');
   } else {
-    engine = v.engine === 'sglang' ? 'sglang' : 'llamacpp';
+    engine = c.chartName === 'sglang' ? 'sglang' : 'llamacpp';
     model = String(engine === 'sglang' ? v.model?.id || 'Qwen/Qwen2.5-1.5B-Instruct' : v.model?.hfRepo || 'Qwen/Qwen2.5-0.5B-Instruct-GGUF');
     gpus = Number(v.gpu?.count) || 0;
     service = { name: release, port: Number(v.service?.port) || 8000 };

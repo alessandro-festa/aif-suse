@@ -1,34 +1,18 @@
 questions:
-  - variable: engine
-    label: Engine
-    description: "llama.cpp runs a GGUF model on CPU or GPU; SGLang runs a Hugging Face model on NVIDIA GPUs."
-    type: enum
-    options: [llamacpp, sglang]
-    default: llamacpp
-    group: Engine
   - variable: model.hfRepo
     label: GGUF repository
     description: "Hugging Face repository holding the GGUF file."
     type: string
     default: Qwen/Qwen2.5-0.5B-Instruct-GGUF
-    show_if: "engine=llamacpp"
     group: Model
   - variable: model.hfFile
     label: GGUF file
     type: string
     default: qwen2.5-0.5b-instruct-q4_k_m.gguf
-    show_if: "engine=llamacpp"
-    group: Model
-  - variable: model.id
-    label: Model ID
-    description: "Hugging Face model ID."
-    type: string
-    default: Qwen/Qwen2.5-1.5B-Instruct
-    show_if: "engine=sglang"
     group: Model
   - variable: model.servedName
     label: Served model name
-    description: "Name clients use in /v1/chat/completions. Empty: derived from the model."
+    description: "Name clients use in /v1/chat/completions. Empty: the file name."
     type: string
     default: ""
     group: Model
@@ -45,7 +29,7 @@ questions:
     group: Model
   - variable: gpu.count
     label: GPUs
-    description: "llama.cpp runs on CPU with 0; SGLang needs at least 1."
+    description: "0 runs on CPU; 1 or more offloads the model to NVIDIA GPUs."
     type: int
     default: 0
     group: Resources

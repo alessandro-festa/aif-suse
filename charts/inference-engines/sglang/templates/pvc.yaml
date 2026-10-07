@@ -2,9 +2,9 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "inference-engine.fullname" . }}-models
+  name: {{ include "sglang.fullname" . }}-models
   labels:
-    {{- include "inference-engine.labels" . | nindent 4 }}
+    {{- include "sglang.labels" . | nindent 4 }}
   annotations:
     # The model cache outlives the release: reinstalling does not download again.
     helm.sh/resource-policy: keep

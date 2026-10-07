@@ -1,0 +1,19 @@
+{{- if .Values.cache.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "llama-cpp.fullname" . }}-models
+  labels:
+    {{- include "llama-cpp.labels" . | nindent 4 }}
+  annotations:
+    # The model cache outlives the release: reinstalling does not download again.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.cache.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.cache.size }}
+{{- end }}

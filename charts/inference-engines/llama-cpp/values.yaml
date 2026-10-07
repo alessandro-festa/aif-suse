@@ -1,0 +1,56 @@
+# llama.cpp's llama-server, serving a GGUF model with OpenAI's API, on CPU or an NVIDIA GPU.
+
+model:
+  # A GGUF file in a Hugging Face repository.
+  hfRepo: Qwen/Qwen2.5-0.5B-Instruct-GGUF
+  hfFile: qwen2.5-0.5b-instruct-q4_k_m.gguf
+  # The name clients use in /v1/chat/completions and see in /v1/models. Empty: the file name.
+  servedName: ""
+  # Maximum context length in tokens. 0: the model's own.
+  contextLength: 4096
+
+# GPUs per replica. 0 runs on CPU; 1 or more offloads every layer to the GPU (the server-cuda image).
+gpu:
+  count: 0
+  resourceName: nvidia.com/gpu
+
+# llama.cpp reads the node's cores, not the container's CPU limit, and thrashes without this.
+# 0: the CPU request, rounded up.
+threads: 0
+
+# A Secret with an HF_TOKEN key, for gated or private models. Empty: anonymous downloads.
+hfTokenSecret: ""
+
+resources:
+  requests:
+    cpu: "2"
+    memory: 4Gi
+  limits:
+    cpu: "4"
+    memory: 8Gi
+
+# Where downloaded models are kept, so a restart does not download again.
+cache:
+  enabled: true
+  size: 20Gi
+  storageClass: ""
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# Arguments added to the server's command line.
+extraArgs: []
+# Image override; empty uses ghcr.io/ggml-org/llama.cpp, tag server (CPU) or server-cuda (GPU).
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicas: 1
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podLabels: {}
+podAnnotations: {}

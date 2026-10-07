@@ -3,7 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import yaml from 'js-yaml';
 // The engine blueprints in examples/training/blueprints: vLLM and Ollama from the Application
-// Collection, llama.cpp and SGLang from the inference-engine chart. Each is read for its model,
+// Collection, llama.cpp and SGLang from the Inference Engines Apps. Each is read for its model,
 // GPUs and endpoint, and a CPU engine is not asked GPU questions.
 import { Facts } from '../preflight';
 import { aiWorkloadFor, endpointUrl, inferenceChecks, summarizeBlueprint } from '../inference';
@@ -33,7 +33,7 @@ describe('engine blueprints', () => {
     expect(endpointUrl(s, 'team-a')).toBe('http://ollama.team-a.svc:11434/v1');
   });
 
-  it('reads llama.cpp and SGLang from the inference-engine chart', () => {
+  it('reads llama.cpp and SGLang from their own charts', () => {
     const l = summary('inference-llamacpp');
     const g = summary('inference-sglang');
 
@@ -43,7 +43,8 @@ describe('engine blueprints', () => {
     expect(g).toMatchObject({
       engine: 'sglang', model: 'Qwen/Qwen2.5-1.5B-Instruct', gpusPerReplica: 1, memory: '8Gi'
     });
-    expect(endpointUrl(l, 'team-a')).toBe('http://inference-engine.team-a.svc:8000/v1');
+    expect(endpointUrl(l, 'team-a')).toBe('http://llama-cpp.team-a.svc:8000/v1');
+    expect(endpointUrl(g, 'team-a')).toBe('http://sglang.team-a.svc:8000/v1');
   });
 
   it('asks a CPU engine no GPU questions', () => {
