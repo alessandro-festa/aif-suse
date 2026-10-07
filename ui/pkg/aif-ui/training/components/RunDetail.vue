@@ -225,7 +225,7 @@ export default defineComponent({
           <span
             v-else-if="t0.admitted === false"
             class="text-warning"
-          >waiting</span>
+          >waiting<template v-if="t0.queueReason">: {{ t0.queueReason }}</template></span>
           <span
             v-else
             class="text-muted"

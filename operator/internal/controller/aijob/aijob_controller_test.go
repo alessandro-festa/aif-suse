@@ -104,7 +104,7 @@ func newHarnessServing(t *testing.T, kueueVersions []string, objs ...client.Obje
 	s := runtime.NewScheme()
 	require.NoError(t, clientgoscheme.AddToScheme(s))
 	require.NoError(t, v1alpha1.AddToScheme(s))
-	gvks := []struct{ g, v, k string }{{"catalog.cattle.io", "v1", "ClusterRepo"}, {"kubeflow.org", "v1", "PyTorchJob"}}
+	gvks := []struct{ g, v, k string }{{"catalog.cattle.io", "v1", "ClusterRepo"}, {"kubeflow.org", "v1", "PyTorchJob"}, {"trainer.kubeflow.org", "v1alpha1", "TrainJob"}, {"jobset.x-k8s.io", "v1alpha2", "JobSet"}}
 	for _, v := range kueueVersions {
 		gvks = append(gvks, struct{ g, v, k string }{"kueue.x-k8s.io", v, "Workload"})
 	}

@@ -34,7 +34,7 @@ Branch: `aijob-scheduling` on the alessandro-festa fork (`origin`), based on SUS
 | 6 | Volcano backend: table entry, PodGroup gang, queue by annotation, pre-flight, Submit, observe | done, verified on the lab (Volcano 1.15.3 on downstream-1) | — |
 | 7 | HAMi on the GPU-sharing axis: `sharingLayers` table, `gpu.sharing: hami`, HAMi-aware pool GPU counts, Submit option | done; lab-verified up to scheduling (simulated GPUs: no real HAMi) | — |
 | 8 | Cluster add-ons from Compute Pools: KAI, Kueue, Volcano, HAMi, Kubeflow Trainer v2 (upstream) as Fleet HelmOps | done; KAI, Kueue and Trainer 2.1.0 verified live | — |
-| 9 | Generic `AIJob.status.queue`; Trainer v2 `TrainJob` | — | — |
+| 9 | Generic `AIJob.status.queue` (`backend`, `name`, `admitted`, `reason`); Trainer v2 `TrainJob` (`job.kind=trainjob`, own TrainingRuntime), Trainer v2 test profile | done, verified on the lab (Trainer 2.1.0; Volcano queue) | — |
 | 10 | Frameworks beyond PyTorch: JAX, TensorFlow, DeepSpeed on the plain Indexed Job; findings in design doc §8.1 | done: three CPU test profiles, all passing on the lab | `5e54cbd2` |
 | 11 | Ray / KubeRay as a training runtime: KubeRay add-on, `job.kind=rayjob`, Ray Train test profile | done, verified on the lab (KubeRay 1.7.1, Ray 2.49.2) | — |
 | SDK | Data scientists from Python: dstanley's `rancher_ai` SDK on AI projects and pools, `--code`, `python-cpu-dev` / `ray-cpu-dev` profiles, scheduling demo (script + notebook) | done, demo verified on the lab | — |
@@ -431,6 +431,22 @@ placement queue does the rest, as for a run from the UI. It gained `projects` / 
 names no chart source (the operator uses its built-in chart). Two dev profiles carry your code:
 `python-cpu-dev` (plain Indexed Job, 1–4 pods) and `ray-cpu-dev` (RayJob, your program as the
 driver).
+
+**D-56 One queue status for every backend.** `AIJob.status.queue` is `{backend, name, admitted,
+reason}` whichever scheduler holds the run: Kueue from its Workload (LocalQueue, Admitted, the
+QuotaReserved message), KAI / Run:AI / Volcano from the queue their pods name and whether a pod is
+bound (the PodScheduled message as reason). Kueue's `workload`, `localQueue` and `clusterQueue` stay
+as details; `kaiQueue` is gone (its value is `name`). Admission is kept once seen, since Kueue
+clears it when the job ends. The UI and SDK read `name`, `backend`, `admitted` and `reason`.
+
+**D-57 TrainJob runs bring their own TrainingRuntime, with Trainer's torch policy.**
+`job.kind=trainjob` renders a namespaced TrainingRuntime and a TrainJob on it, both in the release:
+nothing depends on which ClusterTrainingRuntimes a cluster has (F-74), and nothing per run is
+cluster-scoped. The runtime always has the torch policy (torchrun's PET_* in every pod, a custom
+command may call torchrun itself) and an Indexed "node" Job, so JOB_COMPLETION_INDEX, NNODES and
+RDZV_ENDPOINT work as on the plain Job. Scheduler binding is the pod template's, as for the other
+kinds; Kueue's label and suspend go on the TrainJob; a Volcano gang uses the chart's PodGroup. The
+webhook's refusal of the first install is retried in 2 s (`runtimeNotSeenYet`), not failed.
 
 ---
 
@@ -839,6 +855,25 @@ DeepSpeed ranks fitted different targets.
     cluster on its pool for an hour. With `ray.shutdownAfterSeconds` the head and workers left
     ~60–75 s after the job ended.
 
+**F-74 [fact] Kubeflow Trainer 2.1.0, as found on the lab (P9):**
+- The Trainer Helm chart installs **no** ClusterTrainingRuntimes, so a run cannot assume
+  `torch-distributed` exists: it brings its own TrainingRuntime (D-57).
+- Trainer's webhook refuses a TrainJob whose runtime it has not seen ("specified trainingRuntime must
+  be created before the TrainJob is created"). Helm v3 orders unknown kinds by name, so `TrainJob`
+  is created before `TrainingRuntime` on every first install. Helm is not atomic here: the runtime is
+  created anyway, and the retry (an upgrade of the failed revision) adds the TrainJob.
+- The runtime's JobSet template is schema-checked more strictly than a Job: `podFailurePolicy`
+  `onPodConditions[].status` is required (a Job defaults it).
+- The torch plugin adds `PET_NNODES/NPROC_PER_NODE/NODE_RANK/MASTER_ADDR/MASTER_PORT` (master
+  `<job>-node-0-0.<job>:29500`) **only when the TrainJob has a `spec.trainer` section**.
+- Bugs found and fixed on the way: the operator treated a release whose only revision failed as
+  installed and never retried (the run sat Pending); `dev-p9b` shipped a stale embedded chart, which
+  `TestArchiveMatchesChartSource` catches when not read from Go's test cache (`-count=1`).
+- Lab check: `trainjob-torch-test-3eeu8` (profile 50, from the SDK, project `vision`) placed on
+  c-xvstz-cpu: 2 pods, Trainer's world, gloo all-reduce, DDP loss 12.5 → 0.026, report captured from
+  the JobSet's pod. `p9-volcano-tj` under Volcano: status.queue `{backend: volcano, name: default}`
+  while the gang was held, then `admitted: true`, Succeeded.
+
 **F-73 [fact] SDK on the lab:**
 - kubernetes ≥ 33 dropped `ApiClient.call_api(query_params=…)`; `kube.call` now uses
   `param_serialize` when present (verified with kubernetes 37).
@@ -1000,7 +1035,7 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | O-1 | ~~`gpu.mode=auto` errors without `resource.k8s.io/v1` (F-09)~~ fixed in P3a (F-28) | — | — |
 | O-2 | Enable KAI-style shares under Run:AI after testing (F-14) | `schedulers.yaml` | 7 |
 | O-3 | Projects page quota setting is `'kai' \| 'resourcequota'`; it should follow the table's `quota` | `projects.ts`, `Projects.vue`, `resourcequota.ts` | quota editors |
-| O-4 | `AIJob.status.queue` is Kueue/KAI-specific (`kaiQueue` also carries Run:AI's queue) | `aijob_types.go` | 9 |
+| O-4 | ~~`AIJob.status.queue` is Kueue/KAI-specific~~ done in Phase 9 (D-56) | `aijob_types.go` | done |
 | O-5 | Python SDK (`63d8df91`) not brought in | — | later |
 | O-6 | Kubeflow "training only" values preset | catalog | 8 |
 | O-7 | Make the App Collection PyTorch image the default training image (F-02) | `gpu-train-job` values / profiles | later |
@@ -1031,7 +1066,7 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | O-33 | ~~Kubeflow training runtime~~ decided: upstream Kubeflow Trainer v2 for now (D-52); ask SUSE for a training-only mode of its chart (F-67) | add-ons | follow-up with SUSE |
 | O-34 | Add-ons are pinned versions in the UI; upgrading one means editing `services/addons.ts` | add-ons | later |
 | O-35 | GPU variants of the JAX / TensorFlow / DeepSpeed profiles (framework images, NCCL), untested on the lab's simulated GPUs | profiles | with a GPU cluster |
-| O-36 | Phase 9: generic status.queue; TrainJob path to use Trainer v2's JAX/DeepSpeed runtimes | chart / operator | next |
+| O-36 | TrainJob on Trainer's shipped ClusterTrainingRuntimes (JAX, DeepSpeed, MPI from 2.3.0) instead of the run's own torch runtime; KAI gang over a JobSet and Kueue's TrainJob integration not tried on the lab | chart / operator | later |
 | O-37 | Ray beyond training: Ray Tune (HPO), RayService / vLLM multi-node serving; Ray autoscaling vs placement (size at max workers) and idle reclaim of long-lived RayClusters | Ray | later |
 | O-38 | GPU Ray Train profile (rayproject/ray-ml or a CUDA image), untested on the simulated GPUs | profiles | with a GPU cluster |
 | O-39 | SDK: a wrong RANCHER_URL host (e.g. the IP) yields empty lists instead of an error; GPU variants of the dev profiles | SDK | later |

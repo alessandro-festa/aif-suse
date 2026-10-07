@@ -208,6 +208,21 @@ describe('training runs from AIJobs', () => {
     expect(runs.length).toBe(1);
     expect(runs[0].aiJob).toBeTruthy();
   });
+
+  it('reads the queue from status.queue, whichever scheduler holds it', () => {
+    const held = aiJob('train-1', 'Queued', { queue: { backend: 'volcano', name: 'research', admitted: false, reason: '0/2 nodes are available' } });
+    const [r] = trainingRuns({ ...empty, aiJobs: [held] });
+
+    expect(r.scheduler).toBe('volcano');
+    expect(r.queue).toBe('research');
+    expect(r.admitted).toBe(false);
+    expect(r.queueReason).toBe('0/2 nodes are available');
+
+    const [admitted] = trainingRuns({ ...empty, aiJobs: [aiJob('train-1', 'Running', { queue: { backend: 'kai', name: 'team-a', admitted: true } })] });
+
+    expect(admitted.admitted).toBe(true);
+    expect(admitted.queueReason).toBe('');
+  });
 });
 
 describe('training rows from an AIJob whose Job is gone', () => {

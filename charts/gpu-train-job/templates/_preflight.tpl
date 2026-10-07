@@ -76,6 +76,9 @@ real cause instead of leaving a Pending pod with no events. Disable with preflig
 {{- if and (eq .Values.job.kind "rayjob") (not (.Capabilities.APIVersions.Has "ray.io/v1/RayJob")) (lookup "v1" "Namespace" "" .Release.Namespace) }}
   {{- fail "preflight: job.kind=rayjob but the KubeRay operator is not installed (no rayjobs.ray.io CRD). Install it (Compute Pools → Cluster add-ons → KubeRay), or use job.kind=job." }}
 {{- end }}
+{{- if and (eq .Values.job.kind "trainjob") (not (.Capabilities.APIVersions.Has "trainer.kubeflow.org/v1alpha1/TrainJob")) }}
+  {{- fail "preflight: job.kind=trainjob but Kubeflow Trainer v2 is not installed (no trainjobs.trainer.kubeflow.org CRD). Install it (Compute Pools → Cluster add-ons → Kubeflow Trainer), or use job.kind=job." }}
+{{- end }}
 {{- if eq .Values.job.kind "pytorchjob" }}
   {{- if not (.Capabilities.APIVersions.Has "kubeflow.org/v1/PyTorchJob") }}
     {{- fail "preflight: job.kind=pytorchjob but the Kubeflow Training Operator is not installed (no pytorchjobs.kubeflow.org CRD). Install it, or use job.kind=job (torchrun over an Indexed Job needs no operator)." }}

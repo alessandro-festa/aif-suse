@@ -18,6 +18,7 @@ package aijob
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -26,9 +27,12 @@ import (
 	"github.com/stretchr/testify/require"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/SUSE/aif-operator/api/v1alpha1"
+	helmClient "github.com/SUSE/aif-operator/internal/infra/helm"
 )
 
 type fakeLogs struct {
@@ -156,4 +160,71 @@ func TestOnlyAPodTheExecutionCreatedReports(t *testing.T) {
 
 func TestNoExecutionNoReport(t *testing.T) {
 	assert.Nil(t, ownedBy(nil, []corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "x"}}}))
+}
+
+func TestATrainJobReportsOnlyFromThePodsOfItsJobSet(t *testing.T) {
+	h := newHarness(t, aijob("train-3"))
+	logs := &fakeLogs{logs: map[string]string{
+		"train-3-node-0-0-abc": `AIF_RESULT {"test":"Real","status":"pass","checks":[{"name":"Trained","ok":true}]}`,
+		"train-3-node-0-0-zzz": `AIF_RESULT {"test":"Planted","status":"pass","checks":[{"name":"Trained","ok":true}]}`,
+	}}
+	h.r.PodLogs = logs
+	h.reconcile("train-3")
+	bg := context.Background()
+
+	tj := &unstructured.Unstructured{}
+	tj.SetGroupVersionKind(trainJobGVK)
+	tj.SetName("train-3")
+	tj.SetNamespace(ns)
+	tj.SetUID("tj-uid")
+	_ = unstructured.SetNestedSlice(tj.Object, []interface{}{cond("Complete", "True", time.Hour, "JobsCompleted", "jobset completed")}, "status", "conditions")
+	require.NoError(t, h.c.Create(bg, tj))
+	js := &unstructured.Unstructured{}
+	js.SetGroupVersionKind(jobSetGVK)
+	js.SetName("train-3")
+	js.SetNamespace(ns)
+	js.SetUID("js-uid")
+	js.SetOwnerReferences([]metav1.OwnerReference{*metav1.NewControllerRef(tj, trainJobGVK)})
+	require.NoError(t, h.c.Create(bg, js))
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "train-3-node-0", Namespace: ns, UID: "job-uid-3",
+		Labels: map[string]string{jobSetNameLabel: "train-3"}, OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(js, jobSetGVK)}}}
+	stray := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "stray", Namespace: ns, UID: "stray-uid", Labels: map[string]string{jobSetNameLabel: "train-3"}}}
+	require.NoError(t, h.c.Create(bg, job))
+	require.NoError(t, h.c.Create(bg, stray))
+
+	labels := map[string]string{v1alpha1.AIJobJobIDLabel: "train-3", "batch.kubernetes.io/job-completion-index": "0"}
+	for name, owner := range map[string]*batchv1.Job{"train-3-node-0-0-abc": job, "train-3-node-0-0-zzz": stray} {
+		p := pod(name, 0, corev1.PodSucceeded, 5*time.Minute, i32(0))
+		p.Namespace, p.Labels = ns, labels
+		p.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(owner, batchv1.SchemeGroupVersion.WithKind("Job"))}
+		require.NoError(t, h.c.Create(bg, &p))
+	}
+	h.clock = t0.Add(61 * time.Minute)
+	h.reconcile("train-3")
+
+	got := h.get("train-3")
+	assert.Equal(t, v1alpha1.AIJobPhaseSucceeded, got.Status.Phase)
+	assert.Equal(t, "TrainJob", got.Status.Execution.Kind)
+	require.NotNil(t, got.Status.Report)
+	assert.Equal(t, "Real", got.Status.Report.Test, "the stray Job is not the JobSet's")
+}
+
+func TestATrainJobRefusedForItsRuntimeIsRetriedNotFailed(t *testing.T) {
+	h := newHarness(t, aijob("train-4"))
+	h.helm.ensureErr = errors.New(`admission webhook "validator.trainjob.trainer.kubeflow.org" denied the request: spec.runtimeRef: Invalid value: TrainingRuntime.trainer.kubeflow.org "train-4" not found: specified trainingRuntime must be created before the TrainJob is created`)
+	res := h.reconcile("train-4")
+	got := h.get("train-4")
+	assert.NotEqual(t, v1alpha1.AIJobPhaseFailed, got.Status.Phase)
+	assert.Equal(t, runtimeRequeue, res.RequeueAfter)
+	c := meta.FindStatusCondition(got.Status.Conditions, v1alpha1.AIJobConditionInstalled)
+	require.NotNil(t, c)
+	assert.Equal(t, "InstallRetrying", c.Reason)
+
+	// the refused install left a failed revision: the retry installs again, not skips
+	h.helm.ensureErr = nil
+	h.helm.releases["train-4"] = &helmClient.ReleaseInfo{Status: helmClient.StatusFailed, Revision: 1}
+	ensured := len(h.helm.ensured)
+	h.reconcile("train-4")
+	assert.Len(t, h.helm.ensured, ensured+1, "EnsureRelease runs again over the failed revision")
+	assert.Equal(t, metav1.ConditionTrue, meta.FindStatusCondition(h.get("train-4").Status.Conditions, v1alpha1.AIJobConditionInstalled).Status)
 }

@@ -298,10 +298,10 @@ spec:
                   the job.
                 properties:
                   kind:
-                    description: Kind is Job or PyTorchJob.
+                    description: Kind is Job, PyTorchJob, RayJob or TrainJob.
                     type: string
                   name:
-                    description: Name of the Job or PyTorchJob.
+                    description: Name of the Job, PyTorchJob, RayJob or TrainJob.
                     type: string
                   release:
                     description: Release is the Helm release name (the AIJob name).
@@ -391,20 +391,36 @@ spec:
                   type: object
                 type: array
               queue:
-                description: AIJobQueue records the Kueue Workload that queued the
-                  job.
+                description: |-
+                  AIJobQueue is the cluster scheduler queue that holds or admitted the job,
+                  whichever backend it is (Kueue, KAI, Run:AI, Volcano).
                 properties:
-                  clusterQueue:
-                    type: string
-                  kaiQueue:
+                  admitted:
                     description: |-
-                      KAIQueue is the scheduling.run.ai queue the pods were submitted to, for a
-                      job KAI or Run:AI queues rather than Kueue (their kai.scheduler/queue or
-                      project label, per the chart's schedulers.yaml).
+                      Admitted says the queue let the job run: Kueue admitted its Workload, or
+                      the scheduler placed its pods.
+                    type: boolean
+                  backend:
+                    description: |-
+                      Backend is the scheduler backend, by the chart's schedulers.yaml name
+                      (kueue, kai, runai, volcano).
+                    type: string
+                  clusterQueue:
                     type: string
                   localQueue:
                     type: string
+                  name:
+                    description: |-
+                      Name is the queue the job was submitted to: Kueue's LocalQueue, the
+                      KAI/Run:AI queue, the Volcano queue.
+                    type: string
+                  reason:
+                    description: Reason is why the queue still holds the job, from
+                      the scheduler.
+                    type: string
                   workload:
+                    description: Workload, LocalQueue and ClusterQueue are Kueue's
+                      details.
                     type: string
                 type: object
               reclaimHistory:

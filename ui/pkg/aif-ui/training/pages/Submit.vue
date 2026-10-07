@@ -60,6 +60,7 @@ const EMPTY_FACTS: Facts = {
   runaiProjectNamespaces:   [],
   pytorchOperatorInstalled: false,
   kuberayInstalled:         false,
+  trainerInstalled:         false,
   jobApi:                   false,
   localQueues:              [],
   clusterQueues:            [],
@@ -396,6 +397,11 @@ export default defineComponent({
           label:    this.facts.kuberayInstalled ? 'Ray (KubeRay RayJob: head + workers)' : 'Ray — KubeRay not installed',
           value:    'rayjob',
           disabled: !this.facts.kuberayInstalled,
+        },
+        {
+          label:    this.facts.trainerInstalled ? 'Kubeflow TrainJob (Trainer v2)' : 'Kubeflow TrainJob — Trainer v2 not installed',
+          value:    'trainjob',
+          disabled: !this.facts.trainerInstalled,
         },
       ];
     },
@@ -1043,6 +1049,7 @@ export default defineComponent({
       // PyTorchJob type in the API at all, so the option is not offered.
       facts.pytorchOperatorInstalled = !!this.$store.getters['cluster/schemaFor'](TYPES.PYTORCH_JOB);
       facts.kuberayInstalled = !!this.$store.getters['cluster/schemaFor'](TYPES.RAY_JOB);
+      facts.trainerInstalled = !!this.$store.getters['cluster/schemaFor'](TYPES.TRAIN_JOB);
       // Which namespaces Run:AI actually provisioned. A Project is what causes its controller to
       // write the RoleBindings the scheduler needs to bind pods; the namespace label alone does
       // not. Left empty when the Projects cannot be read, and the check that uses it then skips.

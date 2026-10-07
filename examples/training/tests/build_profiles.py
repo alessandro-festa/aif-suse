@@ -88,6 +88,12 @@ PROFILES = [
         "displayName": "Ray Train Distributed Test (CPU)", "purpose": "test", "framework": "Ray", "gpu": "CPU", "status": "beta",
         "description": "A KubeRay RayJob: a Ray head and two or more CPU workers; a Ray Train TorchTrainer runs one training worker per pod with synchronised gradients, then the Ray cluster is removed. Needs the KubeRay add-on.",
         "values": RAY_TRAIN, "editable": ["nodes"], "limits": {"nodes": {"min": 1, "max": 4}, "registries": ["rayproject/", "docker.io/rayproject/"], "maxRuntimeHours": 1}}),
+    ("50-trainjob-torch-test", "trainjob-torch-test", {
+        "displayName": "Kubeflow Trainer v2 Test (CPU)", "purpose": "test", "framework": "PyTorch", "gpu": "CPU", "status": "beta",
+        "description": "A Kubeflow Trainer v2 TrainJob of two or more CPU pods: Trainer's torch policy hands torchrun the world, the pods all-reduce and train with DistributedDataParallel over gloo. Needs the Kubeflow Trainer add-on.",
+        "values": {**framework_test("trainjob_torch_test.sh", "3.12-slim", "2Gi", [{"name": "TORCH_VERSION", "value": "2.8.0"}]),
+                   "job": {"kind": "trainjob", "mode": "custom", "nodes": 2, "gpusPerNode": 0, "command": ["sh", "-c", script("trainjob_torch_test.sh")]}},
+        "editable": ["nodes", "env"], "limits": FRAMEWORK_LIMITS}),
     ("30-gpu-smoke-shared", "gpu-smoke-shared", {
         "displayName": "GPU Smoke Test (shared GPU)", "purpose": "test", "framework": "CUDA", "status": "ready",
         "description": "The smoke test on a 1 GiB GPU-memory share, as shared workloads get their GPU: placed by the GPU-sharing scheduler, capped at its share.",

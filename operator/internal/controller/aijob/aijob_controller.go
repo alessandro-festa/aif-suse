@@ -43,6 +43,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
@@ -73,6 +74,9 @@ const (
 	// moving is re-read on this cadence instead.
 	activeRequeue  = 10 * time.Second
 	waitingRequeue = 30 * time.Second
+	// A TrainJob refused only because Trainer had not seen its runtime yet is
+	// retried at once.
+	runtimeRequeue = 2 * time.Second
 	// A finished job is re-read at most this often before its cleanup is due, so
 	// a retention changed after completion is picked up.
 	settledRequeue = time.Hour
@@ -82,6 +86,8 @@ var (
 	clusterRepoGVK = schema.GroupVersionKind{Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepo"}
 	pytorchJobGVK  = schema.GroupVersionKind{Group: "kubeflow.org", Version: "v1", Kind: "PyTorchJob"}
 	rayJobGVK      = schema.GroupVersionKind{Group: "ray.io", Version: "v1", Kind: "RayJob"}
+	trainJobGVK    = schema.GroupVersionKind{Group: "trainer.kubeflow.org", Version: "v1alpha1", Kind: "TrainJob"}
+	jobSetGVK      = schema.GroupVersionKind{Group: "jobset.x-k8s.io", Version: "v1alpha2", Kind: "JobSet"}
 	// Kueue Workloads, newest API version first: Kueue serves v1beta2 from 0.15
 	// and still serves v1beta1, which older releases have alone.
 	workloadGVKs = []schema.GroupVersionKind{
@@ -97,6 +103,8 @@ var (
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubeflow.org,resources=pytorchjobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=ray.io,resources=rayjobs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=trainer.kubeflow.org,resources=trainjobs;trainingruntimes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
@@ -260,6 +268,12 @@ func (r *AIJobReconciler) reconcileJob(ctx context.Context, job *v1alpha1.AIJob,
 		return r.afterCompletion(ctx, job, t, installed)
 	}
 
+	// A release whose last revision failed (an install refused part-way, such as a
+	// TrainJob before Trainer saw its runtime) is installed again: EnsureRelease
+	// upgrades it. Cleanup above still uninstalls it as it is.
+	if installed && release.Status == helmClient.StatusFailed {
+		installed = false
+	}
 	if !installed {
 		if meta := findCondition(st, v1alpha1.AIJobConditionExecutionCleaned); meta {
 			// Cleaned already: nothing to install again.
@@ -304,11 +318,7 @@ func (r *AIJobReconciler) reconcileJob(ctx context.Context, job *v1alpha1.AIJob,
 		}
 		if finishing && st.Report == nil {
 			// once, as it finishes: the pods and their logs are still there
-			var execution metav1.Object
-			if obs.execution != nil {
-				execution = obs.execution
-			}
-			r.captureReport(ctx, job, t, execution, obs.pods)
+			r.captureReport(ctx, job, t, obs)
 		}
 		st.Phase = phase
 		setCondition(st, gen, v1alpha1.AIJobConditionCompleted, metav1.ConditionTrue, string(phase), st.Result.Message)
@@ -353,6 +363,13 @@ func (r *AIJobReconciler) install(ctx context.Context, job *v1alpha1.AIJob, t *t
 		st.Placement = &v1alpha1.AIJobPlacement{Pool: t.pool.Name, ClusterID: t.clusterID, Namespace: t.namespace}
 	}
 	if err := t.helm.EnsureRelease(ctx, spec); err != nil {
+		if runtimeNotSeenYet(err) {
+			// Helm creates a TrainJob before its TrainingRuntime (it orders unknown kinds by
+			// name), and Trainer refuses a TrainJob whose runtime it has not seen. The runtime
+			// was created all the same: the retry, an upgrade of the failed release, adds the TrainJob.
+			setCondition(st, gen, v1alpha1.AIJobConditionInstalled, metav1.ConditionFalse, "InstallRetrying", "waiting for Kubeflow Trainer to see the run's TrainingRuntime")
+			return reconcile.Result{RequeueAfter: runtimeRequeue}, true
+		}
 		if transient(err) {
 			setCondition(st, gen, v1alpha1.AIJobConditionInstalled, metav1.ConditionFalse, "InstallRetrying", err.Error())
 			return reconcile.Result{RequeueAfter: waitingRequeue}, true
@@ -651,6 +668,12 @@ func (r *AIJobReconciler) chartAllowed(src v1alpha1.AIJobSource) bool {
 
 // transient reports whether an install error is worth retrying: the network or
 // the API server, not the chart.
+// runtimeNotSeenYet is Trainer's webhook refusing a TrainJob created before its
+// TrainingRuntime was visible to it.
+func runtimeNotSeenYet(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "trainingruntime must be created before the trainjob")
+}
+
 func transient(err error) bool {
 	if apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) || apierrors.IsTooManyRequests(err) || apierrors.IsServiceUnavailable(err) {
 		return true
@@ -664,8 +687,9 @@ func transient(err error) bool {
 	return false
 }
 
-// observe reads the execution: the Job or PyTorchJob, its Kueue Workload, its
-// pods with their claims and nodes. Uncached; see activeRequeue.
+// observe reads the execution: the Job, PyTorchJob, RayJob or TrainJob, its
+// Kueue Workload, its pods with their claims and nodes. Uncached; see
+// activeRequeue.
 func (r *AIJobReconciler) observe(ctx context.Context, job *v1alpha1.AIJob, t *target) (observed, error) {
 	o := observed{claims: map[string]*resourcev1.ResourceClaim{}, nodes: map[string]*corev1.Node{}}
 	ns := t.namespace
@@ -703,6 +727,22 @@ func (r *AIJobReconciler) observe(ctx context.Context, job *v1alpha1.AIJob, t *t
 		} else if !apierrors.IsNotFound(err) && !isNoMatch(err) {
 			return o, err
 		}
+	}
+	if o.execution == nil {
+		tj := &unstructured.Unstructured{}
+		tj.SetGroupVersionKind(trainJobGVK)
+		if err := reader.Get(ctx, ctrl.ObjectKey{Namespace: ns, Name: name}, tj); err == nil {
+			o.execution = tj
+		} else if !apierrors.IsNotFound(err) && !isNoMatch(err) {
+			return o, err
+		}
+	}
+	if o.execution != nil {
+		owners, err := podOwners(ctx, reader, o.execution)
+		if err != nil {
+			return o, err
+		}
+		o.podOwners = owners
 	}
 
 	if o.execution != nil {
@@ -815,6 +855,41 @@ func (r *AIJobReconciler) SetupWithManager(mgr controllerruntime.Manager) error 
 		Named("aijob").
 		Complete(r)
 }
+
+// podOwners are the controllers of the run's own pods. A TrainJob's pods belong
+// to the Jobs of the JobSet it made, followed down by controller reference so a
+// pod labelled for the run by anyone else is not counted.
+func podOwners(ctx context.Context, reader ctrl.Reader, ex *unstructured.Unstructured) (map[types.UID]bool, error) {
+	if ex.GetKind() != "TrainJob" {
+		return map[types.UID]bool{ex.GetUID(): true}, nil
+	}
+	owners := map[types.UID]bool{}
+	js := &unstructured.Unstructured{}
+	js.SetGroupVersionKind(jobSetGVK)
+	err := reader.Get(ctx, ctrl.ObjectKey{Namespace: ex.GetNamespace(), Name: ex.GetName()}, js)
+	if apierrors.IsNotFound(err) || isNoMatch(err) {
+		return owners, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if ref := metav1.GetControllerOf(js); ref == nil || ref.UID != ex.GetUID() {
+		return owners, nil
+	}
+	jobs := &batchv1.JobList{}
+	if err := reader.List(ctx, jobs, ctrl.InNamespace(ex.GetNamespace()), ctrl.MatchingLabels{jobSetNameLabel: js.GetName()}); err != nil {
+		return nil, err
+	}
+	for i := range jobs.Items {
+		if ref := metav1.GetControllerOf(&jobs.Items[i]); ref != nil && ref.UID == js.GetUID() {
+			owners[jobs.Items[i].UID] = true
+		}
+	}
+	return owners, nil
+}
+
+// jobSetNameLabel is the label JobSet puts on the Jobs it makes.
+const jobSetNameLabel = "jobset.sigs.k8s.io/jobset-name"
 
 // ownedByRayJob says whether a Job is a RayJob's submitter.
 func ownedByRayJob(j *batchv1.Job) bool {

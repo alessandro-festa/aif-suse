@@ -324,6 +324,27 @@ rules:
       - update
       - watch
   - apiGroups:
+      - trainer.kubeflow.org
+    resources:
+      - trainingruntimes
+      - trainjobs
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - jobset.x-k8s.io
+    resources:
+      - jobsets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
       - kueue.x-k8s.io
     resources:
       - workloads

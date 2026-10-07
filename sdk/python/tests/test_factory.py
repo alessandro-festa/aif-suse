@@ -45,3 +45,11 @@ def test_pools_say_what_is_free_and_skip_local():
     assert [p.name for p in c.pools.all("vision")] == ["c-a-cpu"], "only the clusters the project spans"
     row = c.pools.table("vision").rows[0]
     assert row["runtimes"] == "job, kuberay" and row["scheduler"] == "volcano"
+
+
+def test_ready_pods_from_listed_pods_or_counts():
+    from rancher_ai.workloads import _ready_pods
+    done = [{"name": "a", "phase": "Succeeded"}, {"name": "b", "phase": "Succeeded"}]
+    assert _ready_pods({"phase": "Succeeded", "pods": done}) == 2
+    assert _ready_pods({"phase": "Running", "pods": [{"phase": "Running"}, {"phase": "Pending"}]}) == 1
+    assert _ready_pods({"phase": "Succeeded", "podCounts": {"succeeded": 20}, "pods": []}) == 20

@@ -34,6 +34,9 @@ job:
   # rayjob     — one ray.io/v1 RayJob (KubeRay): a Ray head plus `nodes` workers. The command (custom
   #              mode) is the Ray driver, run on the head (e.g. a Ray Train script); the cluster is torn
   #              down when it ends. Requires the KubeRay operator, and a Ray image (rayproject/ray).
+  # trainjob   — one trainer.kubeflow.org TrainJob (Kubeflow Trainer v2) with its own TrainingRuntime:
+  #              `nodes` pods with Trainer's torch policy (torchrun's PET_* variables). Requires
+  #              Kubeflow Trainer v2.
   kind: job
   # Number of nodes (pods). Each pod gets gpusPerNode GPUs.
   # With kind=pytorchjob this is 1 Master + (nodes - 1) Workers.

@@ -204,23 +204,39 @@ type AIJobSpec struct {
 type AIJobExecution struct {
 	// Release is the Helm release name (the AIJob name).
 	Release string `json:"release,omitempty"`
-	// Kind is Job or PyTorchJob.
+	// Kind is Job, PyTorchJob, RayJob or TrainJob.
 	// +optional
 	Kind string `json:"kind,omitempty"`
-	// Name of the Job or PyTorchJob.
+	// Name of the Job, PyTorchJob, RayJob or TrainJob.
 	// +optional
 	Name string `json:"name,omitempty"`
 }
 
-// AIJobQueue records the Kueue Workload that queued the job.
+// AIJobQueue is the cluster scheduler queue that holds or admitted the job,
+// whichever backend it is (Kueue, KAI, Run:AI, Volcano).
 type AIJobQueue struct {
-	Workload     string `json:"workload,omitempty"`
-	LocalQueue   string `json:"localQueue,omitempty"`
+	// Backend is the scheduler backend, by the chart's schedulers.yaml name
+	// (kueue, kai, runai, volcano).
+	// +optional
+	Backend string `json:"backend,omitempty"`
+	// Name is the queue the job was submitted to: Kueue's LocalQueue, the
+	// KAI/Run:AI queue, the Volcano queue.
+	// +optional
+	Name string `json:"name,omitempty"`
+	// Admitted says the queue let the job run: Kueue admitted its Workload, or
+	// the scheduler placed its pods.
+	// +optional
+	Admitted bool `json:"admitted,omitempty"`
+	// Reason is why the queue still holds the job, from the scheduler.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+	// Workload, LocalQueue and ClusterQueue are Kueue's details.
+	// +optional
+	Workload string `json:"workload,omitempty"`
+	// +optional
+	LocalQueue string `json:"localQueue,omitempty"`
+	// +optional
 	ClusterQueue string `json:"clusterQueue,omitempty"`
-	// KAIQueue is the scheduling.run.ai queue the pods were submitted to, for a
-	// job KAI or Run:AI queues rather than Kueue (their kai.scheduler/queue or
-	// project label, per the chart's schedulers.yaml).
-	KAIQueue string `json:"kaiQueue,omitempty"`
 }
 
 // AIJobPod is the facts about one pod, copied while it exists.

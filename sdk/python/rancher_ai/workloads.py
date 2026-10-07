@@ -19,6 +19,16 @@ CHART = "gpu-train-job"
 PROFILE_LABEL = "trainingjobs/profile"
 AIF = ("ai-factory.suse.com", "v1alpha1")
 
+def _ready_pods(st: dict) -> int:
+    """Pods done (a run that succeeded) or running, from an AIJob's status: podCounts above 16
+    pods, the listed pods below."""
+    phase = "Succeeded" if st.get("phase") == "Succeeded" else "Running"
+    counts = st.get("podCounts")
+    if counts:
+        return int(counts.get(phase.lower()) or 0)
+    return sum(1 for p in st.get("pods") or [] if p.get("phase") == phase)
+
+
 TRAINING_STATE = {"Running": "Running", "Scheduling": "Pending", "Pending": "Pending", "Queued": "Queued",
                   "Suspended": "Suspended", "Complete": "Completed", "Failed": "Failed"}
 ENDPOINT_STATE = {"Running": "Ready", "Ready": "Ready", "Pending": "Deploying", "Deploying": "Deploying",
@@ -414,10 +424,10 @@ def training_runs(c: "Client", namespace: str | None = None) -> list[TrainingRun
         out.append(TrainingRun(
             client=c, name=key[1], namespace=key[0], state=AIJOB_STATE.get(st.get("phase", ""), "Pending"), profile=spec.get("profile", ""),
             workers=int((v.get("job") or {}).get("nodes") or 1),
-            # from the run's pod counts (its pods may be on another cluster, or gone)
-            ready=int((st.get("podCounts") or {}).get("succeeded" if st.get("phase") == "Succeeded" else "running") or 0),
+            # from the run's recorded pods (its pods may be on another cluster, or gone)
+            ready=_ready_pods(st),
             gpus=f"{share / 1024:.1f} GiB GPU share" if share else f"{count} GPU" if count else "-",
-            queue=((st.get("queue") or {}).get("kaiQueue") or (st.get("queue") or {}).get("localQueue") or (v.get("scheduler") or {}).get("queue", "")),
+            queue=((st.get("queue") or {}).get("name") or (v.get("scheduler") or {}).get("queue", "")),
             image=f"{img.get('repository', '')}:{img.get('tag', '')}" if img.get("repository") else "",
             created=_ts(md.get("creationTimestamp")), id=f"run-{(md.get('uid') or '')[:8]}",
             report=st.get("report"), placement=st.get("placement"),

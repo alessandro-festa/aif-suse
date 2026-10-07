@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/SUSE/aif-operator/api/v1alpha1"
 	"github.com/SUSE/aif-operator/internal/trainchart"
@@ -42,8 +43,10 @@ const (
 	completionIndex = "batch.kubernetes.io/job-completion-index"
 )
 
-// podQueueKey is where a pod names its queue: a label, or an annotation.
+// podQueueKey is where a pod names its queue (a label, or an annotation), and
+// the backend that reads it.
 type podQueueKey struct {
+	backend    string
 	key        string
 	annotation bool
 }
@@ -59,9 +62,9 @@ var podQueueLabels = func() map[string]podQueueKey {
 		panic(err)
 	}
 	m := map[string]podQueueKey{}
-	for _, b := range backends {
+	for name, b := range backends {
 		if b.SchedulerName != "" && b.Admission == "scheduler" && b.Queue != nil && b.Queue.Target == "pod" {
-			m[b.SchedulerName] = podQueueKey{key: b.Queue.Label, annotation: b.Queue.As == "annotation"}
+			m[b.SchedulerName] = podQueueKey{backend: name, key: b.Queue.Label, annotation: b.Queue.As == "annotation"}
 		}
 	}
 	return m
@@ -71,9 +74,12 @@ var podQueueLabels = func() map[string]podQueueKey {
 // nil or empty when the object does not exist (yet, or any more); the status is
 // only ever filled from what is here, never guessed.
 type observed struct {
-	// execution is the Job or PyTorchJob, as unstructured so both kinds share one
-	// path. nil when neither exists.
+	// execution is the Job, PyTorchJob, RayJob or TrainJob, as unstructured so
+	// every kind shares one path. nil when none exists.
 	execution *unstructured.Unstructured
+	// podOwners are the controllers whose pods are the run's own: the execution,
+	// or for a TrainJob the Jobs its JobSet made. Only these pods may report.
+	podOwners map[types.UID]bool
 	// workload is the Kueue Workload owned by the execution, or nil.
 	workload *unstructured.Unstructured
 	pods     []corev1.Pod
@@ -91,23 +97,22 @@ func applyObservation(st *v1alpha1.AIJobStatus, o observed) {
 		st.Execution.Kind = o.execution.GetKind()
 		st.Execution.Name = o.execution.GetName()
 	}
-	if o.workload != nil {
-		q := &v1alpha1.AIJobQueue{Workload: o.workload.GetName()}
-		q.LocalQueue, _, _ = unstructured.NestedString(o.workload.Object, "spec", "queueName")
-		q.ClusterQueue, _, _ = unstructured.NestedString(o.workload.Object, "status", "admission", "clusterQueue")
-		if st.Queue != nil && q.ClusterQueue == "" {
-			q.ClusterQueue = st.Queue.ClusterQueue // admission is cleared on finish
+	if q := observedQueue(o); q != nil {
+		if prev := st.Queue; prev != nil {
+			q.Admitted = q.Admitted || prev.Admitted // admission is cleared on finish
+			if q.ClusterQueue == "" {
+				q.ClusterQueue = prev.ClusterQueue
+			}
+		}
+		if q.Admitted {
+			q.Reason = ""
 		}
 		st.Queue = q
+	}
+	if o.workload != nil {
 		if t := conditionTime(o.workload, "Admitted", "True"); t != nil && st.AdmittedAt == nil {
 			st.AdmittedAt = t
 		}
-	}
-	if q := podQueue(o.pods); q != "" {
-		if st.Queue == nil {
-			st.Queue = &v1alpha1.AIJobQueue{}
-		}
-		st.Queue.KAIQueue = q
 	}
 	mergePods(st, o.pods)
 	if started := earliestStart(o.pods); started != nil && (st.StartedAt == nil || started.Before(st.StartedAt)) {
@@ -155,9 +160,40 @@ func derivePhase(current v1alpha1.AIJobPhase, installed bool, o observed) v1alph
 	return v1alpha1.AIJobPhasePending
 }
 
-// podQueue is the queue a queue-holding scheduler (KAI, Run:AI) was given the
-// pods in, from the pod label that backend reads.
-func podQueue(pods []corev1.Pod) string {
+// observedQueue is the queue holding or admitting the job, whichever backend:
+// Kueue by its Workload, KAI / Run:AI / Volcano by the queue its pods name. nil
+// when neither is there to read.
+func observedQueue(o observed) *v1alpha1.AIJobQueue {
+	if o.workload != nil {
+		q := &v1alpha1.AIJobQueue{Backend: "kueue", Workload: o.workload.GetName()}
+		q.LocalQueue, _, _ = unstructured.NestedString(o.workload.Object, "spec", "queueName")
+		q.ClusterQueue, _, _ = unstructured.NestedString(o.workload.Object, "status", "admission", "clusterQueue")
+		q.Name = q.LocalQueue
+		q.Admitted = conditionTime(o.workload, "Admitted", "True") != nil
+		if !q.Admitted {
+			q.Reason = conditionMessage(o.workload, "False", "QuotaReserved", "Admitted")
+		}
+		return q
+	}
+	backend, name := podQueue(o.pods)
+	if name == "" {
+		return nil
+	}
+	q := &v1alpha1.AIJobQueue{Backend: backend, Name: name}
+	for _, p := range o.pods {
+		if p.Spec.NodeName != "" {
+			q.Admitted = true
+		}
+	}
+	if !q.Admitted {
+		q.Reason = unschedulable(o.pods)
+	}
+	return q
+}
+
+// podQueue is the backend and the queue a queue-holding scheduler (KAI, Run:AI,
+// Volcano) was given the pods in, from the pod label or annotation it reads.
+func podQueue(pods []corev1.Pod) (string, string) {
 	for _, p := range pods {
 		k, ok := podQueueLabels[p.Spec.SchedulerName]
 		if !ok {
@@ -168,7 +204,34 @@ func podQueue(pods []corev1.Pod) string {
 			on = p.Annotations
 		}
 		if on[k.key] != "" {
-			return on[k.key]
+			return k.backend, on[k.key]
+		}
+	}
+	return "", ""
+}
+
+// unschedulable is the scheduler's word on why a pod is not placed yet.
+func unschedulable(pods []corev1.Pod) string {
+	for _, p := range pods {
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse && c.Message != "" {
+				return truncate(c.Message, 256)
+			}
+		}
+	}
+	return ""
+}
+
+// conditionMessage is the message of the first of types with the given status.
+func conditionMessage(u *unstructured.Unstructured, status string, types ...string) string {
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, t := range types {
+		for _, c := range conds {
+			m, ok := c.(map[string]interface{})
+			if ok && m["type"] == t && m["status"] == status {
+				msg, _ := m["message"].(string)
+				return truncate(msg, 256)
+			}
 		}
 	}
 	return ""
@@ -188,8 +251,8 @@ func schedulerHeld(pods []corev1.Pod) bool {
 	return true
 }
 
-// terminalCondition reads the execution's own verdict: Job Complete/Failed,
-// PyTorchJob Succeeded/Failed. Returns the phase and the condition, or "".
+// terminalCondition reads the execution's own verdict: Job and TrainJob
+// Complete/Failed, PyTorchJob Succeeded/Failed, a RayJob's job status. Returns the phase and the condition, or "".
 func terminalCondition(ex *unstructured.Unstructured) (v1alpha1.AIJobPhase, map[string]interface{}) {
 	if ex.GetKind() == "RayJob" {
 		return rayJobOutcome(ex)

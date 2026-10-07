@@ -25,7 +25,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -148,16 +148,14 @@ func clip(s string) string {
 	return s[:maxReportText-3] + "..."
 }
 
-// ownedBy keeps the pods whose controller is the execution (the Job or
-// PyTorchJob). Pods are found by label, and anyone who can create pods in the
-// namespace can set a label; only the execution's controller makes its pods.
-func ownedBy(execution metav1.Object, pods []corev1.Pod) []corev1.Pod {
-	if execution == nil {
-		return nil
-	}
+// ownedBy keeps the pods whose controller is one of owners (the execution, or
+// the Jobs a TrainJob's JobSet made). Pods are found by label, and anyone who
+// can create pods in the namespace can set a label; only the run's own
+// controllers make its pods.
+func ownedBy(owners map[types.UID]bool, pods []corev1.Pod) []corev1.Pod {
 	var out []corev1.Pod
 	for _, p := range pods {
-		if ref := metav1.GetControllerOf(&p); ref != nil && ref.UID == execution.GetUID() {
+		if ref := metav1.GetControllerOf(&p); ref != nil && owners[ref.UID] {
 			out = append(out, p)
 		}
 	}
@@ -167,12 +165,12 @@ func ownedBy(execution metav1.Object, pods []corev1.Pod) []corev1.Pod {
 // captureReport reads the first worker's report into the status. Best effort:
 // a run without one, or a log that cannot be read, leaves the report unset.
 // Only a pod the execution created reports.
-func (r *AIJobReconciler) captureReport(ctx context.Context, job *v1alpha1.AIJob, tg *target, execution metav1.Object, pods []corev1.Pod) {
-	pod := firstWorker(ownedBy(execution, pods))
-	if u, ok := execution.(*unstructured.Unstructured); ok && u.GetKind() == "RayJob" {
+func (r *AIJobReconciler) captureReport(ctx context.Context, job *v1alpha1.AIJob, tg *target, o observed) {
+	pod := firstWorker(ownedBy(o.podOwners, o.pods))
+	if o.execution != nil && o.execution.GetKind() == "RayJob" {
 		// a RayJob's pods belong to its Ray cluster and submitter Job, not to it; the driver's
 		// output is the submitter's log (ray job submit), labelled for the run by the chart
-		pod = raySubmitter(pods)
+		pod = raySubmitter(o.pods)
 	}
 	if tg.logs == nil || pod == nil {
 		return

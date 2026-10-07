@@ -21,8 +21,9 @@ questions:
     description: >-
       job = one Indexed Job, no operator needed. pytorchjob = a Kubeflow PyTorchJob (Master +
       Workers), which requires the Kubeflow Training Operator to be installed on this cluster.
+      trainjob = a Kubeflow Trainer v2 TrainJob, which requires Kubeflow Trainer v2.
     type: enum
-    options: [job, pytorchjob]
+    options: [job, pytorchjob, trainjob]
     default: job
     required: true
     group: Job

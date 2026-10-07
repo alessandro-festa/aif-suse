@@ -1,0 +1,84 @@
+{{- if eq .Values.job.kind "trainjob" }}
+{{- $full := include "gpu-train-job.fullname" . -}}
+{{- include "gpu-train-job.preflight" . -}}
+{{- /*
+One Kubeflow Trainer v2 TrainJob, with its own namespaced TrainingRuntime: the run does not depend
+on which ClusterTrainingRuntimes a cluster has (the Trainer chart installs none). Trainer turns the
+pair into a JobSet whose Indexed Job "node" runs job.nodes pods.
+
+The runtime has Trainer's torch policy whatever the mode: every pod gets torchrun's world in PET_*
+variables, so torchrun mode and a custom command that calls torchrun both just work. The pods also
+have JOB_COMPLETION_INDEX, NNODES and RDZV_ENDPOINT, as on an Indexed Job.
+
+The cluster scheduler binds it as it binds any run: Kueue by the TrainJob's queue label and suspend
+(Kueue admits TrainJobs), KAI/Run:AI/Volcano by the pod template's schedulerName, labels and
+annotations, a Volcano gang by the chart's PodGroup.
+*/ -}}
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainingRuntime
+metadata:
+  name: {{ $full }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gpu-train-job.labels" . | nindent 4 }}
+    trainer.kubeflow.org/framework: torch
+spec:
+  mlPolicy:
+    numNodes: {{ .Values.job.nodes }}
+    torch:
+      numProcPerNode: {{ max 1 (int .Values.job.gpusPerNode) }}
+  template:
+    spec:
+      replicatedJobs:
+        - name: node
+          template:
+            metadata:
+              labels:
+                trainer.kubeflow.org/trainjob-ancestor-step: trainer
+            spec:
+              completionMode: Indexed
+              backoffLimitPerIndex: {{ .Values.job.backoffLimitPerIndex }}
+              maxFailedIndexes: 0
+              podFailurePolicy:
+                rules:
+                  - action: Ignore
+                    onPodConditions:
+                      - type: DisruptionTarget
+                        {{- /* a Job defaults it; the runtime's schema requires it */}}
+                        status: "True"
+                  {{- with .Values.job.failFastExitCodes }}
+                  - action: FailIndex
+                    onExitCodes:
+                      containerName: node
+                      operator: In
+                      values: {{ toJson . }}
+                  {{- end }}
+              {{- if gt (int .Values.job.activeDeadlineSeconds) 0 }}
+              activeDeadlineSeconds: {{ .Values.job.activeDeadlineSeconds }}
+              {{- end }}
+              template:
+                {{- include "gpu-train-job.trainJobPodTemplate" . | trim | nindent 16 }}
+---
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: {{ $full }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gpu-train-job.labels" . | nindent 4 }}
+    {{- with include "gpu-train-job.queueWorkloadLabels" . }}
+    {{- . | nindent 4 }}
+    {{- end }}
+spec:
+  runtimeRef:
+    apiGroup: trainer.kubeflow.org
+    kind: TrainingRuntime
+    name: {{ $full }}
+  {{- /* Trainer adds torchrun's PET_* variables only to a TrainJob that has a trainer section */}}
+  trainer:
+    numNodes: {{ .Values.job.nodes }}
+  {{- if include "gpu-train-job.suspended" . }}
+  {{- /* Kueue admits the TrainJob by clearing this */}}
+  suspend: true
+  {{- end }}
+{{- end }}

@@ -161,7 +161,9 @@ func TestApplyObservationRecordsTheKAIQueue(t *testing.T) {
 	st := &v1alpha1.AIJobStatus{}
 	applyObservation(st, observed{execution: execution("Job"), pods: []corev1.Pod{kaiPod("p0", "", corev1.PodPending)}})
 	require.NotNil(t, st.Queue)
-	assert.Equal(t, "team-a", st.Queue.KAIQueue)
+	assert.Equal(t, "kai", st.Queue.Backend)
+	assert.Equal(t, "team-a", st.Queue.Name)
+	assert.False(t, st.Queue.Admitted, "no pod placed yet")
 	assert.Empty(t, st.Queue.Workload, "no Kueue Workload")
 }
 
@@ -169,7 +171,8 @@ func TestApplyObservationRecordsTheRunAIQueue(t *testing.T) {
 	st := &v1alpha1.AIJobStatus{}
 	applyObservation(st, observed{execution: execution("Job"), pods: []corev1.Pod{runaiPod("p0", "", corev1.PodPending)}})
 	require.NotNil(t, st.Queue)
-	assert.Equal(t, "training", st.Queue.KAIQueue, "Run:AI's queues are scheduling.run.ai queues too")
+	assert.Equal(t, "runai", st.Queue.Backend)
+	assert.Equal(t, "training", st.Queue.Name, "Run:AI's queues are scheduling.run.ai queues too")
 }
 
 func TestPodsAreBoundedToFailedOnesAboveSixteen(t *testing.T) {
@@ -256,7 +259,8 @@ func TestAVolcanoRunWaitingInItsQueueIsQueued(t *testing.T) {
 	st := &v1alpha1.AIJobStatus{}
 	applyObservation(st, observed{execution: execution("Job"), pods: []corev1.Pod{volcanoPod("p0", "")}})
 	require.NotNil(t, st.Queue)
-	assert.Equal(t, "team-a", st.Queue.KAIQueue, "read from the annotation")
+	assert.Equal(t, "volcano", st.Queue.Backend)
+	assert.Equal(t, "team-a", st.Queue.Name, "read from the annotation")
 }
 
 func TestAHAMiShareIsRecordedAsOne(t *testing.T) {
@@ -311,4 +315,43 @@ func TestARayJobsSubmitterJobIsNotTheRun(t *testing.T) {
 	sub := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "ray-1", OwnerReferences: []metav1.OwnerReference{{Kind: "RayJob", Name: "ray-1"}}}}
 	assert.True(t, ownedByRayJob(sub))
 	assert.False(t, ownedByRayJob(&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "train-1"}}))
+}
+
+func TestTheQueueIsTheSameShapeForKueue(t *testing.T) {
+	wl := workload(false)
+	_ = unstructured.SetNestedSlice(wl.Object, []interface{}{cond("QuotaReserved", "False", 0, "Pending", "couldn't assign flavors: insufficient quota for nvidia.com/gpu")}, "status", "conditions")
+	st := &v1alpha1.AIJobStatus{}
+	applyObservation(st, observed{execution: execution("Job"), workload: wl})
+	require.NotNil(t, st.Queue)
+	assert.Equal(t, v1alpha1.AIJobQueue{Backend: "kueue", Name: "default-queue", Workload: "job-train-1-abc", LocalQueue: "default-queue",
+		Reason: "couldn't assign flavors: insufficient quota for nvidia.com/gpu"}, *st.Queue)
+
+	applyObservation(st, observed{execution: execution("Job"), workload: workload(true)})
+	assert.True(t, st.Queue.Admitted)
+	assert.Empty(t, st.Queue.Reason)
+	assert.Equal(t, "gpu-cluster-queue", st.Queue.ClusterQueue)
+
+	// Kueue clears the admission when the job finishes: it was still admitted
+	applyObservation(st, observed{execution: execution("Job"), workload: workload(false)})
+	assert.True(t, st.Queue.Admitted)
+	assert.Equal(t, "gpu-cluster-queue", st.Queue.ClusterQueue)
+}
+
+func TestAHeldPodSaysWhyAndAPlacedOneIsAdmitted(t *testing.T) {
+	held := kaiPod("p0", "", corev1.PodPending)
+	held.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Message: "queue team-a is over its quota"}}
+	st := &v1alpha1.AIJobStatus{}
+	applyObservation(st, observed{execution: execution("Job"), pods: []corev1.Pod{held}})
+	assert.Equal(t, "queue team-a is over its quota", st.Queue.Reason)
+
+	applyObservation(st, observed{execution: execution("Job"), pods: []corev1.Pod{kaiPod("p0", "node-a", corev1.PodRunning)}})
+	assert.True(t, st.Queue.Admitted)
+	assert.Empty(t, st.Queue.Reason)
+}
+
+func TestATrainJobsVerdictIsItsCompleteOrFailedCondition(t *testing.T) {
+	phase, _ := terminalCondition(execution("TrainJob", cond("Complete", "True", time.Hour, "JobsCompleted", "jobset completed")))
+	assert.Equal(t, v1alpha1.AIJobPhaseSucceeded, phase)
+	phase, _ = terminalCondition(execution("TrainJob", cond("Failed", "True", time.Hour, "JobsFailed", "jobset failed")))
+	assert.Equal(t, v1alpha1.AIJobPhaseFailed, phase)
 }

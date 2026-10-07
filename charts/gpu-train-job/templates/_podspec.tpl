@@ -315,7 +315,7 @@ The trainer container, shared by both kinds. Takes a dict: "ctx" (root context) 
 {{- define "gpu-train-job.trainerContainer" -}}
 {{- $ := .ctx -}}
 {{- $kind := .kind -}}
-- name: {{ if eq $kind "pytorchjob" }}pytorch{{ else }}trainer{{ end }}
+- name: {{ if eq $kind "pytorchjob" }}pytorch{{ else if eq $kind "trainjob" }}node{{ else }}trainer{{ end }}
   image: {{ printf "%s:%s" $.Values.image.repository (toString $.Values.image.tag) | quote }}
   imagePullPolicy: {{ $.Values.image.pullPolicy | quote }}
   {{- if eq $.Values.job.mode "smoke" }}
@@ -341,6 +341,15 @@ The trainer container, shared by both kinds. Takes a dict: "ctx" (root context) 
       exec torchrun --nnodes="$NNODES" --nproc_per_node="$NPROC_PER_NODE"
       --node_rank="$NODE_RANK" --master_addr="$MASTER_ADDR" --master_port="$MASTER_PORT"
       {{ $script }} "$@"
+    {{- else if eq $kind "trainjob" }}
+    {{- /* Trainer v2's torch policy hands torchrun its world in PET_NNODES, PET_NPROC_PER_NODE,
+           PET_NODE_RANK, PET_MASTER_ADDR and PET_MASTER_PORT, which torchrun reads by itself. */}}
+    - >-
+      {{ $stage }}
+      torchrun {{ $script }} "$@" & pid=$!;
+      trap 'kill -TERM $pid 2>/dev/null' TERM INT;
+      wait $pid; rc=$?; [ $rc -gt 128 ] && wait $pid && rc=$?;
+      if [ -e "$AIF_NO_RETRY_FILE" ]; then exit 3; fi; exit $rc
     {{- else }}
     {{- /* Not exec: torchrun reports any worker failure as exit 1, so a script that cannot succeed on
            a retry leaves $AIF_NO_RETRY_FILE and the shell exits 3 for it (job.failFastExitCodes).
@@ -516,4 +525,52 @@ spec:
       configMap:
         name: {{ include "gpu-train-job.fullname" $ }}-driver
     {{- end }}
+{{- end -}}
+
+
+{{/*
+Pod template of a TrainJob's nodes, in the run's own TrainingRuntime. Trainer v2 runs it as the
+Indexed Job "node" of a JobSet; the container must be named "node" for its torch policy.
+*/}}
+{{- define "gpu-train-job.trainJobPodTemplate" -}}
+metadata:
+  labels:
+    {{- include "gpu-train-job.podLabels" . | nindent 4 }}
+    {{- with (include "gpu-train-job.queuePodLabels" . | trim) }}
+      {{- . | nindent 4 }}
+    {{- end }}
+  {{- with (include "gpu-train-job.podAnnotations" . | trim) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  restartPolicy: Never
+  terminationGracePeriodSeconds: {{ .Values.job.terminationGracePeriodSeconds }}
+  {{- with (include "gpu-train-job.podNetwork" . | trim) }}
+    {{- . | nindent 2 }}
+  {{- end }}
+  {{- with (include "gpu-train-job.podScheduling" . | trim) }}
+    {{- . | nindent 2 }}
+  {{- end }}
+  {{- with (include "gpu-train-job.affinity" . | trim) }}
+  affinity:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- if eq (include "gpu-train-job.gpuMode" .) "dra" }}
+  resourceClaims:
+    - name: gpu
+      {{- if .Values.gpu.sharedClaim }}
+      resourceClaimName: {{ .Values.gpu.sharedClaim }}
+      {{- else }}
+      resourceClaimTemplateName: {{ include "gpu-train-job.fullname" . }}-gpu
+      {{- end }}
+    {{- if .Values.computeDomain.enabled }}
+    - name: compute-domain
+      resourceClaimTemplateName: {{ include "gpu-train-job.fullname" . }}-cd-channel
+    {{- end }}
+  {{- end }}
+  volumes:
+    {{- include "gpu-train-job.volumes" . | trim | nindent 4 }}
+  containers:
+    {{- include "gpu-train-job.trainerContainer" (dict "ctx" . "kind" "trainjob") | trim | nindent 4 }}
 {{- end -}}

@@ -35,6 +35,8 @@ export interface TrainingRun {
   image: string;
   scheduler: string;
   queue: string;
+  // Why the scheduler's queue still holds the run, from the AIJob's status.queue.
+  queueReason?: string;
   age: string;
   pods: any[];
 }
@@ -167,12 +169,14 @@ function aiJobRows(i: TrainingInput, live: Set<string>): TrainingRun[] {
         name:        a.metadata.name,
         namespace:   a.metadata.namespace,
         phase:       AIJOB_PHASE[a.status?.phase] || 'Pending',
-        admitted:    a.status?.admittedAt ? true : null,
+        // status.queue says it for any backend (Kueue, KAI, Run:AI, Volcano); admittedAt is Kueue's
+        admitted:    a.status?.queue ? !!a.status.queue.admitted : (a.status?.admittedAt ? true : null),
         completions: '—',
         nodes:       v.job?.nodes ?? '—',
         image:       v.image?.repository ? `${ v.image.repository }:${ v.image.tag || 'latest' }` : '',
-        scheduler:   v.scheduler?.type || 'none',
+        scheduler:   a.status?.queue?.backend || v.scheduler?.type || 'none',
         queue:       a.status?.queue?.name || v.scheduler?.queue || '',
+        queueReason: a.status?.queue?.admitted ? '' : a.status?.queue?.reason || '',
         age:         a.metadata.creationTimestamp,
         clusterId:   placementOf(a)?.clusterId,
         pods:        podsOfPlacedJob(a, i.placedPods || []),

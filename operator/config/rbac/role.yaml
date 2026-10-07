@@ -227,6 +227,14 @@ rules:
   - patch
   - watch
 - apiGroups:
+  - jobset.x-k8s.io
+  resources:
+  - jobsets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - kubeflow.org
   resources:
   - pytorchjobs
@@ -363,3 +371,16 @@ rules:
   verbs:
   - get
   - list
+- apiGroups:
+  - trainer.kubeflow.org
+  resources:
+  - trainingruntimes
+  - trainjobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch

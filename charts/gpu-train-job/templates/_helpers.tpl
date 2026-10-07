@@ -34,6 +34,9 @@ keyed by it). Not used in label selectors.
 {{- define "gpu-train-job.rdzvEndpoint" -}}
 {{- if eq .Values.rendezvous.backend "etcd-v2" -}}
 {{ required "rendezvous.endpoint is required for etcd-v2" .Values.rendezvous.endpoint }}
+{{- else if eq .Values.job.kind "trainjob" -}}
+{{- /* node 0 of the JobSet's "node" Job, through the JobSet's headless Service */ -}}
+{{ include "gpu-train-job.fullname" . }}-node-0-0.{{ include "gpu-train-job.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.rendezvous.port }}
 {{- else -}}
 {{ include "gpu-train-job.fullname" . }}-0.{{ include "gpu-train-job.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.rendezvous.port }}
 {{- end -}}

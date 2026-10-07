@@ -338,7 +338,7 @@ export function resolvedSections(form: Form, resolvedGpuMode: string): { title: 
     {
       title: 'Runtime',
       rows:  [
-        { label: 'Workload', value: form.kind === 'pytorchjob' ? 'PyTorchJob (Training Operator)' : 'Indexed Job' },
+        { label: 'Workload', value: { pytorchjob: 'PyTorchJob (Training Operator)', rayjob: 'RayJob (KubeRay)', trainjob: 'TrainJob (Kubeflow Trainer v2)' }[form.kind as string] || 'Indexed Job' },
         { label: 'Image', value: `${ form.image }:${ form.tag }` },
         { label: 'Run mode', value: form.mode },
         { label: 'Rendezvous', value: form.nodes > 1 ? form.rendezvous : '— (single worker)' },

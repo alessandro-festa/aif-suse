@@ -207,6 +207,38 @@ if s == "volcano":
   fi
 done
 
+# TrainJob: the run's own TrainingRuntime (Trainer's torch policy, whatever the mode) and a
+# TrainJob on it; the scheduler's binding on the pod template (Kueue's on the TrainJob), the gang in
+# the chart's PodGroup.
+for sched in none kueue kai volcano; do
+  for mode in torchrun custom; do
+    out=$(helm template t . --set job.kind=trainjob --set job.mode=$mode --set job.nodes=2 --set job.command="{python,-c,print(1)}" --set gpu.mode=device-plugin --set scheduler.type=$sched $([ $sched = kueue ] || [ $sched = kai ] && echo --set scheduler.queue=q) 2>&1)
+    if printf '%s\n' "$out" | S=$sched M=$mode python3 -c '
+import os, sys, yaml
+docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+rt = next(d for d in docs if d["kind"] == "TrainingRuntime"); tj = next(d for d in docs if d["kind"] == "TrainJob")
+s, m = os.environ["S"], os.environ["M"]
+assert tj["spec"]["runtimeRef"] == {"apiGroup": "trainer.kubeflow.org", "kind": "TrainingRuntime", "name": "t"}
+assert rt["spec"]["mlPolicy"]["numNodes"] == 2 and rt["spec"]["mlPolicy"]["torch"] == {"numProcPerNode": 1}
+assert tj["spec"]["trainer"] == {"numNodes": 2}, "Trainer adds PET_* only with a trainer section"
+rj = rt["spec"]["template"]["spec"]["replicatedJobs"][0]
+assert rj["name"] == "node" and rj["template"]["metadata"]["labels"]["trainer.kubeflow.org/trainjob-ancestor-step"] == "trainer"
+pod = rj["template"]["spec"]["template"]; c = pod["spec"]["containers"][0]
+assert c["name"] == "node" and c["resources"]["limits"]["nvidia.com/gpu"] == "1"
+assert not any(d["kind"] == "Service" for d in docs), "the JobSet makes its own headless Service"
+if s == "kueue":
+    assert tj["metadata"]["labels"]["kueue.x-k8s.io/queue-name"] == "q" and tj["spec"]["suspend"] is True
+if s in ("kai", "volcano"):
+    assert pod["spec"]["schedulerName"] == {"kai": "kai-scheduler", "volcano": "volcano"}[s]
+if s == "volcano":
+    assert next(d for d in docs if d["kind"] == "PodGroup")["spec"]["minMember"] == 2'; then
+      printf '✓ %s\n' "trainjob ($mode) under $sched: own runtime, node Job, binding in place"
+    else
+      printf '✗ %s\n' "trainjob ($mode) under $sched: wrong"; printf '%s\n' "$out" | tail -3; fail=1
+    fi
+  done
+done
+
 echo
 [ $fail -eq 0 ] && echo "chart render checks passed" || echo "chart render checks FAILED"
 exit $fail

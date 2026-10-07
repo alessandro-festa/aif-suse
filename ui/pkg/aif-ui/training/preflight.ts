@@ -123,6 +123,7 @@ export interface Facts {
   storageClasses: StorageClassInfo[];
   pytorchOperatorInstalled: boolean; // Kubeflow Training Operator: required for job.kind=pytorchjob
   kuberayInstalled?: boolean; // KubeRay operator: required for job.kind=rayjob
+  trainerInstalled?: boolean; // Kubeflow Trainer v2: required for job.kind=trainjob
   // The AIJob API: the operator installs the run, from the training chart built into it.
   jobApi: boolean;
   // A custom chart instead of the built-in one (Advanced). null = the built-in chart.
@@ -147,7 +148,7 @@ export interface Form {
   releaseName: string;
   image: string;
   tag: string;
-  kind: 'job' | 'pytorchjob' | 'rayjob'; // Indexed Job, a Kubeflow PyTorchJob (Master + Workers), or a KubeRay RayJob (head + workers)
+  kind: 'job' | 'pytorchjob' | 'rayjob' | 'trainjob'; // Indexed Job, a Kubeflow PyTorchJob (Master + Workers), a KubeRay RayJob (head + workers), or a Kubeflow Trainer v2 TrainJob
   // job.kind=rayjob: the Ray runtime environment (pip packages, env vars) as YAML; ray.runtimeEnv in the chart
   rayRuntimeEnv: string;
   mode: 'smoke' | 'torchrun' | 'custom';
@@ -935,6 +936,15 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
     }
   }
 
+  if (form.kind === 'trainjob') {
+    if (!facts.trainerInstalled) {
+      add('kind', 'fail', 'Kubeflow Trainer v2 is not installed on this cluster', 'TrainJob objects would be refused. Install Kubeflow Trainer (Compute Pools → Cluster add-ons), or choose "Indexed Job".');
+    } else {
+      add('kind', 'pass', `TrainJob: ${ form.nodes } node(s) under Kubeflow Trainer v2`,
+        'The run brings its own TrainingRuntime. Trainer\'s torch policy hands torchrun its world (PET_* variables); each pod also has JOB_COMPLETION_INDEX, NNODES and RDZV_ENDPOINT.');
+    }
+  }
+
   // 9. mode-specific hints
   if (form.mode === 'torchrun') {
     // Rendezvous is a Job-path concern: the training-operator supplies MASTER_ADDR/MASTER_PORT.
@@ -1164,7 +1174,7 @@ export function formFromValues(values: any, base: Form): { form: Form; unmapped:
 
   set('image', doc.image?.repository, str);
   set('tag', doc.image?.tag, str);
-  set('kind', doc.job?.kind, oneOf(['job', 'pytorchjob', 'rayjob'] as const, base.kind));
+  set('kind', doc.job?.kind, oneOf(['job', 'pytorchjob', 'rayjob', 'trainjob'] as const, base.kind));
   set('rayRuntimeEnv', doc.ray?.runtimeEnv, str);
   set('mode', doc.job?.mode, oneOf(['smoke', 'torchrun', 'custom'] as const, base.mode));
   set('nodes', doc.job?.nodes, num);

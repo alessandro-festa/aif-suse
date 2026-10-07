@@ -229,9 +229,9 @@ the local scheduler (KAI, Kueue, Volcano, Run:ai).
 6. Gang scheduling is implicit (KAI PodGrouper, Kueue admission). There's nothing for Volcano `minMember`.
 7. Fractional GPUs are KAI-only. HAMi resource requests are missing.
 8. The only quota editors are the KAI Queue tree and ResourceQuota. Kueue ClusterQueue and Volcano Queue are missing.
-9. `AIJob.status.queue` has Kueue/KAI-specific fields. Replace them with `{backend, queue, admitted, reason}`.
+9. ~~`AIJob.status.queue` has Kueue/KAI-specific fields.~~ Done (phase 9): `{backend, name, admitted, reason}`.
 10. NVIDIA-only resource keys, GFD labels and DRA attribute names.
-11. Only Job and PyTorchJob are supported. `TrainJob` (Trainer v2) is missing.
+11. ~~Only Job and PyTorchJob are supported.~~ Done (phases 9, 11): `TrainJob` (Trainer v2) and `RayJob` too.
 12. Single cluster (`local`): §6 addresses this.
 
 ## 8. Phases
@@ -247,7 +247,7 @@ the local scheduler (KAI, Kueue, Volcano, Run:ai).
 | 6 | Volcano backend | job queued and gang-scheduled by Volcano |
 | 7 | HAMi on the sharing axis | a fractional job lands via HAMi |
 | 8 | Catalog entries (KAI, Kueue, Volcano, HAMi; Kubeflow training-only preset) + "install a scheduler on this cluster" empty state | install from Compute Pools |
-| 9 | Generic `AIJob.status.queue`; Trainer v2 `TrainJob` template + observer | — |
+| 9 | Generic `AIJob.status.queue`; Trainer v2 `TrainJob` template + observer (engineering notes D-56, D-57) | ✅ a TrainJob trains on the lab; the queue reads the same under Volcano |
 | 10 | **Exploration: training frameworks beyond PyTorch** — JAX, TensorFlow, DeepSpeed (§8.1) | a findings section, and per framework a smoke-test profile that runs on the lab or a reason it cannot |
 | 11 | **Ray / KubeRay** as a training runtime: add-on, `job.kind=rayjob`, Ray Train test profile (engineering notes D-54) | ✅ a RayJob trains on the lab and its cluster is removed after |
 
@@ -293,7 +293,8 @@ images with the framework baked in (NGC JAX/TF containers, a CUDA PyTorch image 
 ops prebuilt); pip at start is fine for a smoke test, not for production.
 
 Kubeflow Trainer v2 (the training add-on) also ships JAX/DeepSpeed ClusterTrainingRuntimes from
-2.3.0 (Kubernetes ≥ 1.32); using them is the TrainJob path of Phase 9. The Indexed Job path above
+2.3.0 (Kubernetes ≥ 1.32). Phase 9's TrainJob path brings its own torch runtime instead (the chart
+installs no runtimes); using the shipped ones is backlog (O-36). The Indexed Job path above
 needs no operator at all.
 
 Lab: kind-sims-datacenter (management) plus downstream-1 and downstream-2. Target is a different
