@@ -3,7 +3,8 @@ Install-time checks (Helm `lookup`; skipped under `helm template`). Each failure
 real cause instead of leaving a Pending pod with no events. Disable with preflight.enabled=false.
 */}}
 {{- define "gpu-train-job.preflight" -}}
-{{- if and (gt (int .Values.gpu.sharedMemoryMiB) 0) (not .Values.gpu.sharedClaim) (ne .Values.scheduler.type "kai") }}
+{{- $backend := include "gpu-train-job.backend" . | fromYaml }}
+{{- if and (gt (int .Values.gpu.sharedMemoryMiB) 0) (not .Values.gpu.sharedClaim) (not (has "kai-fraction" $backend.sharing)) }}
   {{- fail "preflight: gpu.sharedMemoryMiB (a GPU-memory share) needs scheduler.type=kai (KAI GPU sharing) or gpu.sharedClaim (an MPS ResourceClaim under DRA)." }}
 {{- end }}
 {{- if and (eq (include "gpu-train-job.gpuMode" .) "kai-fraction") (gt (int .Values.job.gpusPerNode) 1) }}
@@ -63,7 +64,7 @@ real cause instead of leaving a Pending pod with no events. Disable with preflig
     {{- end }}
   {{- end }}
 {{- end }}
-{{- if or (eq .Values.scheduler.type "kai") (eq .Values.scheduler.type "runai") }}
+{{- if eq $backend.quota "queue-tree" }}
   {{- $product := ternary "KAI" "Run:AI" (eq .Values.scheduler.type "kai") }}
   {{- /* API discovery needs no RBAC, unlike reading CRDs */ -}}
   {{- if not (.Capabilities.APIVersions.Has "scheduling.run.ai/v2/Queue") }}
@@ -74,7 +75,7 @@ real cause instead of leaving a Pending pod with no events. Disable with preflig
     {{- fail (printf "preflight: %s queue %q does not exist (kubectl get queues.scheduling.run.ai)." $product .Values.scheduler.queue) }}
   {{- end }}
 {{- end }}
-{{- if eq .Values.scheduler.type "kai" }}
+{{- with $backend.detect }}{{ with .unless }}
   {{- /*
     KAI and Run:AI share the queues.scheduling.run.ai CRD -- Run:AI is built on KAI -- so every
     check above passes on a Run:AI cluster and the pods then wait forever for a scheduler called
@@ -82,11 +83,12 @@ real cause instead of leaving a Pending pod with no events. Disable with preflig
     additionally installs the run.ai API group, which KAI on its own does not, and that is the
     cheapest way to tell the two apart.
   */ -}}
-  {{- if .Capabilities.APIVersions.Has "run.ai/v1/Cluster" }}
+  {{- if $.Capabilities.APIVersions.Has (printf "%s/v1" .) }}
     {{- fail "preflight: scheduler.type=kai, but this cluster is running Run:AI, not stand-alone KAI. They share the queue CRD and differ in schedulerName, so KAI pods here stay Pending with no event. Use scheduler.type=runai." }}
   {{- end }}
-{{- end }}
-{{- if eq .Values.scheduler.type "runai" }}
+{{- end }}{{ end }}
+{{- with $backend.queue }}{{ with .namespaceLabel }}
+  {{- $label := . }}
   {{- /*
     Run:AI's pod webhooks are scoped `namespaceSelector: runai/queue Exists`. Without the label the
     pods are admitted by the API server and then sit Pending with runai-scheduler never looking at
@@ -101,17 +103,17 @@ real cause instead of leaving a Pending pod with no events. Disable with preflig
     below names it instead, and the extension's pre-flight checks it properly (it can tolerate a
     read it is not allowed to make).
   */ -}}
-  {{- $ns := lookup "v1" "Namespace" "" .Release.Namespace }}
+  {{- $ns := lookup "v1" "Namespace" "" $.Release.Namespace }}
   {{- if $ns }}
-    {{- $nsQueue := dig "metadata" "labels" "runai/queue" "" $ns }}
+    {{- $nsQueue := dig "metadata" "labels" $label "" $ns }}
     {{- if not $nsQueue }}
-      {{- fail (printf "preflight: namespace %q has no runai/queue label, so Run:AI will not manage pods in it. Install into a namespace a run.ai Project owns (kubectl get projects.run.ai -o custom-columns=PROJECT:.metadata.name,NAMESPACE:.status.namespace). Labelling this one by hand is not enough on its own -- it gives the pods the webhooks but none of the RoleBindings the scheduler needs to bind them." .Release.Namespace) }}
-    {{- else if ne $nsQueue .Values.scheduler.queue }}
-      {{- fail (printf "preflight: namespace %q is labelled runai/queue=%s but scheduler.queue is %q. The namespace label wins for admission and the pod label for accounting; disagreeing is never what you meant." .Release.Namespace $nsQueue .Values.scheduler.queue) }}
+      {{- fail (printf "preflight: namespace %q has no %s label, so Run:AI will not manage pods in it. Install into a namespace a run.ai Project owns (kubectl get projects.run.ai -o custom-columns=PROJECT:.metadata.name,NAMESPACE:.status.namespace). Labelling this one by hand is not enough on its own -- it gives the pods the webhooks but none of the RoleBindings the scheduler needs to bind them." $.Release.Namespace $label) }}
+    {{- else if ne $nsQueue $.Values.scheduler.queue }}
+      {{- fail (printf "preflight: namespace %q is labelled %s=%s but scheduler.queue is %q. The namespace label wins for admission and the pod label for accounting; disagreeing is never what you meant." $.Release.Namespace $label $nsQueue $.Values.scheduler.queue) }}
     {{- end }}
   {{- end }}
-{{- end }}
-{{- if eq .Values.scheduler.type "kueue" }}
+{{- end }}{{ end }}
+{{- if eq $backend.quota "clusterqueue" }}
   {{- if not (or (.Capabilities.APIVersions.Has "kueue.x-k8s.io/v1beta2/LocalQueue") (.Capabilities.APIVersions.Has "kueue.x-k8s.io/v1beta1/LocalQueue")) }}
     {{- fail "preflight: scheduler.type=kueue but Kueue is not installed on this cluster." }}
   {{- end }}

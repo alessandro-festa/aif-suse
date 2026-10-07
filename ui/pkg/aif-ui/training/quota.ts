@@ -17,6 +17,8 @@
 // every ancestor's cap. That chain is what `effectiveCap` walks, and what lets the UI answer
 // "why can't I get another GPU?" with a specific reason instead of a pending pod.
 
+import { backendForSchedulerName, podQueueLabel, SCHEDULER_BACKENDS } from './schedulers';
+
 export type ResourceName = 'gpu' | 'cpu' | 'memory';
 export const RESOURCES: ResourceName[] = ['gpu', 'cpu', 'memory'];
 
@@ -442,10 +444,11 @@ export function auditQuotas(index: QueueIndex, capacity: ClusterCapacity, resour
 //   Run:AI label runai/queue on the *namespace*, and label project on the pod
 // All three are checked, pod labels first.
 
-export const KAI_QUEUE_LABEL = 'kai.scheduler/queue';
-export const RUNAI_QUEUE_LABEL = 'runai/queue';
+// The keys come from the scheduler table (schedulers.ts, the chart's schedulers.yaml).
+export const KAI_QUEUE_LABEL = podQueueLabel('kai');
+export const RUNAI_QUEUE_LABEL = SCHEDULER_BACKENDS.runai.queue?.namespaceLabel || '';
 /** Run:AI's pod-side queue binding. Deliberately generic, so only read as a last resort. */
-export const RUNAI_POD_QUEUE_LABEL = 'project';
+export const RUNAI_POD_QUEUE_LABEL = podQueueLabel('runai');
 /**
  * Run:AI treats an unversioned namespace as pre-v2 and gives it none of the v2 queue accounting,
  * so a namespace meant for Run:AI carries this alongside runai/queue. KAI ignores it.
@@ -478,11 +481,13 @@ export function namespaceQueueMap(namespaces: { metadata?: { name?: string; labe
 export function resolvePodQueue(pod: PodLike, nsQueue: Record<string, string>): string | null {
   const labels = pod?.metadata?.labels || {};
 
-  // `project` last, and only for a pod the Run:AI scheduler owns: on any other pod the word means
-  // whatever its author meant by it, and a wrong match bills someone else's queue.
-  const runaiPodQueue = pod?.spec?.schedulerName === 'runai-scheduler' ? labels[RUNAI_POD_QUEUE_LABEL] : undefined;
+  // The pod label of the scheduler that owns the pod last, and only for that scheduler: Run:AI's is
+  // `project`, which on any other pod means whatever its author meant by it, and a wrong match bills
+  // someone else's queue.
+  const ownLabel = podQueueLabel(backendForSchedulerName(pod?.spec?.schedulerName) || 'none');
+  const ownPodQueue = ownLabel ? labels[ownLabel] : undefined;
 
-  return labels[KAI_QUEUE_LABEL] || labels[RUNAI_QUEUE_LABEL] || runaiPodQueue ||
+  return labels[KAI_QUEUE_LABEL] || labels[RUNAI_QUEUE_LABEL] || ownPodQueue ||
     nsQueue[pod?.metadata?.namespace || ''] || null;
 }
 

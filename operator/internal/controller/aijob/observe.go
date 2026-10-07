@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/SUSE/aif-operator/api/v1alpha1"
+	"github.com/SUSE/aif-operator/internal/trainchart"
 )
 
 // maxListedPods is how many pods the status lists in full. Above it only failed
@@ -36,12 +37,28 @@ import (
 const maxListedPods = 16
 
 const (
-	kaiScheduler    = "kai-scheduler"
-	kaiQueueLabel   = "kai.scheduler/queue"
 	gpuResource     = corev1.ResourceName("nvidia.com/gpu")
 	gpuProductLabel = "nvidia.com/gpu.product"
 	completionIndex = "batch.kubernetes.io/job-completion-index"
 )
+
+// podQueueLabels maps a schedulerName to the pod label that names its queue, for
+// the backends that hold pods unplaced until their queue has room (KAI, Run:AI).
+// From the built-in chart's schedulers.yaml, embedded at build time, so a failure
+// to read it is a build defect (TestBackendsAreReadFromTheChart), not a runtime one.
+var podQueueLabels = func() map[string]string {
+	backends, err := trainchart.Backends()
+	if err != nil {
+		panic(err)
+	}
+	m := map[string]string{}
+	for _, b := range backends {
+		if b.SchedulerName != "" && b.Admission == "scheduler" && b.Queue != nil && b.Queue.Target == "pod" {
+			m[b.SchedulerName] = b.Queue.Label
+		}
+	}
+	return m
+}()
 
 // observed is everything one reconcile read about the execution. Each field is
 // nil or empty when the object does not exist (yet, or any more); the status is
@@ -79,7 +96,7 @@ func applyObservation(st *v1alpha1.AIJobStatus, o observed) {
 			st.AdmittedAt = t
 		}
 	}
-	if q := kaiQueue(o.pods); q != "" {
+	if q := podQueue(o.pods); q != "" {
 		if st.Queue == nil {
 			st.Queue = &v1alpha1.AIJobQueue{}
 		}
@@ -122,8 +139,8 @@ func derivePhase(current v1alpha1.AIJobPhase, installed bool, o observed) v1alph
 	if current == v1alpha1.AIJobPhaseRunning {
 		return current // between a pod finishing and the Job reporting it
 	}
-	// KAI holds a pod unplaced until its queue has room: that is a queue too.
-	if kaiHeld(o.pods) {
+	// KAI and Run:AI hold a pod unplaced until its queue has room: that is a queue too.
+	if schedulerHeld(o.pods) {
 		return v1alpha1.AIJobPhaseQueued
 	}
 	// Installed, not queued, no pod running yet: the pods are being scheduled or
@@ -131,23 +148,25 @@ func derivePhase(current v1alpha1.AIJobPhase, installed bool, o observed) v1alph
 	return v1alpha1.AIJobPhasePending
 }
 
-// kaiQueue is the KAI queue the job's pods were submitted to, or "".
-func kaiQueue(pods []corev1.Pod) string {
+// podQueue is the queue a queue-holding scheduler (KAI, Run:AI) was given the
+// pods in, from the pod label that backend reads.
+func podQueue(pods []corev1.Pod) string {
 	for _, p := range pods {
-		if p.Spec.SchedulerName == kaiScheduler && p.Labels[kaiQueueLabel] != "" {
-			return p.Labels[kaiQueueLabel]
+		if label, ok := podQueueLabels[p.Spec.SchedulerName]; ok && p.Labels[label] != "" {
+			return p.Labels[label]
 		}
 	}
 	return ""
 }
 
-// kaiHeld says whether KAI is holding every pod of the job unplaced.
-func kaiHeld(pods []corev1.Pod) bool {
+// schedulerHeld says whether a queue-holding scheduler is keeping every pod of the
+// job unplaced.
+func schedulerHeld(pods []corev1.Pod) bool {
 	if len(pods) == 0 {
 		return false
 	}
 	for _, p := range pods {
-		if p.Spec.SchedulerName != kaiScheduler || p.Spec.NodeName != "" || p.Status.Phase != corev1.PodPending {
+		if _, ok := podQueueLabels[p.Spec.SchedulerName]; !ok || p.Spec.NodeName != "" || p.Status.Phase != corev1.PodPending {
 			return false
 		}
 	}

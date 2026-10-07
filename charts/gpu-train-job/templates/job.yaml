@@ -8,8 +8,8 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "gpu-train-job.labels" . | nindent 4 }}
-    {{- if eq .Values.scheduler.type "kueue" }}
-    kueue.x-k8s.io/queue-name: {{ required "scheduler.queue is required when scheduler.type=kueue" .Values.scheduler.queue | quote }}
+    {{- with include "gpu-train-job.queueWorkloadLabels" . }}
+    {{- . | nindent 4 }}
     {{- end }}
 spec:
   completionMode: Indexed
@@ -31,7 +31,7 @@ spec:
           operator: In
           values: {{ toJson . }}
       {{- end }}
-  {{- if eq .Values.scheduler.type "kueue" }}
+  {{- if include "gpu-train-job.suspended" . }}
   suspend: true
   {{- end }}
   {{- if gt (int .Values.job.activeDeadlineSeconds) 0 }}

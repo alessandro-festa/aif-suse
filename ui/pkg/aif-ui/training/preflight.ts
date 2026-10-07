@@ -4,31 +4,17 @@
 import { GpuType, gpuShort, sameGpu } from './gputypes';
 import { SharedGpu, sharedGpuChecks, kaiShareChecks } from './gpushare';
 import { ClusterCapacity, QueueIndex, availability, explain } from './quota';
+import {
+  backendForSchedulerName, backendOf, holdsPods, placesGpuMemoryShares, podQueueLabel, SchedulerType, usesQueueTree,
+  workloadQueueLabel
+} from './schedulers';
+
+// How each scheduler binds a run (schedulerName, queue label) is in schedulers.ts, the chart's
+// schedulers.yaml. kai and runai share the queue-tree maths below: Run:AI is the commercial build
+// of KAI, with the same Queue CRD, queue hierarchy and gang admission.
+export type { SchedulerType } from './schedulers';
 
 export type Severity = 'pass' | 'fail' | 'warn' | 'info';
-
-/**
- * kai and runai are the same scheduler wearing two names: Run:AI is the commercial build of KAI,
- * with the same Queue CRD, the same queue hierarchy and the same gang admission. They differ only
- * in the two strings written onto the pod -- schedulerName, and the label that names the queue --
- * so every queue calculation below treats them alike and only the emitted YAML branches.
- */
-export type SchedulerType = 'none' | 'kueue' | 'kai' | 'runai';
-
-/** True for the two queue-hierarchy schedulers, whose queue selection and quota maths are shared. */
-export function isQueueScheduler(s: SchedulerType): boolean {
-  return s === 'kai' || s === 'runai';
-}
-
-/** schedulerName and the queue-binding pod label, per scheduler. */
-export const SCHEDULER_BINDING: Record<'kai' | 'runai', { schedulerName: string; queueLabel: string; display: string }> = {
-  kai: {
-    schedulerName: 'kai-scheduler', queueLabel: 'kai.scheduler/queue', display: 'KAI scheduler'
-  },
-  runai: {
-    schedulerName: 'runai-scheduler', queueLabel: 'project', display: 'Run:AI scheduler'
-  },
-};
 
 export interface Check {
   id: string;
@@ -449,8 +435,8 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
     } else {
       add('scheduler', 'fail', 'Kueue is not installed on this cluster', 'Pick "Default scheduler" or install Kueue first.');
     }
-  } else if (isQueueScheduler(form.scheduler)) {
-    const bind = SCHEDULER_BINDING[form.scheduler as 'kai' | 'runai'];
+  } else if (usesQueueTree(form.scheduler)) {
+    const bind = backendOf(form.scheduler);
 
     if (!facts.kaiInstalled) {
       add('scheduler', 'fail', `${ bind.display } is not installed on this cluster`, `Pods with schedulerName ${ bind.schedulerName } would stay Pending forever. Pick another scheduler.`);
@@ -473,7 +459,7 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
 
   // 6. queue exists (+ quota). A GPU-memory share under KAI is charged as a fraction of a GPU: its
   // share of the node's GPU memory, rounded up to KAI's two decimals.
-  const kaiShare = form.gpuShareMiB > 0 && isQueueScheduler(form.scheduler);
+  const kaiShare = form.gpuShareMiB > 0 && placesGpuMemoryShares(form.scheduler);
   const shareFraction = kaiShare && facts.gpuNodeMemoryMiB ? Math.ceil((form.gpuShareMiB / facts.gpuNodeMemoryMiB) * 100) / 100 : 1;
   const requested = kaiShare ? form.nodes * shareFraction : form.nodes * form.gpusPerNode;
 
@@ -506,7 +492,7 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
         add('queue', 'pass', `LocalQueue ${ lq.name } → ${ lq.clusterQueue }`, typeof quota === 'number' ? `GPU quota ${ quota } (${ pool } pool)` : '');
       }
     }
-  } else if (isQueueScheduler(form.scheduler) && facts.kaiInstalled) {
+  } else if (usesQueueTree(form.scheduler) && facts.kaiInstalled) {
     const node = facts.queueIndex[form.queue];
 
     if (!form.queue) {
@@ -631,7 +617,7 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
 
   // 7c. a shared GPU: the claim, one GPU per pod, and the memory left on it
   if (kaiShare) {
-    kaiShareChecks(form.gpuShareMiB, form.gpusPerNode, facts, SCHEDULER_BINDING[form.scheduler as 'kai' | 'runai'].display).forEach((c) => add(c.id, c.severity, c.title, c.detail));
+    kaiShareChecks(form.gpuShareMiB, form.gpusPerNode, facts, backendOf(form.scheduler).display).forEach((c) => add(c.id, c.severity, c.title, c.detail));
   } else if (form.gpuShareMiB > 0) {
     sharedGpuChecks(form.namespace, form.gpuSharedClaim, form.gpuShareMiB, form.nodes, form.gpusPerNode, facts, mode, form.scheduler).forEach((c) => add(c.id, c.severity, c.title, c.detail));
   }
@@ -836,7 +822,7 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
         'PyTorchJob objects would be created but nothing would act on them. Install the Training Operator, or choose "Indexed Job" — torchrun works there with no operator.');
     } else {
       add('kind', 'pass', `PyTorchJob: 1 master + ${ Math.max(form.nodes - 1, 0) } worker(s)`,
-        isQueueScheduler(form.scheduler) ? `${ SCHEDULER_BINDING[form.scheduler as 'kai' | 'runai'].display } gang-schedules the replicas together: all of them are admitted, or none are.` : 'The training-operator injects RANK/WORLD_SIZE/MASTER_ADDR into every replica.');
+        holdsPods(form.scheduler) ? `${ backendOf(form.scheduler).display } gang-schedules the replicas together: all of them are admitted, or none are.` : 'The training-operator injects RANK/WORLD_SIZE/MASTER_ADDR into every replica.');
     }
     if (form.scheduler === 'none' && form.nodes > 1) {
       add('kind-gang', 'warn', 'Multi-node PyTorchJob on the default scheduler',
@@ -1005,7 +991,7 @@ export function chartValuesFor(f: Form, podsReadable: boolean): any {
     gpu: {
       mode:            f.gpuMode,
       productName:     f.gpuProduct,
-      sharedClaim:     f.gpuShareMiB > 0 && !isQueueScheduler(f.scheduler) ? f.gpuSharedClaim : '', // KAI shares need no claim
+      sharedClaim:     f.gpuShareMiB > 0 && !placesGpuMemoryShares(f.scheduler) ? f.gpuSharedClaim : '', // KAI shares need no claim
       sharedMemoryMiB: f.gpuShareMiB > 0 ? f.gpuShareMiB : 0,
     },
     computeDomain: { enabled: f.computeDomain },
@@ -1332,17 +1318,16 @@ export function formFromManifest(docs: any[], base: Form): { form: Form; unmappe
   // Both gang schedulers are recognised by their schedulerName, then by their own queue label.
   // Run:AI's label is the bare word `project`, which is generic enough to appear on a pod for
   // unrelated reasons, so it is only read once runai-scheduler has already identified the pod.
-  const queueSched = (Object.keys(SCHEDULER_BINDING) as ('kai' | 'runai')[])
-    .find((k) => SCHEDULER_BINDING[k].schedulerName === pod.schedulerName);
+  const queueSched = backendForSchedulerName(pod.schedulerName);
 
-  if (queueSched) {
-    const { queueLabel } = SCHEDULER_BINDING[queueSched];
+  if (queueSched && podQueueLabel(queueSched)) {
+    const queueLabel = podQueueLabel(queueSched);
 
     form.scheduler = queueSched;
     form.queue = String(podLabels[queueLabel] || jobLabels[queueLabel] || '');
-  } else if (jobLabels['kueue.x-k8s.io/queue-name']) {
+  } else if (jobLabels[workloadQueueLabel('kueue')]) {
     form.scheduler = 'kueue';
-    form.queue = String(jobLabels['kueue.x-k8s.io/queue-name']);
+    form.queue = String(jobLabels[workloadQueueLabel('kueue')]);
   } else if (pod.schedulerName && pod.schedulerName !== 'default-scheduler') {
     unmapped.push(`schedulerName=${ pod.schedulerName }`);
   }
@@ -1460,7 +1445,7 @@ export const POINT_IN_TIME_CHECKS = ['headroom', 'gpu-in-use', 'capacity', 'disk
  *   waits in its queue, so a point-in-time failure is a warning that it will wait.
  */
 export function checksFor(checks: Check[], ctx: { profile: boolean; scheduler: SchedulerType }): Check[] {
-  const queued = ctx.scheduler === 'kueue' || isQueueScheduler(ctx.scheduler);
+  const queued = !!backendOf(ctx.scheduler).queue;
 
   return checks.map((c) => {
     if (!POINT_IN_TIME_CHECKS.includes(c.id) || c.severity === 'pass' || c.severity === 'info') {

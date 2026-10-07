@@ -122,10 +122,8 @@ pass-through; schedulerName is what hands the pod to KAI (and is what KAI's PodG
 together with the kai.scheduler/queue label, to gang-schedule the whole group).
 */}}
 {{- define "gpu-train-job.podScheduling" -}}
-{{- if eq .Values.scheduler.type "kai" }}
-schedulerName: kai-scheduler
-{{- else if eq .Values.scheduler.type "runai" }}
-schedulerName: runai-scheduler
+{{- with (include "gpu-train-job.backend" . | fromYaml).schedulerName }}
+schedulerName: {{ . }}
 {{- end }}
 {{- with .Values.scheduler.priorityClassName }}
 priorityClassName: {{ . | quote }}
@@ -151,8 +149,8 @@ imagePullSecrets:
 {{- end -}}
 
 {{/*
-Queue label applied to every pod template. Both schedulers bind by pod label rather than by
-namespace, but they do not agree on the key: KAI reads kai.scheduler/queue, Run:AI reads `project`.
+Queue label applied to every pod template, for backends whose queue target is the pod
+(schedulers.yaml). They do not agree on the key: KAI reads kai.scheduler/queue, Run:AI reads `project`.
 Run:AI's webhook also stamps run.ai/* labels and the pod-group annotation onto the pod; those are
 its to write, not ours.
 */}}
@@ -169,10 +167,9 @@ gpu-memory: {{ int .Values.gpu.sharedMemoryMiB | toString | quote }}
 {{- end -}}
 
 {{- define "gpu-train-job.queuePodLabels" -}}
-{{- if eq .Values.scheduler.type "kai" }}
-kai.scheduler/queue: {{ required "scheduler.queue is required when scheduler.type=kai" .Values.scheduler.queue | quote }}
-{{- else if eq .Values.scheduler.type "runai" }}
-project: {{ required "scheduler.queue is required when scheduler.type=runai" .Values.scheduler.queue | quote }}
+{{- $queue := (include "gpu-train-job.backend" . | fromYaml).queue }}
+{{- if and $queue (eq $queue.target "pod") }}
+{{ $queue.label }}: {{ required (printf "scheduler.queue is required when scheduler.type=%s" .Values.scheduler.type) .Values.scheduler.queue | quote }}
 {{- end }}
 {{- end -}}
 

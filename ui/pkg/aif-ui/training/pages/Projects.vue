@@ -12,7 +12,7 @@ import {
 } from '../config';
 import { loadClusterLabel } from '../cluster';
 import {
-  ClusterCapacity, QueueIndex, QuotaIssue, auditQuotas, buildQueueIndex, clusterCapacity,
+  ClusterCapacity, KAI_QUEUE_LABEL, QueueIndex, QuotaIssue, auditQuotas, buildQueueIndex, clusterCapacity,
   namespaceQueueMap, usageFromPods, withPodUsage,
 } from '../quota';
 import {
@@ -569,7 +569,7 @@ export default defineComponent({
     async labelNamespace(ns: string, queue: string) {
       const model = await this.$store.dispatch('cluster/find', { type: TYPES.NAMESPACE, id: ns });
 
-      model.metadata.labels = { ...(model.metadata.labels || {}), 'kai.scheduler/queue': queue };
+      model.metadata.labels = { ...(model.metadata.labels || {}), [KAI_QUEUE_LABEL]: queue };
       await model.save();
     },
     /** Bind every namespace of the chosen project to a queue nobody uses. */

@@ -77,9 +77,20 @@ is **built into the operator**:
 
 ## 4. Backend descriptor
 
-There should be one table, shared by the chart helpers, preflight, Submit, Projects and `observe.go`.
-It is a Go struct in the operator, and the UI gets it through the API. The chart receives the
-*resolved* binding as values, not a backend name.
+**Done in phase 1.** The table is `charts/gpu-train-job/schedulers.yaml`, and it has three readers:
+- **The chart's templates**, through `gpu-train-job.backend` in `_helpers.tpl`. `schedulerName`, the queue label (on the pods or on the Job) and `suspend` all come from the table.
+- **The operator**, from the chart it embeds (`trainchart.Backends()`). `observe.go` uses it to recognise pods held by a queue scheduler and their queue.
+- **The UI**, through `training/schedulers.ts`. `schedulers-parity.test.ts` fails if it differs from the YAML. The forms ask specific questions of it (`holdsPods`, `usesQueueTree`, `placesGpuMemoryShares`, `podQueueLabel`), instead of one `isQueueScheduler` that stood for all of them.
+
+A backend's preflight checks (its queue exists, its namespace is set up) stay as code in `_preflight.tpl` and `preflight.ts`, keyed off the table's fields.
+
+Adding a backend means one entry in the YAML, its copy in `schedulers.ts`, and that backend's own preflight checks. Behaviour that changed:
+- An unknown `scheduler.type` is now refused with the list of known ones. It used to fall through to the default scheduler.
+- Run:ai pods are now reported as Queued.
+- The Kueue Workload is found under v1beta2 as well as v1beta1.
+- Under Run:ai the UI no longer offers a KAI-style GPU-memory share (the chart never accepted one). A share there goes through an MPS claim, as the chart requires. Run:ai does support `gpu-memory` fractions, so enabling them is one line, `sharing: [kai-fraction]` on `runai`, once tested on a Run:ai cluster.
+
+The original design for this section had the operator own the table and serve it over the API. It was dropped in favour of the chart file: it needs no runtime wiring, and the chart stays usable on its own.
 
 | Field | KAI | Run:ai | Kueue | Volcano | none |
 |---|---|---|---|---|---|
@@ -210,11 +221,11 @@ the local scheduler (KAI, Kueue, Volcano, Run:ai).
 
 ## 7. Gaps carried over from the AIJob branch
 
-1. The scheduler enum is copied in 5 places. Replace it with the descriptor (§4).
-2. Scheduler names are literals in the chart, `observe.go` and `quota.ts`.
-3. Queue label keys are literals. Namespaces get KAI and Run:ai labels at the same time.
-4. Kueue `Workload` is pinned to v1beta1 in the operator while the chart probes v1beta2.
-5. Run:ai pods (`runai-scheduler`) are never reported as held/Queued.
+1. ~~The scheduler enum is copied in 5 places.~~ Done (phase 1): one table, §4.
+2. ~~Scheduler names are literals in the chart, `observe.go` and `quota.ts`.~~ Done (phase 1).
+3. ~~Queue label keys are literals.~~ Done (phase 1). Namespaces still get KAI and Run:ai labels at the same time, on purpose (it survives a migration).
+4. ~~Kueue `Workload` is pinned to v1beta1 in the operator.~~ Done (phase 1): v1beta2, then v1beta1.
+5. ~~Run:ai pods are never reported as held/Queued.~~ Done (phase 1).
 6. Gang scheduling is implicit (KAI PodGrouper, Kueue admission). There's nothing for Volcano `minMember`.
 7. Fractional GPUs are KAI-only. HAMi resource requests are missing.
 8. The only quota editors are the KAI Queue tree and ResourceQuota. Kueue ClusterQueue and Volcano Queue are missing.
@@ -228,7 +239,7 @@ the local scheduler (KAI, Kueue, Volcano, Run:ai).
 | # | Phase | Done when |
 |---|---|---|
 | 0 | Branch, cherry-pick, Workloads sub-menu, Compute Pools PoC page, built-in training chart (no repository), this doc | ✅ tests green; build ok |
-| 1 | Backend descriptor; refactor KAI/Kueue/Run:ai behind it (chart, preflight, Submit, observe) | the enum exists in one place; existing tests pass |
+| 1 | Backend descriptor; refactor KAI/Kueue/Run:ai behind it (chart, preflight, Submit, observe) | ✅ one table, parity-tested; chart renders byte-identical for every valid scheduler |
 | 2 | `ComputePool` CRD + discovery via the cluster proxy (GPU and CPU pools) | pools appear for local + downstream-1/-2 |
 | 3 | Multi-cluster dispatch (Fleet HelmOp) + proxy-based observe | a job runs on a downstream and its status/logs/result show up |
 | 4 | Placement controller + global queue + deferred placement | a job submitted with no free pool starts when one frees up |

@@ -14,9 +14,10 @@ import Submit from './Submit.vue';
 import ReadinessPanel from '../components/ReadinessPanel.vue';
 import { PRODUCT_NAME, PROFILES_PAGE } from '../config';
 import {
-  chartValuesFor, Check, checksFor, Form, isQueueScheduler, runPreflight, summarize
+  chartValuesFor, Check, checksFor, Form, runPreflight, summarize
 } from '../preflight';
 import { availability } from '../quota';
+import { usesQueueTree } from '../schedulers';
 import {
   Profile, profileChecks, profilesFrom, resolveForm, resolvedSections
 } from '../profiles';
@@ -194,7 +195,7 @@ export default defineComponent({
 
     /** GPUs the project's queue can still take, when the scheduler is one whose quota we can read. */
     quotaGpus(): number | null {
-      if (!isQueueScheduler(this.form.scheduler) || !this.form.queue || !this.facts.queueIndex?.[this.form.queue]) {
+      if (!usesQueueTree(this.form.scheduler) || !this.form.queue || !this.facts.queueIndex?.[this.form.queue]) {
         return null;
       }
       const a = availability(this.form.queue, this.facts.queueIndex, this.facts.capacity, 'gpu');

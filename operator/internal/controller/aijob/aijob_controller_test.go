@@ -96,12 +96,19 @@ type harness struct {
 const ns = "aif-submit"
 
 func newHarness(t *testing.T, objs ...client.Object) *harness {
+	return newHarnessServing(t, []string{"v1beta1"}, objs...)
+}
+
+// newHarnessServing is newHarness on a cluster whose Kueue serves these Workload versions.
+func newHarnessServing(t *testing.T, kueueVersions []string, objs ...client.Object) *harness {
 	s := runtime.NewScheme()
 	require.NoError(t, clientgoscheme.AddToScheme(s))
 	require.NoError(t, v1alpha1.AddToScheme(s))
-	for _, gvk := range []struct{ g, v, k string }{
-		{"catalog.cattle.io", "v1", "ClusterRepo"}, {"kubeflow.org", "v1", "PyTorchJob"}, {"kueue.x-k8s.io", "v1beta1", "Workload"},
-	} {
+	gvks := []struct{ g, v, k string }{{"catalog.cattle.io", "v1", "ClusterRepo"}, {"kubeflow.org", "v1", "PyTorchJob"}}
+	for _, v := range kueueVersions {
+		gvks = append(gvks, struct{ g, v, k string }{"kueue.x-k8s.io", v, "Workload"})
+	}
+	for _, gvk := range gvks {
 		s.AddKnownTypeWithName(metav1GVK(gvk.g, gvk.v, gvk.k), &unstructured.Unstructured{})
 		s.AddKnownTypeWithName(metav1GVK(gvk.g, gvk.v, gvk.k+"List"), &unstructured.UnstructuredList{})
 	}
@@ -377,4 +384,24 @@ func TestAJobDeletedUnderTheRecordIsNotGivenAnOutcome(t *testing.T) {
 	require.NotNil(t, c)
 	assert.Equal(t, metav1.ConditionUnknown, c.Status)
 	assert.Equal(t, "ExecutionDeleted", c.Reason)
+}
+
+// The Kueue Workload is found whichever version the cluster serves: v1beta2 on
+// current Kueue, v1beta1 on releases before 0.15.
+func TestTheKueueWorkloadIsFoundInEitherAPIVersion(t *testing.T) {
+	for _, served := range []string{"v1beta1", "v1beta2"} {
+		t.Run(served, func(t *testing.T) {
+			exec := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "train-1", Namespace: ns, UID: "job-uid"}}
+			wl := &unstructured.Unstructured{}
+			wl.SetGroupVersionKind(metav1GVK("kueue.x-k8s.io", served, "Workload"))
+			wl.SetName("job-train-1")
+			wl.SetNamespace(ns)
+			wl.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: "train-1", UID: "job-uid"}})
+			h := newHarnessServing(t, []string{served}, aijob("train-1"), exec, wl)
+			o, err := h.r.observe(context.Background(), h.get("train-1"))
+			require.NoError(t, err)
+			require.NotNil(t, o.workload)
+			assert.Equal(t, "job-train-1", o.workload.GetName())
+		})
+	}
 }

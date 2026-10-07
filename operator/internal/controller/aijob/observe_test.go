@@ -86,8 +86,17 @@ func i32(v int32) *int32 { return &v }
 // kaiPod is a pod KAI Scheduler has not placed yet (or has, on node).
 func kaiPod(name, node string, phase corev1.PodPhase) corev1.Pod {
 	return corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{kaiQueueLabel: "team-a"}},
-		Spec:       corev1.PodSpec{SchedulerName: kaiScheduler, NodeName: node},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"kai.scheduler/queue": "team-a"}},
+		Spec:       corev1.PodSpec{SchedulerName: "kai-scheduler", NodeName: node},
+		Status:     corev1.PodStatus{Phase: phase},
+	}
+}
+
+// runaiPod is the same under Run:AI, which names the queue with the `project` label.
+func runaiPod(name, node string, phase corev1.PodPhase) corev1.Pod {
+	return corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{"project": "training"}},
+		Spec:       corev1.PodSpec{SchedulerName: "runai-scheduler", NodeName: node},
 		Status:     corev1.PodStatus{Phase: phase},
 	}
 }
@@ -108,6 +117,8 @@ func TestDerivePhase(t *testing.T) {
 		{"held by KAI", v1alpha1.AIJobPhasePending, true, observed{execution: execution("Job"), pods: []corev1.Pod{kaiPod("p0", "", corev1.PodPending)}}, v1alpha1.AIJobPhaseQueued},
 		{"placed by KAI, starting", v1alpha1.AIJobPhaseQueued, true, observed{execution: execution("Job"), pods: []corev1.Pod{kaiPod("p0", "gpu-node-1", corev1.PodPending)}}, v1alpha1.AIJobPhasePending},
 		{"KAI pod runs", v1alpha1.AIJobPhaseQueued, true, observed{execution: execution("Job"), pods: []corev1.Pod{kaiPod("p0", "gpu-node-1", corev1.PodRunning)}}, v1alpha1.AIJobPhaseRunning},
+		{"held by Run:AI", v1alpha1.AIJobPhasePending, true, observed{execution: execution("Job"), pods: []corev1.Pod{runaiPod("p0", "", corev1.PodPending)}}, v1alpha1.AIJobPhaseQueued},
+		{"default scheduler, not yet placed", v1alpha1.AIJobPhasePending, true, observed{execution: execution("Job"), pods: []corev1.Pod{pod("p0", 0, corev1.PodPending, 0, nil)}}, v1alpha1.AIJobPhasePending},
 		{"Job Complete", v1alpha1.AIJobPhaseRunning, true, observed{execution: execution("Job", cond("Complete", "True", time.Hour, "", ""))}, v1alpha1.AIJobPhaseSucceeded},
 		{"Job Failed", v1alpha1.AIJobPhaseRunning, true, observed{execution: execution("Job", cond("Failed", "True", time.Hour, "BackoffLimitExceeded", "x"))}, v1alpha1.AIJobPhaseFailed},
 		{"PyTorchJob Succeeded", v1alpha1.AIJobPhaseRunning, true, observed{execution: execution("PyTorchJob", cond("Running", "False", 0, "", ""), cond("Succeeded", "True", time.Hour, "", ""))}, v1alpha1.AIJobPhaseSucceeded},
@@ -151,6 +162,13 @@ func TestApplyObservationRecordsTheKAIQueue(t *testing.T) {
 	require.NotNil(t, st.Queue)
 	assert.Equal(t, "team-a", st.Queue.KAIQueue)
 	assert.Empty(t, st.Queue.Workload, "no Kueue Workload")
+}
+
+func TestApplyObservationRecordsTheRunAIQueue(t *testing.T) {
+	st := &v1alpha1.AIJobStatus{}
+	applyObservation(st, observed{execution: execution("Job"), pods: []corev1.Pod{runaiPod("p0", "", corev1.PodPending)}})
+	require.NotNil(t, st.Queue)
+	assert.Equal(t, "training", st.Queue.KAIQueue, "Run:AI's queues are scheduling.run.ai queues too")
 }
 
 func TestPodsAreBoundedToFailedOnesAboveSixteen(t *testing.T) {

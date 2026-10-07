@@ -132,8 +132,9 @@ type AIJobQueue struct {
 	Workload     string `json:"workload,omitempty"`
 	LocalQueue   string `json:"localQueue,omitempty"`
 	ClusterQueue string `json:"clusterQueue,omitempty"`
-	// KAIQueue is the KAI Scheduler queue the pods were submitted to (their
-	// kai.scheduler/queue label), for a job KAI queues rather than Kueue.
+	// KAIQueue is the scheduling.run.ai queue the pods were submitted to, for a
+	// job KAI or Run:AI queues rather than Kueue (their kai.scheduler/queue or
+	// project label, per the chart's schedulers.yaml).
 	KAIQueue string `json:"kaiQueue,omitempty"`
 }
 

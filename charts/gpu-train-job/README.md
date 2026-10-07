@@ -80,6 +80,13 @@ network:
 answer on the node's address — reasons enough to leave it off for anything the pod network can
 carry. A LoRA's gradient is small; a full fine-tune's is not.
 
+## Scheduler backends
+
+`scheduler.type` names a backend in [`schedulers.yaml`](schedulers.yaml): its `schedulerName`, the
+label that names the queue and whether it goes on the pods or on the Job, and whether the Job is
+created suspended for the backend to admit. The AI Factory operator and UI read the same table, so
+a backend is added there, not in the templates.
+
 ## Pre-flight
 
 `scheduler.type=kai` and `scheduler.type=runai` are the same scheduler under two names and must not

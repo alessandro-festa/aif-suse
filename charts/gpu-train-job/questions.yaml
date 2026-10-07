@@ -107,24 +107,24 @@ questions:
   # ---- Scheduling ---------------------------------------------------------
   - variable: scheduler.type
     label: Scheduler
-    description: none = kube-scheduler; kueue = queue admission (needs a LocalQueue in the target namespace); kai = KAI scheduler (only if KAI is installed on this cluster).
+    description: none = kube-scheduler; kueue = queue admission (needs a LocalQueue in the target namespace); kai = KAI scheduler (only if KAI is installed on this cluster); runai = NVIDIA Run:AI (the namespace must belong to a Run:AI project).
     type: enum
-    options: [none, kueue, kai]
+    options: [none, kueue, kai, runai]
     default: none
     group: Scheduling
   - variable: scheduler.queue
     label: Queue name
-    description: "Kueue: a LocalQueue in the target namespace. KAI: a Queue CR (KAI ships default-queue)."
+    description: "Kueue: a LocalQueue in the target namespace. KAI: a Queue CR (KAI ships default-queue). Run:AI: the project's queue."
     type: string
     required: true
     default: default-queue
-    show_if: "scheduler.type=kueue||scheduler.type=kai"
+    show_if: "scheduler.type=kueue||scheduler.type=kai||scheduler.type=runai"
     group: Scheduling
   - variable: scheduler.priorityClassName
     label: Priority class
     description: KAI ships train / build / inference. Kueue uses standard PriorityClasses.
     type: string
-    show_if: "scheduler.type=kueue||scheduler.type=kai"
+    show_if: "scheduler.type=kueue||scheduler.type=kai||scheduler.type=runai"
     group: Scheduling
 
   # ---- Networking ---------------------------------------------------------

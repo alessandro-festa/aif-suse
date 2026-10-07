@@ -1,0 +1,115 @@
+// The scheduler backends a training run can be queued by, and how a run is bound to each. This is
+// charts/gpu-train-job/schedulers.yaml -- the table the chart's templates and the operator read --
+// as TypeScript; __tests__/schedulers-parity.test.ts fails when the two disagree. Change the YAML
+// first, then this.
+
+export type SchedulerType = 'none' | 'kueue' | 'kai' | 'runai';
+
+export interface SchedulerBackend {
+  display: string;
+  /** Installed when the cluster serves API group `group` and not `unless`. null: always there. */
+  detect: { group: string; unless?: string } | null;
+  /** Pod spec.schedulerName; '' is the default kube-scheduler. */
+  schedulerName: string;
+  /**
+   * How a run names its queue: a label on every pod template ('pod') or on the Job / PyTorchJob
+   * ('workload'). namespaceLabel: the namespace must carry it with the queue name too.
+   */
+  queue: { target: 'pod' | 'workload'; label: string; namespaceLabel?: string } | null;
+  /** scheduler: it holds the pods until it binds them. suspend: the workload is created suspended. */
+  admission: 'scheduler' | 'suspend' | 'none';
+  gang: 'podgrouper' | 'admission' | 'none';
+  /** Where GPU entitlement lives: scheduling.run.ai/v2 Queues, Kueue ClusterQueues, or nowhere. */
+  quota: 'queue-tree' | 'clusterqueue' | 'none';
+  /** GPU-sharing modes it places. kai-fraction: the pod's gpu-memory annotation. */
+  sharing: 'kai-fraction'[];
+}
+
+export const SCHEDULER_BACKENDS: Record<SchedulerType, SchedulerBackend> = {
+  none: {
+    display:       'Default scheduler',
+    detect:        null,
+    schedulerName: '',
+    queue:         null,
+    admission:     'none',
+    gang:          'none',
+    quota:         'none',
+    sharing:       [],
+  },
+  kueue: {
+    display:       'Kueue',
+    detect:        { group: 'kueue.x-k8s.io' },
+    schedulerName: '',
+    queue:         { target: 'workload', label: 'kueue.x-k8s.io/queue-name' },
+    admission:     'suspend',
+    gang:          'admission',
+    quota:         'clusterqueue',
+    sharing:       [],
+  },
+  kai: {
+    display:       'KAI scheduler',
+    detect:        { group: 'scheduling.run.ai', unless: 'run.ai' },
+    schedulerName: 'kai-scheduler',
+    queue:         { target: 'pod', label: 'kai.scheduler/queue' },
+    admission:     'scheduler',
+    gang:          'podgrouper',
+    quota:         'queue-tree',
+    sharing:       ['kai-fraction'],
+  },
+  runai: {
+    display:       'Run:AI scheduler',
+    detect:        { group: 'run.ai' },
+    schedulerName: 'runai-scheduler',
+    queue:         { target: 'pod', label: 'project', namespaceLabel: 'runai/queue' },
+    admission:     'scheduler',
+    gang:          'podgrouper',
+    quota:         'queue-tree',
+    sharing:       [],
+  },
+};
+
+export function backendOf(s: SchedulerType): SchedulerBackend {
+  return SCHEDULER_BACKENDS[s] || SCHEDULER_BACKENDS.none;
+}
+
+/** The scheduler keeps the pods unplaced until its queue has room, and gang-schedules them (KAI, Run:AI). */
+export function holdsPods(s: SchedulerType): boolean {
+  return backendOf(s).admission === 'scheduler';
+}
+
+/** Its queues are scheduling.run.ai/v2 Queues (KAI, Run:AI). */
+export function usesQueueTree(s: SchedulerType): boolean {
+  return backendOf(s).quota === 'queue-tree';
+}
+
+/** It places a GPU-memory share (part of one GPU) from the pod's gpu-memory annotation. */
+export function placesGpuMemoryShares(s: SchedulerType): boolean {
+  return backendOf(s).sharing.includes('kai-fraction');
+}
+
+/** The pod label naming the queue, for a backend that binds by pod label; '' otherwise. */
+export function podQueueLabel(s: SchedulerType): string {
+  const q = backendOf(s).queue;
+
+  return q?.target === 'pod' ? q.label : '';
+}
+
+/** The label on the Job / PyTorchJob naming the queue, for a backend that binds the workload; '' otherwise. */
+export function workloadQueueLabel(s: SchedulerType): string {
+  const q = backendOf(s).queue;
+
+  return q?.target === 'workload' ? q.label : '';
+}
+
+/** The backend whose scheduler a pod asked for (its spec.schedulerName), if it is one of ours. */
+export function backendForSchedulerName(name: string | undefined): SchedulerType | undefined {
+  if (!name) {
+    return undefined;
+  }
+
+  return (Object.keys(SCHEDULER_BACKENDS) as SchedulerType[]).find((k) => SCHEDULER_BACKENDS[k].schedulerName === name);
+}
+
+/** Every schedulerName that holds pods for a queue (kai-scheduler, runai-scheduler). */
+export const POD_HOLDING_SCHEDULERS: string[] = (Object.keys(SCHEDULER_BACKENDS) as SchedulerType[])
+  .filter(holdsPods).map((k) => SCHEDULER_BACKENDS[k].schedulerName);

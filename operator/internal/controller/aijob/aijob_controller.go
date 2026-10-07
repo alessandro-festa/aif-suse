@@ -81,7 +81,12 @@ const (
 var (
 	clusterRepoGVK = schema.GroupVersionKind{Group: "catalog.cattle.io", Version: "v1", Kind: "ClusterRepo"}
 	pytorchJobGVK  = schema.GroupVersionKind{Group: "kubeflow.org", Version: "v1", Kind: "PyTorchJob"}
-	workloadGVK    = schema.GroupVersionKind{Group: "kueue.x-k8s.io", Version: "v1beta1", Kind: "WorkloadList"}
+	// Kueue Workloads, newest API version first: Kueue serves v1beta2 from 0.15
+	// and still serves v1beta1, which older releases have alone.
+	workloadGVKs = []schema.GroupVersionKind{
+		{Group: "kueue.x-k8s.io", Version: "v1beta2", Kind: "WorkloadList"},
+		{Group: "kueue.x-k8s.io", Version: "v1beta1", Kind: "WorkloadList"},
+	}
 )
 
 // +kubebuilder:rbac:groups=ai-factory.suse.com,resources=aijobs,verbs=get;list;watch;update;patch
@@ -577,9 +582,18 @@ func (r *AIJobReconciler) observe(ctx context.Context, job *v1alpha1.AIJob) (obs
 	}
 
 	if o.execution != nil {
-		wls := &unstructured.UnstructuredList{}
-		wls.SetGroupVersionKind(workloadGVK)
-		if err := r.APIReader.List(ctx, wls, ctrl.InNamespace(ns)); err == nil {
+		// Each version in turn until the Workload turns up: one that is not served
+		// is skipped, and so is one that is served but does not have it.
+		for _, gvk := range workloadGVKs {
+			wls := &unstructured.UnstructuredList{}
+			wls.SetGroupVersionKind(gvk)
+			err := r.APIReader.List(ctx, wls, ctrl.InNamespace(ns))
+			if isNoMatch(err) || apierrors.IsNotFound(err) {
+				continue
+			}
+			if err != nil {
+				return o, err
+			}
 			for i := range wls.Items {
 				for _, ref := range wls.Items[i].GetOwnerReferences() {
 					if ref.UID == o.execution.GetUID() {
@@ -587,8 +601,9 @@ func (r *AIJobReconciler) observe(ctx context.Context, job *v1alpha1.AIJob) (obs
 					}
 				}
 			}
-		} else if !isNoMatch(err) && !apierrors.IsNotFound(err) {
-			return o, err
+			if o.workload != nil {
+				break
+			}
 		}
 	}
 

@@ -40,11 +40,42 @@ keyed by it). Not used in label selectors.
 {{- end -}}
 
 {{/*
+The scheduler backend scheduler.type names, from schedulers.yaml (the table AI Factory's operator
+and UI read too), as YAML: include it and fromYaml the result.
+*/}}
+{{- define "gpu-train-job.backend" -}}
+{{- $backends := (.Files.Get "schedulers.yaml" | fromYaml).backends -}}
+{{- if not (hasKey $backends .Values.scheduler.type) -}}
+{{- fail (printf "scheduler.type %q is not one of: %s" .Values.scheduler.type (keys $backends | sortAlpha | join ", ")) -}}
+{{- end -}}
+{{- index $backends .Values.scheduler.type | toYaml -}}
+{{- end -}}
+
+{{/*
+The queue label on the workload itself (Job / PyTorchJob), for backends whose queue target is the
+workload (schedulers.yaml): Kueue.
+*/}}
+{{- define "gpu-train-job.queueWorkloadLabels" -}}
+{{- $queue := (include "gpu-train-job.backend" . | fromYaml).queue -}}
+{{- if and $queue (eq $queue.target "workload") -}}
+{{ $queue.label }}: {{ required (printf "scheduler.queue is required when scheduler.type=%s" .Values.scheduler.type) .Values.scheduler.queue | quote }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when the backend admits a run by unsuspending it, so the workload is created suspended.
+*/}}
+{{- define "gpu-train-job.suspended" -}}
+{{- if eq (include "gpu-train-job.backend" . | fromYaml).admission "suspend" }}true{{ end }}
+{{- end -}}
+
+{{/*
 Resolve gpu.mode. "auto" picks device-plugin if any node advertises gpu.resourceName,
 else dra if the DeviceClass exists. Offline (helm template) auto resolves to device-plugin.
 */}}
 {{- define "gpu-train-job.gpuMode" -}}
-{{- if and (eq .Values.scheduler.type "kai") (gt (int .Values.gpu.sharedMemoryMiB) 0) (not .Values.gpu.sharedClaim) -}}
+{{- $backend := include "gpu-train-job.backend" . | fromYaml -}}
+{{- if and (has "kai-fraction" $backend.sharing) (gt (int .Values.gpu.sharedMemoryMiB) 0) (not .Values.gpu.sharedClaim) -}}
 {{- /* A GPU-memory share under KAI: KAI places the pod on a GPU by its gpu-memory annotation and
        HAMi-core / NvFractions caps it. No whole nvidia.com/gpu and no DRA claim: KAI rejects a pod
        that mixes a fraction with a whole-GPU request. */ -}}

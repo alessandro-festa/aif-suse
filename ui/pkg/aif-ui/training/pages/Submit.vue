@@ -22,7 +22,7 @@ import {
 } from '../config';
 import {
   chartValuesFor, Check, DEFAULT_FORM, Facts, Form, estimateScratch, formFromManifest, formFromValues, GpuNode,
-  checksFor, isQueueScheduler, parseCpu, parseMem, PvcInfo, resolveGpuMode, runPreflight, SCHEDULER_BINDING,
+  checksFor, parseCpu, parseMem, PvcInfo, resolveGpuMode, runPreflight,
   StorageClassInfo, summarize
 } from '../preflight';
 import {
@@ -31,6 +31,7 @@ import {
 import { pvcRole } from '../checkpoints';
 import { Profile, PROFILE_NAMESPACE, profilesFrom } from '../profiles';
 import { aiJobFor, AIJOB_TYPE } from '../aijob';
+import { backendOf, placesGpuMemoryShares, usesQueueTree } from '../schedulers';
 import { groupOf, readiness } from '../readiness';
 import { gpuInventory, gpuShort, hasGfdLabels } from '../gputypes';
 import { gib, pickSharedClaim, sharedGpus } from '../gpushare';
@@ -207,15 +208,15 @@ export default defineComponent({
         // the choice that leaves every pod Pending.
         const value = this.facts.runaiInstalled ? 'runai' : 'kai';
 
-        out.push({ label: `${ SCHEDULER_BINDING[value].display } (gang + fair share)`, value });
+        out.push({ label: `${ backendOf(value).display } (gang + fair share)`, value });
       }
 
       return out;
     },
     // KAI and Run:AI are the same scheduler under two names, so every UI branch that is really
-    // "is this a queue-bound gang scheduler?" asks this rather than listing both literals.
+    // "are its queues a scheduling.run.ai tree?" asks this rather than listing both literals.
     isQueueSched(): boolean {
-      return isQueueScheduler(this.form.scheduler);
+      return usesQueueTree(this.form.scheduler);
     },
     queueOptions(): { label: string; value: string }[] {
       if (this.form.scheduler === 'kueue') {
@@ -223,7 +224,7 @@ export default defineComponent({
           .filter((q) => q.namespace === this.form.namespace)
           .map((q) => ({ label: `${ q.name }  →  ${ q.clusterQueue }`, value: q.name }));
       }
-      if (isQueueScheduler(this.form.scheduler)) {
+      if (usesQueueTree(this.form.scheduler)) {
         // Only leaf queues can run workloads, so parents are not offered. Each option carries its
         // live headroom, which is the number that decides whether the job starts or waits.
         return Object.values(this.facts.queueIndex)
@@ -258,10 +259,10 @@ export default defineComponent({
     /** Exclusive, or one of this namespace's shared GPUs, with what is left on each. */
     gpuAllocationOptions(): { label: string; value: string }[] {
       // Under KAI a share is a memory amount, queued and placed by the scheduler: no claim to pick.
-      if (isQueueScheduler(this.form.scheduler)) {
+      if (placesGpuMemoryShares(this.form.scheduler)) {
         return [
           { label: 'Exclusive — a GPU of its own', value: '' },
-          { label: `Shared — part of a GPU, queued by ${ SCHEDULER_BINDING[this.form.scheduler as 'kai' | 'runai'].display }`, value: '__kai__' },
+          { label: `Shared — part of a GPU, queued by ${ backendOf(this.form.scheduler).display }`, value: '__kai__' },
         ];
       }
       const shared = this.facts.sharedGpus.filter((g: any) => g.namespace === this.form.namespace).map((g: any) => ({
@@ -277,7 +278,7 @@ export default defineComponent({
     },
     gpuAllocation: {
       get(): string {
-        if (this.form.gpuShareMiB > 0 && isQueueScheduler(this.form.scheduler)) {
+        if (this.form.gpuShareMiB > 0 && placesGpuMemoryShares(this.form.scheduler)) {
           return '__kai__';
         }
 
@@ -314,7 +315,7 @@ export default defineComponent({
     },
     /** A GPU-memory share under KAI: placed by memory, so the GPU request mode does not apply. */
     kaiShare(): boolean {
-      return this.form.gpuShareMiB > 0 && isQueueScheduler(this.form.scheduler);
+      return this.form.gpuShareMiB > 0 && placesGpuMemoryShares(this.form.scheduler);
     },
     /** What KAI charges per pod for this share: its fraction of the node's GPU memory, rounded up. */
     shareFraction(): number | null {
@@ -516,7 +517,7 @@ export default defineComponent({
       if (this.form.scheduler === 'none') {
         return 'default scheduler';
       }
-      const name = this.form.scheduler === 'kueue' ? 'Kueue' : (SCHEDULER_BINDING[this.form.scheduler as 'kai' | 'runai']?.display || this.form.scheduler);
+      const name = backendOf(this.form.scheduler).display;
 
       return `${ name }${ this.form.queue ? ` · queue ${ this.form.queue }` : '' }`;
     },
@@ -681,14 +682,17 @@ export default defineComponent({
         },
       };
 
-      if (isQueueScheduler(f.scheduler) && f.queue) {
-        const bind = SCHEDULER_BINDING[f.scheduler as 'kai' | 'runai'];
+      // Bound the way the chart binds it (schedulers.ts / schedulers.yaml).
+      const backend = backendOf(f.scheduler);
 
-        obj.spec.template.spec.schedulerName = bind.schedulerName;
-        obj.spec.template.metadata.labels[bind.queueLabel] = f.queue;
-      } else if (f.scheduler === 'kueue' && f.queue) {
-        obj.spec.suspend = true;
-        obj.metadata.labels['kueue.x-k8s.io/queue-name'] = f.queue;
+      if (backend.queue && f.queue) {
+        if (backend.schedulerName) {
+          obj.spec.template.spec.schedulerName = backend.schedulerName;
+        }
+        if (backend.admission === 'suspend') {
+          obj.spec.suspend = true;
+        }
+        (backend.queue.target === 'pod' ? obj.spec.template.metadata.labels : obj.metadata.labels)[backend.queue.label] = f.queue;
       }
 
       return saferDump(obj);
@@ -709,18 +713,18 @@ export default defineComponent({
       this.facts.namespaceQueue = this.namespaceQueues[ns] || null;
       // A project bound to a KAI queue is scheduled by KAI: switch to it rather than leave Kueue or
       // none selected, which would bypass the project's queue (and offer DRA-only GPU sharing).
-      if (this.facts.namespaceQueue && this.facts.kaiInstalled && !isQueueScheduler(this.form.scheduler)) {
+      if (this.facts.namespaceQueue && this.facts.kaiInstalled && !usesQueueTree(this.form.scheduler)) {
         this.form.scheduler = this.facts.runaiInstalled ? 'runai' : 'kai';
         this.$nextTick(() => {
           this.form.queue = this.facts.namespaceQueue || this.form.queue;
         });
       }
-      if (isQueueScheduler(this.form.scheduler) && this.facts.namespaceQueue) {
+      if (usesQueueTree(this.form.scheduler) && this.facts.namespaceQueue) {
         this.form.queue = this.facts.namespaceQueue;
       }
       // a shared GPU is per project: follow the namespace to its own shared claim
       if (this.form.gpuShareMiB > 0) {
-        this.form.gpuSharedClaim = isQueueScheduler(this.form.scheduler) ? '' : pickSharedClaim({ ...this.form, namespace: ns }, this.facts);
+        this.form.gpuSharedClaim = placesGpuMemoryShares(this.form.scheduler) ? '' : pickSharedClaim({ ...this.form, namespace: ns }, this.facts);
       }
       this.facts.configMaps = this.configMapsFor(ns);
       this.facts.configMapCode = this.configMapCodeFor(ns);
@@ -1065,7 +1069,7 @@ export default defineComponent({
 
       this.facts = facts;
       if (this.form.gpuShareMiB > 0) {
-        this.form.gpuSharedClaim = isQueueScheduler(this.form.scheduler) ? '' : pickSharedClaim(this.form, facts);
+        this.form.gpuSharedClaim = placesGpuMemoryShares(this.form.scheduler) ? '' : pickSharedClaim(this.form, facts);
       }
 
       if (!this.form.namespace) {

@@ -15,6 +15,7 @@ import {
 import {
   Check, Facts, fmtMem, parseCpu, parseMem
 } from './preflight';
+import { podQueueLabel } from './schedulers';
 
 // What vLLM allocates beyond --gpu-memory-utilization at start (CUDA graphs, sampler warm-up).
 const VLLM_OVERHEAD_MIB = 1536;
@@ -88,7 +89,7 @@ export function summarizeBlueprint(bp: any, ref: BlueprintRef): BlueprintSummary
     sharedClaim:          String(engine.dra?.sharedClaim || ''),
     mpsLimitMiB:          parseMpsLimit((m.env || []).find((e: any) => e?.name === MPS_LIMIT_ENV)?.value),
     kaiMemoryMiB:         Number(m.podAnnotations?.['gpu-memory']) || null,
-    kaiQueue:             String(engine.labels?.['kai.scheduler/queue'] || ''),
+    kaiQueue:             String(engine.labels?.[podQueueLabel('kai')] || ''),
   };
 }
 

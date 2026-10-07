@@ -740,3 +740,17 @@ describe('commands survive the form', () => {
     expect(splitArgs('python /mnt/config/train.py --lr "2e-5" --name \'my run\'')).toEqual(['python', '/mnt/config/train.py', '--lr', '2e-5', '--name', 'my run']);
   });
 });
+
+// Only a scheduler whose table entry places kai-fraction shares gets one: the chart refuses a
+// GPU-memory share under any other unless it names an MPS claim, so the form must not drop it.
+describe('GPU-memory shares follow the scheduler table', () => {
+  const share = { ...DEFAULT_FORM, gpuShareMiB: 4096, gpuSharedClaim: 'team-mps', queue: 'q' };
+
+  it('KAI places the share itself: no claim', () => {
+    expect(chartValuesFor({ ...share, scheduler: 'kai' }, true).gpu.sharedClaim).toBe('');
+  });
+
+  it('Run:AI is given the shared claim, as the chart requires', () => {
+    expect(chartValuesFor({ ...share, scheduler: 'runai' }, true).gpu.sharedClaim).toBe('team-mps');
+  });
+});

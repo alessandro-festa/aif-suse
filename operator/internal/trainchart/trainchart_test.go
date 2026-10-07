@@ -129,3 +129,27 @@ func TestArchiveMatchesChartSource(t *testing.T) {
 		t.Errorf("%s: %s is in the archive but not in the chart", stale, rel)
 	}
 }
+
+func TestBackendsAreReadFromTheChart(t *testing.T) {
+	b, err := Backends()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"none", "kueue", "kai", "runai"} {
+		if _, ok := b[name]; !ok {
+			t.Errorf("backend %q missing", name)
+		}
+	}
+	if b["kai"].SchedulerName != "kai-scheduler" || b["kai"].Queue.Label != "kai.scheduler/queue" || b["kai"].Queue.Target != "pod" {
+		t.Errorf("kai = %+v", b["kai"])
+	}
+	if b["runai"].Queue.NamespaceLabel != "runai/queue" {
+		t.Errorf("runai = %+v", b["runai"])
+	}
+	if b["kueue"].Admission != "suspend" || b["kueue"].Queue.Target != "workload" {
+		t.Errorf("kueue = %+v", b["kueue"])
+	}
+	if b["none"].Queue != nil || b["none"].Detect != nil {
+		t.Errorf("none = %+v", b["none"])
+	}
+}

@@ -464,7 +464,7 @@ export function buildNamespaceManifest(
           [KAI_QUEUE_LABEL]: queue, [RUNAI_QUEUE_LABEL]: queue, [RUNAI_NS_VERSION_LABEL]: 'v2'
         } : {}),
         ...(short ? { [RANCHER_PROJECT_LABEL]: short } : {}),
-      },
+      } as Record<string, string>,
       annotations: rancherProjectId ? { [RANCHER_PROJECT_ANNOTATION]: `${ clusterId }:${ short }` } : {},
     },
   };

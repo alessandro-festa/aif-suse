@@ -1,0 +1,72 @@
+# The scheduler backends a training run can be queued by: one table, read by
+#   - this chart's templates (gpu-train-job.backend in _helpers.tpl),
+#   - the AI Factory operator, from the copy of this chart it embeds (internal/trainchart),
+#   - the AI Factory UI, whose ui/pkg/aif-ui/training/schedulers.ts is checked against this file.
+# A backend's preflight checks (does its queue exist, is it set up for this namespace) are code in
+# _preflight.tpl and the UI's preflight.ts; this table is what binds a run to the backend.
+#
+# Fields:
+#   display        name shown to people
+#   detect         installed when the cluster serves API group `group` (and not `unless`)
+#   schedulerName  pod spec.schedulerName; "" = the default kube-scheduler
+#   queue          how a run names its queue: `target` pod (a label on every pod template) or
+#                  workload (a label on the Job / PyTorchJob); `label` is the key.
+#                  `namespaceLabel`: the namespace must carry this label with the queue name too.
+#                  null = the backend has no queues
+#   admission      scheduler (it holds the pods until it binds them) | suspend (the workload is
+#                  created suspended and the backend unsuspends it when it admits it) | none
+#   gang           how a multi-node run is started all-or-nothing: podgrouper (the scheduler
+#                  groups pods by owner) | admission (the whole workload is admitted at once) | none
+#   quota          where GPU entitlement lives: queue-tree (scheduling.run.ai/v2 Queues) |
+#                  clusterqueue (Kueue ClusterQueues) | none
+#   sharing        GPU-sharing modes it places: kai-fraction (pod annotation gpu-memory)
+backends:
+  none:
+    display: Default scheduler
+    detect: null
+    schedulerName: ""
+    queue: null
+    admission: none
+    gang: none
+    quota: none
+    sharing: []
+  kueue:
+    display: Kueue
+    detect:
+      group: kueue.x-k8s.io
+    schedulerName: ""
+    queue:
+      target: workload
+      label: kueue.x-k8s.io/queue-name
+    admission: suspend
+    gang: admission
+    quota: clusterqueue
+    sharing: []
+  kai:
+    display: KAI scheduler
+    detect:
+      group: scheduling.run.ai
+      # Run:AI is built on KAI and ships the same queue CRD; only the run.ai group tells them apart.
+      unless: run.ai
+    schedulerName: kai-scheduler
+    queue:
+      target: pod
+      label: kai.scheduler/queue
+    admission: scheduler
+    gang: podgrouper
+    quota: queue-tree
+    sharing: [kai-fraction]
+  runai:
+    display: Run:AI scheduler
+    detect:
+      group: run.ai
+    schedulerName: runai-scheduler
+    queue:
+      target: pod
+      label: project
+      # Run:AI's pod webhooks only act in namespaces labelled with their queue.
+      namespaceLabel: runai/queue
+    admission: scheduler
+    gang: podgrouper
+    quota: queue-tree
+    sharing: []

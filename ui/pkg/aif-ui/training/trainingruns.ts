@@ -3,7 +3,10 @@
 // whose Job is gone (ttlSecondsAfterFinished), with one phase each. Shared by the Jobs page and the Workloads list, so the two cannot disagree on a state.
 
 import { JOB_LABEL, JOB_LABEL_VALUE } from './config';
-import { KAI_QUEUE_LABEL, RUNAI_POD_QUEUE_LABEL } from './quota';
+import { KAI_QUEUE_LABEL } from './quota';
+import {
+  backendForSchedulerName, POD_HOLDING_SCHEDULERS, podQueueLabel, workloadQueueLabel
+} from './schedulers';
 
 export interface TrainingInput {
   jobs: any[];
@@ -39,8 +42,10 @@ export interface TrainingRun {
  * counts on a pod the Run:AI scheduler owns.
  */
 export function queueOf(jobLabels: Record<string, string>, podLabels: Record<string, string>, schedulerName: string): string {
-  return jobLabels['kueue.x-k8s.io/queue-name'] || podLabels[KAI_QUEUE_LABEL] ||
-    (schedulerName === 'runai-scheduler' ? podLabels[RUNAI_POD_QUEUE_LABEL] : '') || '';
+  const ownLabel = podQueueLabel(backendForSchedulerName(schedulerName) || 'none');
+
+  return jobLabels[workloadQueueLabel('kueue')] || podLabels[KAI_QUEUE_LABEL] ||
+    (ownLabel ? podLabels[ownLabel] : '') || '';
 }
 
 function jobRows(i: TrainingInput): TrainingRun[] {
@@ -64,7 +69,7 @@ function jobRows(i: TrainingInput): TrainingRun[] {
       } else if (s.active) {
         phase = pods.some((p) => p.status?.phase === 'Running') ? 'Running' : 'Scheduling';
         // KAI / Run:AI hold a pod unplaced until its queue has room: that is a queue, not scheduling
-        if (phase === 'Scheduling' && pods.length && pods.every((p) => !p.spec?.nodeName && ['kai-scheduler', 'runai-scheduler'].includes(p.spec?.schedulerName))) {
+        if (phase === 'Scheduling' && pods.length && pods.every((p) => !p.spec?.nodeName && POD_HOLDING_SCHEDULERS.includes(p.spec?.schedulerName))) {
           phase = 'Queued';
         }
       }

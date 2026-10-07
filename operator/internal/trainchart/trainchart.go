@@ -24,7 +24,15 @@ limitations under the License.
 package trainchart
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	_ "embed"
+	"fmt"
+	"io"
+	"sync"
+
+	"sigs.k8s.io/yaml"
 )
 
 // Name is the chart's name, as its Chart.yaml gives it.
@@ -35,3 +43,75 @@ var archive []byte
 
 // Archive returns the packaged chart.
 func Archive() []byte { return archive }
+
+// Backend is one scheduler backend from the chart's schedulers.yaml: how a run is
+// bound to it. See that file for what each field means.
+type Backend struct {
+	Display       string        `json:"display"`
+	Detect        *BackendProbe `json:"detect"`
+	SchedulerName string        `json:"schedulerName"`
+	Queue         *BackendQueue `json:"queue"`
+	Admission     string        `json:"admission"`
+	Gang          string        `json:"gang"`
+	Quota         string        `json:"quota"`
+	Sharing       []string      `json:"sharing"`
+}
+
+// BackendProbe says the backend is installed when the cluster serves Group and
+// does not serve Unless.
+type BackendProbe struct {
+	Group  string `json:"group"`
+	Unless string `json:"unless,omitempty"`
+}
+
+// BackendQueue is how a run names its queue: a Label on the pods ("pod") or on
+// the Job / PyTorchJob ("workload").
+type BackendQueue struct {
+	Target         string `json:"target"`
+	Label          string `json:"label"`
+	NamespaceLabel string `json:"namespaceLabel,omitempty"`
+}
+
+var (
+	backendsOnce sync.Once
+	backends     map[string]Backend
+	backendsErr  error
+)
+
+// Backends returns the scheduler backends the built-in chart knows, by
+// scheduler.type.
+func Backends() (map[string]Backend, error) {
+	backendsOnce.Do(func() { backends, backendsErr = readBackends(archive) })
+	return backends, backendsErr
+}
+
+func readBackends(tgz []byte) (map[string]Backend, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(tgz))
+	if err != nil {
+		return nil, err
+	}
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return nil, fmt.Errorf("%s/schedulers.yaml not in the chart", Name)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if h.Name != Name+"/schedulers.yaml" {
+			continue
+		}
+		b, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, err
+		}
+		var doc struct {
+			Backends map[string]Backend `json:"backends"`
+		}
+		if err := yaml.UnmarshalStrict(b, &doc); err != nil {
+			return nil, fmt.Errorf("schedulers.yaml: %w", err)
+		}
+		return doc.Backends, nil
+	}
+}
