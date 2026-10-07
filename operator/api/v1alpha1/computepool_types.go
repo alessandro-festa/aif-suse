@@ -119,12 +119,16 @@ type ComputePoolConsumer struct {
 	// Namespace on the pool's cluster; empty for rest.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
-	// Name is the run's job ID (the AIJob's name) for a run; empty otherwise.
+	// Name is the run's job ID (the AIJob's name) for a run, the Helm release
+	// (app.kubernetes.io/instance) for a workload that has one; empty otherwise.
 	// +optional
 	Name string `json:"name,omitempty"`
 	// Pods counted.
 	Pods      int32                `json:"pods"`
 	Requested ComputePoolResources `json:"requested"`
+	// Used is what its pods actually use now; empty when not read.
+	// +optional
+	Used *ComputePoolResources `json:"used,omitempty"`
 }
 
 // ComputePoolGPU describes the pool's GPUs.
@@ -154,9 +158,14 @@ type ComputePoolStatus struct {
 	// Requested is the sum of the requests of the pods running on those nodes.
 	// +optional
 	Requested ComputePoolResources `json:"requested,omitempty"`
+	// Used is what the pods on those nodes actually use (CPU, memory working
+	// set), from the kubelets; empty when the nodes' stats could not be read.
+	// +optional
+	Used *ComputePoolResources `json:"used,omitempty"`
 	// Consumers is what takes that capacity, largest first: each training run
-	// (by its job ID), and other workloads grouped by namespace. At most
-	// MaxPoolConsumers; the rest are summed in one entry of kind "rest".
+	// (by its job ID), and other workloads grouped by namespace and Helm release
+	// (app.kubernetes.io/instance). At most MaxPoolConsumers; the rest are summed
+	// in one entry of kind "rest".
 	// +optional
 	Consumers []ComputePoolConsumer `json:"consumers,omitempty"`
 	// +optional

@@ -88,7 +88,7 @@ describe('compute pool rows', () => {
             kind: 'run', namespace: 'vision', name: 'train-a', pods: 2, requested: { cpu: '8', memory: '32Gi', gpus: 4 }
           },
           {
-            kind: 'workload', namespace: 'gpu-operator', pods: 3, requested: { cpu: '1500m', memory: '1Gi' }
+            kind: 'workload', namespace: 'gpu-operator', pods: 3, requested: { cpu: '1500m', memory: '1Gi' }, used: { cpu: '120m', memory: '300Mi' }
           },
         ],
       },
@@ -96,9 +96,13 @@ describe('compute pool rows', () => {
 
     expect(r.free).toEqual({ cpu: '117.5', memory: '952.0Gi', gpus: 11 });
     expect(r.consumers[0]).toEqual({
-      kind: 'run', namespace: 'vision', name: 'train-a', pods: 2, cpu: '8', memory: '32.0Gi', gpus: 4
+      kind: 'run', namespace: 'vision', name: 'train-a', pods: 2, cpu: '8', memory: '32.0Gi', gpus: 4, usedCpu: '', usedMemory: ''
     });
-    expect(r.consumers[1]).toMatchObject({ kind: 'workload', namespace: 'gpu-operator', cpu: '1.5', gpus: 0 });
+    expect(r.used).toBeNull();
+    expect(r.consumers[1]).toMatchObject({
+      kind: 'workload', namespace: 'gpu-operator', cpu: '1.5', gpus: 0, usedCpu: '0.12', usedMemory: '300Mi'
+    });
+    expect(poolRow({ ...h100, status: { ...h100.status, used: { cpu: '2345m', memory: '3Gi' } } }).used).toEqual({ cpu: '2.35', memory: '3.0Gi' });
 
     describeRuns([r], [{
       metadata: { name: 'train-a', namespace: 'aif-vision' },

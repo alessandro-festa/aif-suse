@@ -17,6 +17,7 @@ limitations under the License.
 package computepool
 
 import (
+	"fmt"
 	"context"
 	"errors"
 	"testing"
@@ -46,11 +47,18 @@ type fakeCluster struct {
 	nodes  []corev1.Node
 	pods   []corev1.Pod
 	groups []string
+	stats  map[string]string // node → kubelet stats summary; missing = unreadable
 }
 
 func (f *fakeCluster) Nodes(context.Context) ([]corev1.Node, error) { return f.nodes, nil }
 func (f *fakeCluster) Pods(context.Context) ([]corev1.Pod, error)   { return f.pods, nil }
 func (f *fakeCluster) APIGroups(context.Context) ([]string, error)  { return f.groups, nil }
+func (f *fakeCluster) NodeStats(_ context.Context, node string) ([]byte, error) {
+	if s, ok := f.stats[node]; ok {
+		return []byte(s), nil
+	}
+	return nil, fmt.Errorf("no stats for %s", node)
+}
 
 type fakeAccess struct {
 	clusters map[string]*fakeCluster

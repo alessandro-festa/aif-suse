@@ -41,6 +41,8 @@ export interface ComputePoolRow {
   reclaim:       PoolReclaim | null;
   /** What is left: allocatable minus requested. */
   free:          { cpu: string; memory: string; gpus: number };
+  /** What the pods actually use now (kubelet); null when not read. */
+  used:          { cpu: string; memory: string } | null;
   /** What takes the capacity, largest first, as the operator last read it. */
   consumers:     PoolConsumer[];
 }
@@ -48,11 +50,13 @@ export interface ComputePoolRow {
 export interface PoolConsumer {
   kind:      'run' | 'workload' | 'rest';
   namespace: string;
-  name:      string; // the run's job ID (its AIJob's name)
+  name:      string; // the run's job ID (its AIJob's name), or a workload's Helm release
   pods:      number;
-  cpu:       string;
+  cpu:       string; // requested
   memory:    string;
   gpus:      number;
+  usedCpu:   string; // in use now; '' when not read
+  usedMemory: string;
   // runs only, from the AIJob on local
   project?:  string;
   phase?:    string;
@@ -184,14 +188,17 @@ export function poolRow(p: any, clusterNames: Record<string, string> = {}): Comp
     training:      st.training || [],
     reclaim:       spec.reclaim?.idleTimeout ? { ...spec.reclaim } : null,
     free:          { cpu: String(freeCores), memory: fmtMem(freeMem), gpus: Math.max(0, (Number(alloc.gpus) || 0) - (Number(req.gpus) || 0)) },
+    used:          st.used ? { cpu: String(Math.round(parseCpu(st.used.cpu) * 100) / 100), memory: fmtMem(parseMem(st.used.memory) || 0) } : null,
     consumers:     (st.consumers || []).map((c: any): PoolConsumer => ({
       kind:      c.kind === 'run' || c.kind === 'rest' ? c.kind : 'workload',
       namespace: c.namespace || '',
       name:      c.name || '',
       pods:      Number(c.pods) || 0,
-      cpu:       String(cores(c.requested?.cpu)),
-      memory:    fmtMem(parseMem(c.requested?.memory) || 0),
-      gpus:      Number(c.requested?.gpus) || 0,
+      cpu:        String(cores(c.requested?.cpu)),
+      memory:     fmtMem(parseMem(c.requested?.memory) || 0),
+      gpus:       Number(c.requested?.gpus) || 0,
+      usedCpu:    c.used ? String(Math.round(parseCpu(c.used.cpu) * 100) / 100) : '',
+      usedMemory: c.used ? fmtMem(parseMem(c.used.memory) || 0) : '',
     })),
   };
 }

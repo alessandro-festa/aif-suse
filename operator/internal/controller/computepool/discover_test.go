@@ -97,7 +97,7 @@ func TestPoolStatusCountsTheSelectedSchedulableNodesAndWhatRunsOnThem(t *testing
 	}
 	pools := discoverPools("c-abc", "prod", nodes)
 
-	st, err := poolStatus(pools[0].Spec, nodes, pods, stack{Schedulers: []string{"kai"}})
+	st, err := poolStatus(pools[0].Spec, nodes, pods, stack{Schedulers: []string{"kai"}}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), st.Nodes, "the cordoned H100 is not capacity")
 	assert.Equal(t, int64(16), st.Allocatable.GPUs)
@@ -109,7 +109,7 @@ func TestPoolStatusCountsTheSelectedSchedulableNodesAndWhatRunsOnThem(t *testing
 	assert.Equal(t, int64(81559), st.GPU.MemoryMiB)
 	assert.Equal(t, []string{"kai"}, st.Schedulers)
 
-	cpu, err := poolStatus(pools[2].Spec, nodes, pods, stack{})
+	cpu, err := poolStatus(pools[2].Spec, nodes, pods, stack{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), cpu.Nodes, "the CPU pool excludes every labelled GPU node")
 	assert.Zero(t, cpu.Allocatable.GPUs)
@@ -117,7 +117,7 @@ func TestPoolStatusCountsTheSelectedSchedulableNodesAndWhatRunsOnThem(t *testing
 }
 
 func TestPoolStatusWithoutSelectorTakesEveryNode(t *testing.T) {
-	st, err := poolStatus(v1alpha1.ComputePoolSpec{Kind: v1alpha1.ComputePoolKindGPU}, []corev1.Node{h100("g1"), l4("g2")}, nil, stack{})
+	st, err := poolStatus(v1alpha1.ComputePoolSpec{Kind: v1alpha1.ComputePoolKindGPU}, []corev1.Node{h100("g1"), l4("g2")}, nil, stack{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), st.Nodes)
 	assert.Equal(t, []string{"NVIDIA-H100-80GB-HBM3", "NVIDIA-L4"}, st.GPU.Models)
@@ -156,11 +156,11 @@ func TestATaintedNodeIsNotCapacityUnlessRunsTolerateIt(t *testing.T) {
 
 	pools := discoverPools("c-abc", "prod", nodes)
 	require.Len(t, pools, 2)
-	st, err := poolStatus(pools[1].Spec, nodes, nil, stack{})
+	st, err := poolStatus(pools[1].Spec, nodes, nil, stack{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), st.Nodes, "the control plane takes no run; a PreferNoSchedule taint does not keep runs off")
 	assert.Equal(t, "16", st.Allocatable.CPU.String())
-	gpu, err := poolStatus(pools[0].Spec, nodes, nil, stack{})
+	gpu, err := poolStatus(pools[0].Spec, nodes, nil, stack{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(8), gpu.Allocatable.GPUs, "the training chart tolerates the nvidia.com/gpu taint")
 
@@ -183,7 +183,7 @@ func TestPoolStatusSaysWhoTakesTheCapacity(t *testing.T) {
 		inNS(pod("g1", corev1.PodRunning, "500m", "512Mi", 0), "gpu-operator", ""),
 		inNS(pod("g1", corev1.PodRunning, "500m", "512Mi", 0), "gpu-operator", ""),
 	}
-	st, err := poolStatus(v1alpha1.ComputePoolSpec{Kind: v1alpha1.ComputePoolKindGPU}, nodes, pods, stack{})
+	st, err := poolStatus(v1alpha1.ComputePoolSpec{Kind: v1alpha1.ComputePoolKindGPU}, nodes, pods, stack{}, nil)
 	require.NoError(t, err)
 	require.Len(t, st.Consumers, 3)
 	top := st.Consumers[0]
@@ -198,10 +198,40 @@ func TestPoolStatusSaysWhoTakesTheCapacity(t *testing.T) {
 	for i := 0; i < v1alpha1.MaxPoolConsumers+3; i++ {
 		many = append(many, inNS(pod("g1", corev1.PodRunning, "1", "1Gi", 0), fmt.Sprintf("ns-%02d", i), ""))
 	}
-	st, err = poolStatus(v1alpha1.ComputePoolSpec{Kind: v1alpha1.ComputePoolKindGPU}, nodes, many, stack{})
+	st, err = poolStatus(v1alpha1.ComputePoolSpec{Kind: v1alpha1.ComputePoolKindGPU}, nodes, many, stack{}, nil)
 	require.NoError(t, err)
 	require.Len(t, st.Consumers, v1alpha1.MaxPoolConsumers+1)
 	rest := st.Consumers[v1alpha1.MaxPoolConsumers]
 	assert.Equal(t, "rest", rest.Kind)
 	assert.Equal(t, int32(3), rest.Pods, "the smallest summed in one entry")
+}
+
+func TestPoolStatusSaysWhatIsActuallyUsedAndNamesReleases(t *testing.T) {
+	nodes := []corev1.Node{cpuNode("c1")}
+	run := pod("c1", corev1.PodRunning, "4", "8Gi", 0)
+	run.Name, run.Namespace, run.Labels = "train-a-0", "vision", map[string]string{v1alpha1.AIJobJobIDLabel: "train-a"}
+	llm := pod("c1", corev1.PodRunning, "2", "2Gi", 0)
+	llm.Name, llm.Namespace, llm.Labels = "llama-cpp-abc", "vision", map[string]string{helmInstanceLabel: "llama-cpp"}
+	sched := pod("c1", corev1.PodRunning, "0", "0", 0)
+	sched.Name, sched.Namespace = "volcano-scheduler-x", "volcano-system"
+	usage := parseUsage([][]byte{[]byte(`{"pods":[
+	 {"podRef":{"name":"train-a-0","namespace":"vision"},"cpu":{"usageNanoCores":50000000},"memory":{"workingSetBytes":1073741824}},
+	 {"podRef":{"name":"llama-cpp-abc","namespace":"vision"},"cpu":{"usageNanoCores":1500000000},"memory":{"workingSetBytes":1610612736}},
+	 {"podRef":{"name":"volcano-scheduler-x","namespace":"volcano-system"},"cpu":{"usageNanoCores":20000000},"memory":{"workingSetBytes":52428800}}]}`)})
+
+	st, err := poolStatus(v1alpha1.ComputePoolSpec{Kind: v1alpha1.ComputePoolKindCPU}, nodes, []corev1.Pod{run, llm, sched}, stack{}, usage)
+	require.NoError(t, err)
+	require.NotNil(t, st.Used)
+	assert.Equal(t, "1570m", st.Used.CPU.String(), "what the pods use, not what they request")
+	got := map[string]string{}
+	for _, c := range st.Consumers {
+		require.NotNil(t, c.Used, c.Name)
+		got[c.Kind+":"+c.Namespace+"/"+c.Name] = c.Used.CPU.String()
+	}
+	assert.Equal(t, map[string]string{"run:vision/train-a": "50m", "workload:vision/llama-cpp": "1500m", "workload:volcano-system/": "20m"}, got,
+		"an idle run uses little of its 4 CPU; the endpoint is named by its release; a pod that requests nothing still shows its use")
+
+	st, err = poolStatus(v1alpha1.ComputePoolSpec{Kind: v1alpha1.ComputePoolKindCPU}, nodes, []corev1.Pod{run}, stack{}, nil)
+	require.NoError(t, err)
+	assert.Nil(t, st.Used, "stats not read: no figure rather than zero")
 }

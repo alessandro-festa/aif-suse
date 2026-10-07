@@ -263,8 +263,9 @@ spec:
               consumers:
                 description: |-
                   Consumers is what takes that capacity, largest first: each training run
-                  (by its job ID), and other workloads grouped by namespace. At most
-                  MaxPoolConsumers; the rest are summed in one entry of kind "rest".
+                  (by its job ID), and other workloads grouped by namespace and Helm release
+                  (app.kubernetes.io/instance). At most MaxPoolConsumers; the rest are summed
+                  in one entry of kind "rest".
                 items:
                   description: ComputePoolConsumer is one thing running on a pool's
                     nodes and what it requests.
@@ -279,8 +280,9 @@ spec:
                       - rest
                       type: string
                     name:
-                      description: Name is the run's job ID (the AIJob's name) for
-                        a run; empty otherwise.
+                      description: |-
+                        Name is the run's job ID (the AIJob's name) for a run, the Helm release
+                        (app.kubernetes.io/instance) for a workload that has one; empty otherwise.
                       type: string
                     namespace:
                       description: Namespace on the pool's cluster; empty for rest.
@@ -292,6 +294,27 @@ spec:
                     requested:
                       description: ComputePoolResources is an amount of the resources
                         a pool is placed by.
+                      properties:
+                        cpu:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        gpus:
+                          description: GPUs counts whole devices (nvidia.com/gpu).
+                          format: int64
+                          type: integer
+                        memory:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                      type: object
+                    used:
+                      description: Used is what its pods actually use now; empty when
+                        not read.
                       properties:
                         cpu:
                           anyOf:
@@ -380,6 +403,28 @@ spec:
                 items:
                   type: string
                 type: array
+              used:
+                description: |-
+                  Used is what the pods on those nodes actually use (CPU, memory working
+                  set), from the kubelets; empty when the nodes' stats could not be read.
+                properties:
+                  cpu:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  gpus:
+                    description: GPUs counts whole devices (nvidia.com/gpu).
+                    format: int64
+                    type: integer
+                  memory:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                type: object
             type: object
         required:
         - spec

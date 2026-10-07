@@ -85,7 +85,11 @@ export default {
         return 'Everything else';
       }
 
-      return c.kind === 'run' ? c.name : `${ c.namespace } (other workloads)`;
+      if (c.kind === 'run' || c.name) {
+        return c.name;
+      }
+
+      return this.t('suseai.pages.computePools.consumers.otherPods');
     },
     edit(p) {
       this.editing = p.name;
@@ -210,13 +214,17 @@ export default {
           <td>
             {{ p.cpu }}
             <div class="text-muted">
-              {{ p.free.cpu }} {{ t('suseai.pages.computePools.free') }}
+              <template v-if="p.used">
+                {{ p.used.cpu }} {{ t('suseai.pages.computePools.inUse') }} ·
+              </template>{{ p.free.cpu }} {{ t('suseai.pages.computePools.free') }}
             </div>
           </td>
           <td>
             {{ p.memory }}
             <div class="text-muted">
-              {{ p.free.memory }} {{ t('suseai.pages.computePools.free') }}
+              <template v-if="p.used">
+                {{ p.used.memory }} {{ t('suseai.pages.computePools.inUse') }} ·
+              </template>{{ p.free.memory }} {{ t('suseai.pages.computePools.free') }}
             </div>
           </td>
           <td>
@@ -310,7 +318,7 @@ export default {
                   <th>{{ t('suseai.pages.computePools.consumers.namespace') }}</th>
                   <th>{{ t('suseai.pages.computePools.consumers.project') }}</th>
                   <th>{{ t('suseai.pages.computePools.consumers.pods') }}</th>
-                  <th>CPU</th>
+                  <th>{{ t('suseai.pages.computePools.consumers.cpu') }}</th>
                   <th>{{ t('suseai.pages.computePools.consumers.memory') }}</th>
                   <th v-if="p.kind === 'gpu'">
                     GPUs
@@ -337,8 +345,18 @@ export default {
                   <td>{{ c.namespace || '—' }}</td>
                   <td>{{ c.project || '—' }}</td>
                   <td>{{ c.pods }}</td>
-                  <td>{{ c.cpu }}</td>
-                  <td>{{ c.memory }}</td>
+                  <td>
+                    {{ c.cpu }}<span
+                      v-if="c.usedCpu"
+                      class="text-muted"
+                    > · {{ c.usedCpu }} {{ t('suseai.pages.computePools.inUse') }}</span>
+                  </td>
+                  <td>
+                    {{ c.memory }}<span
+                      v-if="c.usedMemory"
+                      class="text-muted"
+                    > · {{ c.usedMemory }} {{ t('suseai.pages.computePools.inUse') }}</span>
+                  </td>
                   <td v-if="p.kind === 'gpu'">
                     {{ c.gpus }}
                   </td>

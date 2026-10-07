@@ -17,6 +17,8 @@ limitations under the License.
 package computepool
 
 import (
+	"context"
+	"encoding/json"
 	"regexp"
 	"sort"
 	"strconv"
@@ -200,7 +202,7 @@ func detectStack(groups []string, nodes []corev1.Node, backends map[string]train
 // poolStatus is what a pool's selector finds on the cluster: its schedulable
 // nodes, what they can allocate and what the pods on them request. Conditions
 // and ObservedAt are the caller's.
-func poolStatus(spec v1alpha1.ComputePoolSpec, nodes []corev1.Node, pods []corev1.Pod, st stack) (v1alpha1.ComputePoolStatus, error) {
+func poolStatus(spec v1alpha1.ComputePoolSpec, nodes []corev1.Node, pods []corev1.Pod, st stack, usage podUsage) (v1alpha1.ComputePoolStatus, error) {
 	sel := labels.Everything()
 	if spec.NodeSelector != nil {
 		s, err := metav1.LabelSelectorAsSelector(spec.NodeSelector)
@@ -244,6 +246,18 @@ func poolStatus(spec v1alpha1.ComputePoolSpec, nodes []corev1.Node, pods []corev
 		}
 		c := consumerOf(p, by)
 		c.Pods++
+		if u, ok := usage[p.Namespace+"/"+p.Name]; ok {
+			if c.Used == nil {
+				c.Used = &v1alpha1.ComputePoolResources{}
+			}
+			c.Used.CPU.Add(u.CPU)
+			c.Used.Memory.Add(u.Memory)
+			if out.Used == nil {
+				out.Used = &v1alpha1.ComputePoolResources{}
+			}
+			out.Used.CPU.Add(u.CPU)
+			out.Used.Memory.Add(u.Memory)
+		}
 		for _, ct := range p.Spec.Containers {
 			rcpu.Add(ct.Resources.Requests[corev1.ResourceCPU])
 			rmem.Add(ct.Resources.Requests[corev1.ResourceMemory])
@@ -276,7 +290,7 @@ func poolStatus(spec v1alpha1.ComputePoolSpec, nodes []corev1.Node, pods []corev
 
 // consumerOf is the entry a pod counts towards: its training run, else its namespace.
 func consumerOf(p corev1.Pod, by map[string]*v1alpha1.ComputePoolConsumer) *v1alpha1.ComputePoolConsumer {
-	c := v1alpha1.ComputePoolConsumer{Kind: "workload", Namespace: p.Namespace}
+	c := v1alpha1.ComputePoolConsumer{Kind: "workload", Namespace: p.Namespace, Name: p.Labels[helmInstanceLabel]}
 	if id := p.Labels[v1alpha1.AIJobJobIDLabel]; id != "" {
 		c.Kind, c.Name = "run", id
 	}
@@ -316,6 +330,80 @@ func topConsumers(by map[string]*v1alpha1.ComputePoolConsumer) []v1alpha1.Comput
 		rest.Requested.CPU.Add(c.Requested.CPU)
 		rest.Requested.Memory.Add(c.Requested.Memory)
 		rest.Requested.GPUs += c.Requested.GPUs
+		if c.Used != nil {
+			if rest.Used == nil {
+				rest.Used = &v1alpha1.ComputePoolResources{}
+			}
+			rest.Used.CPU.Add(c.Used.CPU)
+			rest.Used.Memory.Add(c.Used.Memory)
+		}
 	}
 	return append(all[:v1alpha1.MaxPoolConsumers], rest)
+}
+
+// helmInstanceLabel names a workload's Helm release, which groups its pods.
+const helmInstanceLabel = "app.kubernetes.io/instance"
+
+// podUse is what one pod uses now.
+type podUse struct {
+	CPU    resource.Quantity
+	Memory resource.Quantity
+}
+
+// podUsage is what each pod uses, by "namespace/name"; nil when unknown.
+type podUsage map[string]podUse
+
+type statsSummary struct {
+	Pods []struct {
+		PodRef struct {
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+		} `json:"podRef"`
+		CPU *struct {
+			UsageNanoCores *uint64 `json:"usageNanoCores"`
+		} `json:"cpu"`
+		Memory *struct {
+			WorkingSetBytes *uint64 `json:"workingSetBytes"`
+		} `json:"memory"`
+	} `json:"pods"`
+}
+
+// parseUsage reads the pods' CPU and memory working set from kubelet stats summaries.
+func parseUsage(summaries [][]byte) podUsage {
+	out := podUsage{}
+	for _, raw := range summaries {
+		var s statsSummary
+		if json.Unmarshal(raw, &s) != nil {
+			continue
+		}
+		for _, p := range s.Pods {
+			var u podUse
+			if p.CPU != nil && p.CPU.UsageNanoCores != nil {
+				u.CPU = *resource.NewMilliQuantity(int64(*p.CPU.UsageNanoCores/1e6), resource.DecimalSI)
+			}
+			if p.Memory != nil && p.Memory.WorkingSetBytes != nil {
+				u.Memory = *resource.NewQuantity(int64(*p.Memory.WorkingSetBytes), resource.BinarySI)
+			}
+			out[p.PodRef.Namespace+"/"+p.PodRef.Name] = u
+		}
+	}
+	return out
+}
+
+// readUsage reads the kubelet stats of every node runs can land on. Best effort:
+// a node whose stats cannot be read adds nothing, and nil means none could be.
+func readUsage(ctx context.Context, r ClusterReader, nodes []corev1.Node) podUsage {
+	var summaries [][]byte
+	for _, n := range nodes {
+		if !takesRuns(n) {
+			continue
+		}
+		if raw, err := r.NodeStats(ctx, n.Name); err == nil {
+			summaries = append(summaries, raw)
+		}
+	}
+	if len(summaries) == 0 {
+		return nil
+	}
+	return parseUsage(summaries)
 }

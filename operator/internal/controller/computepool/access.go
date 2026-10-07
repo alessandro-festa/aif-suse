@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/SUSE/aif-operator/internal/infra/rancher"
@@ -39,6 +40,8 @@ type ClusterReader interface {
 	Nodes(ctx context.Context) ([]corev1.Node, error)
 	Pods(ctx context.Context) ([]corev1.Pod, error)
 	APIGroups(ctx context.Context) ([]string, error)
+	// NodeStats is a node's kubelet stats summary (what its pods use now).
+	NodeStats(ctx context.Context, node string) ([]byte, error)
 }
 
 // RancherAccess reads downstream clusters through Rancher's proxy with the
@@ -84,7 +87,11 @@ func (a *RancherAccess) For(_ context.Context, clusterID string) (ClusterReader,
 	if err != nil {
 		return nil, err
 	}
-	r := &clusterReader{c: c, d: d}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	r := &clusterReader{c: c, d: d, cs: cs}
 	if a.clients == nil {
 		a.clients = map[string]cachedClient{}
 	}
@@ -97,8 +104,13 @@ func sameConnection(a, b rancher.Connection) bool {
 }
 
 type clusterReader struct {
-	c ctrl.Reader
-	d discovery.DiscoveryInterface
+	c  ctrl.Reader
+	d  discovery.DiscoveryInterface
+	cs kubernetes.Interface
+}
+
+func (r *clusterReader) NodeStats(ctx context.Context, node string) ([]byte, error) {
+	return r.cs.CoreV1().RESTClient().Get().AbsPath("/api/v1/nodes", node, "proxy/stats/summary").DoRaw(ctx)
 }
 
 func (r *clusterReader) Nodes(ctx context.Context) ([]corev1.Node, error) {

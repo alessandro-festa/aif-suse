@@ -639,6 +639,15 @@ namespace `volcano-system`, left installed):
   run phase Queued (queue `small`). After raising the capability to 4, the gang started and
   Succeeded.
 
+**F-59 [fact, user report] "No runs under the CPU pools".** Consumers are what runs now, and the
+CPU runs had finished (the smoke test lasts ~30 s); only an unfinished GPU run was listed. The
+llama.cpp endpoint was there but unnamed ("vision, other workloads"), and requests alone hid real
+use. Discovery now also reads each pool node's kubelet stats summary, one call per node per
+minute, best effort. Pools and consumers carry `used` (CPU, memory working set) beside `requested`,
+and workloads are grouped by namespace + Helm release (`app.kubernetes.io/instance`). Live:
+c-xvstz-cpu showed `llama-cpp` requesting 2 CPU and using ~0 CPU / 470 MiB. Scale note: this adds
+to O-10.
+
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator
 namespace. Discovery reuses it (D-15).

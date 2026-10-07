@@ -47,6 +47,7 @@ suseai:
         reclaim: Idle reclaim
         status: Status
       free: free
+      inUse: in use
       builtin:
         scheduler: Kubernetes default
         schedulerTip: No add-on scheduler (KAI, Kueue, Volcano, Run:ai) is installed. AI Factory's queue chooses the pool; the Kubernetes scheduler places the pods.
@@ -57,11 +58,13 @@ suseai:
         toggle: Who uses this pool
         none: Nothing runs on this pool's nodes.
         what: Run or workload
+        otherPods: other pods
+        cpu: CPU requested
         run: Run
         namespace: Namespace
         project: AI project
         pods: Pods
-        memory: Memory
+        memory: Memory requested
         activity: Activity
       reclaim:
         edit: Edit

@@ -138,10 +138,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, err
 	}
 	st := detectStack(groups, nodes, backends)
+	usage := readUsage(ctx, reader, nodes)
 	now := r.now()
 	for i := range pools {
 		p := &pools[i]
-		status, err := poolStatus(p.Spec, nodes, pods, st)
+		status, err := poolStatus(p.Spec, nodes, pods, st, usage)
 		if err != nil {
 			status = v1alpha1.ComputePoolStatus{}
 			r.setConnected(&status, p, metav1.ConditionFalse, "InvalidSelector", err.Error(), now)
