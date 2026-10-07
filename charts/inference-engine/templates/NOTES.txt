@@ -1,0 +1,9 @@
+{{ .Values.engine }} serves {{ include "inference-engine.servedName" . }} with OpenAI's API at
+  http://{{ include "inference-engine.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/v1
+
+The first start downloads the model; the pod is Ready once it is loaded.
+
+Try it:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "inference-engine.fullname" . }} {{ .Values.service.port }}
+  curl localhost:{{ .Values.service.port }}/v1/chat/completions -H 'Content-Type: application/json' \
+    -d '{"model":"{{ include "inference-engine.servedName" . }}","messages":[{"role":"user","content":"Hello"}]}'

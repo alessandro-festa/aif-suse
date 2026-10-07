@@ -30,10 +30,14 @@ export const WORKLOAD_PROFILE_LABEL = 'trainingjobs/profile';
 
 export interface BlueprintRef { name: string; version: string }
 
-/** What one blueprint serves, read from its vLLM component. Empty fields = not a vLLM blueprint. */
+/** The model servers a blueprint can be read for: vLLM and Ollama from the Application Collection, llama.cpp and SGLang from the inference-engine chart. */
+export type InferenceEngine = 'vllm' | 'ollama' | 'llamacpp' | 'sglang';
+
+/** What one blueprint serves, read from its model server component. Empty fields = no model server found. */
 export interface BlueprintSummary {
   ref: BlueprintRef;
   displayName: string;
+  engine: InferenceEngine | '';
   components: string[]; // chart names, in install order
   releaseNames: string[]; // Helm release per component: releaseName, or the chart name
   model: string;
@@ -53,6 +57,8 @@ export interface BlueprintSummary {
   mpsLimitMiB: number | null; // the engine's GPU memory cap on a shared GPU
   kaiMemoryMiB: number | null; // the engine's KAI GPU-memory share (its gpu-memory annotation)
   kaiQueue: string; // the KAI queue the engine is labelled for
+  // The model server's own Service, for engines without a router (Ollama, llama.cpp, SGLang).
+  service: { name: string; port: number } | null;
 }
 
 /** The Blueprint object for a name and version: the operator's own lookup is by these labels. */
@@ -62,7 +68,20 @@ export function findBlueprint(blueprints: any[], ref: BlueprintRef): any | null 
 
 export function summarizeBlueprint(bp: any, ref: BlueprintRef): BlueprintSummary {
   const comps: any[] = Array.isArray(bp?.spec?.components) ? bp.spec.components : [];
-  const vllm = comps.find((c) => c?.values?.servingEngineSpec?.modelSpec?.length) || {};
+  const vllm = comps.find((c) => c?.values?.servingEngineSpec?.modelSpec?.length);
+
+  if (!vllm) {
+    const other = otherEngineSummary(bp, ref, comps);
+
+    if (other) {
+      return other;
+    }
+  }
+
+  return vllmSummary(bp, ref, comps, vllm || {});
+}
+
+function vllmSummary(bp: any, ref: BlueprintRef, comps: any[], vllm: any): BlueprintSummary {
   const engine = vllm.values?.servingEngineSpec || {};
   const m = (engine.modelSpec || [])[0] || {};
   const args: string[] = (m.vllmConfig?.extraArgs || []).map(String);
@@ -72,6 +91,7 @@ export function summarizeBlueprint(bp: any, ref: BlueprintRef): BlueprintSummary
   return {
     ref,
     displayName:          String(bp?.spec?.displayName || ref.name),
+    engine:               m.modelURL ? 'vllm' : '',
     components:           comps.map((c) => String(c.chartName)),
     releaseNames:         comps.map((c) => String(c.releaseName || c.chartName)),
     model:                String(m.modelURL || ''),
@@ -90,6 +110,70 @@ export function summarizeBlueprint(bp: any, ref: BlueprintRef): BlueprintSummary
     mpsLimitMiB:          parseMpsLimit((m.env || []).find((e: any) => e?.name === MPS_LIMIT_ENV)?.value),
     kaiMemoryMiB:         Number(m.podAnnotations?.['gpu-memory']) || null,
     kaiQueue:             String(engine.labels?.[podQueueLabel('kai')] || ''),
+    service:              null,
+  };
+}
+
+/**
+ * Ollama (the Application Collection chart) or the inference-engine chart (llama.cpp, SGLang): one
+ * model server behind its own Service, sized by its resources. null when the blueprint has neither.
+ */
+function otherEngineSummary(bp: any, ref: BlueprintRef, comps: any[]): BlueprintSummary | null {
+  const i = comps.findIndex((c) => c?.chartName === 'ollama' || c?.chartName === 'inference-engine');
+
+  if (i < 0) {
+    return null;
+  }
+  const c = comps[i];
+  const v = c.values || {};
+  const release = String(c.releaseName || c.chartName);
+  let engine: InferenceEngine;
+  let model: string;
+  let gpus: number;
+  let service: { name: string; port: number };
+  let cacheSize: string;
+  let storageClass: string;
+
+  if (c.chartName === 'ollama') {
+    engine = 'ollama';
+    model = String(v.ollama?.models?.run?.[0] || v.ollama?.models?.pull?.[0] || '');
+    gpus = v.ollama?.gpu?.enabled ? Number(v.ollama.gpu.number) || 1 : 0;
+    service = { name: String(v.fullnameOverride || release), port: Number(v.service?.port) || 11434 };
+    cacheSize = v.persistentVolume?.enabled ? String(v.persistentVolume.size || '') : '';
+    storageClass = String(v.persistentVolume?.storageClass || '');
+  } else {
+    engine = v.engine === 'sglang' ? 'sglang' : 'llamacpp';
+    model = String(engine === 'sglang' ? v.model?.id || 'Qwen/Qwen2.5-1.5B-Instruct' : v.model?.hfRepo || 'Qwen/Qwen2.5-0.5B-Instruct-GGUF');
+    gpus = Number(v.gpu?.count) || 0;
+    service = { name: release, port: Number(v.service?.port) || 8000 };
+    cacheSize = v.cache?.enabled === false ? '' : String(v.cache?.size || '20Gi');
+    storageClass = String(v.cache?.storageClass || '');
+  }
+
+  return {
+    ref,
+    displayName:          String(bp?.spec?.displayName || ref.name),
+    engine,
+    components:           comps.map((x) => String(x.chartName)),
+    releaseNames:         comps.map((x) => String(x.releaseName || x.chartName)),
+    model,
+    gpusPerReplica:       gpus,
+    replicas:             Number(v.replicas ?? v.replicaCount) || 1,
+    cpu:                  String(v.resources?.requests?.cpu ?? ''),
+    memory:               String(v.resources?.requests?.memory ?? ''),
+    storageClass,
+    cacheSize,
+    dra:                  false,
+    maxModelLen:          Number(v.model?.contextLength) || 0,
+    // GGUF files are quantised (Q4_K_M by default): about 0.6 bytes per parameter
+    dtype:                engine === 'llamacpp' || engine === 'ollama' ? 'q4' : 'auto',
+    gpuMemoryUtilization: 0.9,
+    gateway:              null,
+    sharedClaim:          '',
+    mpsLimitMiB:          null,
+    kaiMemoryMiB:         null,
+    kaiQueue:             '',
+    service,
   };
 }
 
@@ -108,7 +192,7 @@ export function modelParamsB(model: string): number | null {
 }
 
 const BYTES_PER_PARAM: Record<string, number> = {
-  half: 2, float16: 2, bfloat16: 2, auto: 2, float32: 4, float: 4, fp8: 1, int8: 1
+  half: 2, float16: 2, bfloat16: 2, auto: 2, float32: 4, float: 4, fp8: 1, int8: 1, q4: 0.6
 };
 
 /** GiB the weights need on the GPU: parameters × bytes per parameter for the dtype, +10% overhead. */
@@ -226,10 +310,11 @@ export function inferenceChecks(input: InferenceInput, ref: BlueprintRef | null,
     }
   }
 
-  // Model fits the GPU
-  const params = modelParamsB(s.model);
+  // Model fits the GPU (a CPU engine has none to fit; a GPU share asks for no whole GPU)
+  const onGpu = want > 0 || !!s.kaiMemoryMiB;
+  const params = onGpu ? modelParamsB(s.model) : null;
 
-  if (s.model && params === null) {
+  if (onGpu && s.model && params === null) {
     add('model-fit', 'info', 'Model size not stated in its name', `${ s.model }: cannot estimate whether it fits in GPU memory.`);
   } else if (params !== null && s.kaiMemoryMiB) {
     // Under HAMi-core / NvFractions the GPU vLLM sees is the share, so its utilization is a fraction
@@ -255,7 +340,7 @@ export function inferenceChecks(input: InferenceInput, ref: BlueprintRef | null,
   }
 
   // CPU / memory on a GPU node
-  if (f.podsReadable && f.gpuNodes.length && s.cpu && s.memory) {
+  if (onGpu && f.podsReadable && f.gpuNodes.length && s.cpu && s.memory) {
     const cpu = parseCpu(s.cpu); const mem = parseMem(s.memory) || 0;
     const fits = f.gpuNodes.filter((n) => n.cpuFree >= cpu && n.memFree >= mem);
 
@@ -293,13 +378,16 @@ export function inferenceChecks(input: InferenceInput, ref: BlueprintRef | null,
   return out;
 }
 
-/** The AIWorkload a deployment creates. Its namespace is the project namespace it installs into. */
-export function aiWorkloadFor(input: InferenceInput, ref: BlueprintRef, profileName: string, displayName: string, clusterId: string): any {
+/**
+ * The AIWorkload a deployment creates. It installs into the project namespace on clusterId, and is
+ * recorded there too unless recordNamespace (an AI project's namespace on local) says otherwise.
+ */
+export function aiWorkloadFor(input: InferenceInput, ref: BlueprintRef, profileName: string, displayName: string, clusterId: string, recordNamespace = ''): any {
   return {
     type:     AIWORKLOAD_TYPE,
     metadata: {
       name:      input.name,
-      namespace: input.namespace,
+      namespace: recordNamespace || input.namespace,
       labels:    { [WORKLOAD_PROFILE_LABEL]: profileName },
     },
     spec: {
@@ -314,11 +402,15 @@ export function aiWorkloadFor(input: InferenceInput, ref: BlueprintRef, profileN
 
 /**
  * In-cluster OpenAI-compatible base URL clients should use: the LiteLLM gateway when the blueprint
- * has one (its Service is named after the release), otherwise the vLLM router.
+ * has one (its Service is named after the release), the model server's own Service for engines
+ * without a router, otherwise the vLLM router.
  */
 export function endpointUrl(s: BlueprintSummary, namespace: string): string {
   if (s.gateway) {
     return `http://${ s.gateway.release }.${ namespace }.svc:${ s.gateway.port }/v1`;
+  }
+  if (s.service) {
+    return `http://${ s.service.name }.${ namespace }.svc:${ s.service.port }/v1`;
   }
   const i = s.components.findIndex((c) => /vllm/.test(c));
 

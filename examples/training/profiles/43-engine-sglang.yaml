@@ -1,0 +1,17 @@
+# SGLang from the inference-engine chart, blueprint inference-sglang 1.0.0. Needs the chart in a
+# ClusterRepo named aif-engines: a git custom repository in AI Factory Settings.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: engine-sglang
+  namespace: ai-profiles
+  labels:
+    trainingjobs/profile: inference
+data:
+  profile.yaml: |
+    displayName: SGLang · Qwen2.5 1.5B
+    description: SGLang's OpenAI-compatible server serving Qwen2.5-1.5B-Instruct on one GPU.
+    framework: SGLang
+    gpu: any
+    status: beta
+    blueprint: { name: inference-sglang, version: 1.0.0 }

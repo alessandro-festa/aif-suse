@@ -75,6 +75,26 @@ export async function localBlueprints(store: any): Promise<any[]> {
   return list?.items || [];
 }
 
+/** The AIWorkloads (deployed blueprints, inference endpoints among them), which live on local. */
+export async function localAIWorkloads(store: any): Promise<any[]> {
+  const list = await get(store, localURL(`${ AIF_API }/aiworkloads`));
+
+  return list?.items || [];
+}
+
+/** Create an AIWorkload on local. */
+export async function createAIWorkload(store: any, workload: any): Promise<any> {
+  const body = { apiVersion: 'ai-factory.suse.com/v1alpha1', kind: 'AIWorkload', ...workload };
+
+  delete body.type;
+
+  return store.dispatch('cluster/request', {
+    url:    localURL(`${ AIF_API }/namespaces/${ encodeURIComponent(workload.metadata.namespace) }/aiworkloads`),
+    method: 'POST',
+    data:   body,
+  });
+}
+
 /** Create an AIJob on local. */
 export async function createAIJob(store: any, job: any): Promise<any> {
   const body = { ...job };

@@ -6,6 +6,11 @@
 // the namespace pickers; this page replaces the checks with inference.ts, the Deploy action with an
 // AIWorkload create, and the template. The user picks a project and a name; on aif-operator 2.2.0
 // the blueprint installs as written, so what gets deployed is shown read-only.
+//
+// With compute pools, the user picks an AI project and one of its pools: the page moves to the
+// pool's cluster (its GPUs and nodes are the facts), and the AIWorkload is recorded on local in the
+// project's namespace there, targeting the project's namespace on the pool's cluster. Profiles,
+// blueprints and AIWorkloads are always read from local.
 import StatusPill from '../components/StatusPill.vue';
 import { defineComponent } from 'vue';
 import jsyaml from 'js-yaml';
@@ -14,9 +19,12 @@ import ReadinessPanel from '../components/ReadinessPanel.vue';
 import { ENDPOINTS_PAGE, PRODUCT_NAME, PROFILES_PAGE } from '../config';
 import { Check } from '../preflight';
 import {
-  aiWorkloadFor, AIWORKLOAD_TYPE, BLUEPRINT_TYPE, BlueprintSummary, endpointUrl, findBlueprint, inferenceChecks, InferenceFacts,
+  aiWorkloadFor, BlueprintSummary, endpointUrl, findBlueprint, inferenceChecks, InferenceFacts,
   summarizeBlueprint
 } from '../inference';
+import {
+  createAIWorkload, LOCAL_CLUSTER, localAIWorkloads, localBlueprints, localProfileConfigMaps, poolLabel, projectNamespace
+} from '../placement';
 import { Profile, profilesFrom } from '../profiles';
 import { Readiness, readiness } from '../readiness';
 import { loadClusterLabel } from '../cluster';
@@ -42,7 +50,8 @@ export default defineComponent({
     loadClusterLabel(this.$store, String(this.$route.params.cluster || 'local')).then((l: string) => {
       this.clusterName = l;
     });
-    const cms = await this.safeFindAll('configmap', 'configmaps');
+    await this.loadPools();
+    const cms = await localProfileConfigMaps(this.$store).catch(() => []);
 
     this.profile = profilesFrom(cms, (s: string) => jsyaml.load(s)).find((p: Profile) => p.name === this.$route.query.profile && p.type === 'inference') || null;
     this.profilesLoaded = true;
@@ -67,7 +76,23 @@ export default defineComponent({
         return [];
       }
 
-      return inferenceChecks({ namespace: this.form.namespace, name: this.form.releaseName }, this.profile.blueprint, this.facts, { ...this.inf, gpuDeviceMemory: this.facts.gpuDeviceMemory }, this.profile.requiredSecrets);
+      const checks = inferenceChecks({ namespace: this.form.namespace, name: this.form.releaseName }, this.profile.blueprint, this.facts, { ...this.inf, gpuDeviceMemory: this.facts.gpuDeviceMemory }, this.profile.requiredSecrets);
+
+      // no placement controller for endpoints: with pools, the user picks one
+      if (this.pools.length && !this.poolName) {
+        checks.unshift({
+          id: 'pool', severity: 'fail', title: this.projectName ? 'Pick a compute pool' : 'Pick an AI project', detail: ''
+        });
+      }
+
+      return checks;
+    },
+
+    /** One of the pools on the clusters the project spans. Endpoints are not placed automatically. */
+    poolOptions(): { label: string; value: string }[] {
+      const spans = new Set((this.selectedProject?.spec?.clusters || []).map((c: any) => c.clusterId));
+
+      return this.pools.filter((p: any) => spans.has(p.clusterId)).map((p: any) => ({ label: poolLabel(p), value: p.name }));
     },
 
     bp(): BlueprintSummary | null {
@@ -149,18 +174,26 @@ export default defineComponent({
   methods: {
     async loadFacts() {
       await (Submit as any).methods.loadFacts.call(this);
-      const aifInstalled = !!this.$store.getters['cluster/schemaFor'](AIWORKLOAD_TYPE);
+      const cluster = String(this.$route.params.cluster || LOCAL_CLUSTER);
+      let aifInstalled = true;
       const [blueprints, workloads] = await Promise.all([
-        this.safeFindAll(BLUEPRINT_TYPE, 'AI Factory blueprints'),
-        this.safeFindAll(AIWORKLOAD_TYPE, 'AI Factory workloads'),
+        localBlueprints(this.$store).catch(() => {
+          aifInstalled = false;
+
+          return [];
+        }),
+        localAIWorkloads(this.$store).catch(() => []),
       ]);
 
       this.inf = {
         aifInstalled,
         blueprints,
-        workloads: workloads.map((w: any) => ({
-          name: w.metadata.name, namespace: w.metadata.namespace, blueprint: w.spec?.source?.blueprint?.name || ''
-        })),
+        // the endpoints already installed on this cluster, by the namespace they run in
+        workloads: workloads
+          .filter((w: any) => (w.spec?.targetClusters?.length ? w.spec.targetClusters.includes(cluster) : cluster === LOCAL_CLUSTER))
+          .map((w: any) => ({
+            name: w.metadata.name, namespace: w.spec?.targetNamespace || w.metadata.namespace, blueprint: w.spec?.source?.blueprint?.name || ''
+          })),
         gpuDeviceMemory: 0,
       };
     },
@@ -173,17 +206,23 @@ export default defineComponent({
         return;
       }
       try {
+        const inPool = !!this.poolName && !!this.projectName;
         const body = aiWorkloadFor(
           { namespace: this.form.namespace, name: this.form.releaseName },
           this.profile.blueprint, this.profile.name, `${ this.profile.displayName } — ${ this.form.releaseName }`,
-          String(this.$route.params.cluster),
+          String(this.$route.params.cluster), inPool ? projectNamespace(this.projectName) : '',
         );
-        const model = await this.$store.dispatch('cluster/create', body);
 
-        await model.save();
+        if (inPool) {
+          await createAIWorkload(this.$store, body);
+        } else {
+          const model = await this.$store.dispatch('cluster/create', body);
+
+          await model.save();
+        }
         done(true);
         this.$router.push({
-          name: `c-cluster-${ PRODUCT_NAME }-${ ENDPOINTS_PAGE }`, params: { cluster: this.$route.params.cluster }, query: { tab: 'inference' }
+          name: `c-cluster-${ PRODUCT_NAME }-${ ENDPOINTS_PAGE }`, params: { cluster: inPool ? LOCAL_CLUSTER : this.$route.params.cluster }, query: { tab: 'inference' }
         });
       } catch (e: any) {
         this.deployError = e?.message || e?._statusText || String(e);
@@ -253,7 +292,36 @@ export default defineComponent({
         <section class="tj-form">
           <div class="tj-section">
             <h3>Basics</h3>
-            <div class="row mb-10">
+            <div
+              v-if="pools.length"
+              class="row mb-10"
+            >
+              <div class="col span-6">
+                <LabeledSelect
+                  :value="projectName"
+                  :options="projectOptions"
+                  label="AI project"
+                  placeholder="Choose the project this endpoint belongs to"
+                  @update:value="chooseProject"
+                />
+              </div>
+              <div
+                v-if="projectName"
+                class="col span-6"
+              >
+                <LabeledSelect
+                  :value="poolName"
+                  :options="poolOptions"
+                  label="Compute pool"
+                  placeholder="Choose where the endpoint runs"
+                  @update:value="choosePool"
+                />
+              </div>
+            </div>
+            <div
+              v-else
+              class="row mb-10"
+            >
               <div class="col span-6">
                 <LabeledInput
                   :value="clusterName"
@@ -265,7 +333,15 @@ export default defineComponent({
             </div>
             <div class="row">
               <div class="col span-6">
+                <LabeledInput
+                  v-if="pools.length"
+                  :value="poolName ? `${ form.namespace } on ${ clusterName }` : '—'"
+                  label="Runs in"
+                  mode="view"
+                  tooltip="The AI project's namespace on the pool's cluster."
+                />
                 <LabeledSelect
+                  v-else
                   v-model:value="form.namespace"
                   label="Project"
                   tooltip="The project namespace the endpoint runs in."

@@ -1,0 +1,51 @@
+# Inference engine: llama.cpp 1.0.0, the generic inference-engine chart (charts/inference-engine)
+# with engine=llamacpp, Qwen2.5-0.5B GGUF on CPU. Its inference profile is
+# ../profiles/42-engine-llamacpp.yaml.
+#
+# Needs the chart in a ClusterRepo named aif-engines (a git custom repo in AI Factory Settings).
+{
+  "apiVersion": "ai-factory.suse.com/v1alpha1",
+  "kind": "Blueprint",
+  "metadata": {
+    "name": "inference-llamacpp-1-0-0",
+    "labels": {
+      "ai-factory.suse.com/blueprint-name": "inference-llamacpp",
+      "ai-factory.suse.com/blueprint-version": "1.0.0",
+      "ai-factory.suse.com/source": "custom"
+    }
+  },
+  "spec": {
+    "displayName": "llama.cpp",
+    "version": "1.0.0",
+    "source": "Custom",
+    "description": "llama.cpp's OpenAI-compatible llama-server on CPU, serving Qwen2.5-0.5B-Instruct\n(GGUF, Q4_K_M) downloaded from Hugging Face.\n\nNEEDS the inference-engine chart in a ClusterRepo named aif-engines: add it in\nAI Factory Settings as a git custom repository pointing at the repository that\nholds charts/inference-engine.",
+    "components": [
+      {
+        "chartName": "inference-engine",
+        "chartRepo": "aif-engines",
+        "chartVersion": "0.1.0",
+        "values": {
+          "engine": "llamacpp",
+          "model": {
+            "hfRepo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+            "hfFile": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+            "contextLength": 4096
+          },
+          "gpu": {
+            "count": 0
+          },
+          "resources": {
+            "requests": {
+              "cpu": "2",
+              "memory": "2Gi"
+            },
+            "limits": {
+              "cpu": "4",
+              "memory": "4Gi"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

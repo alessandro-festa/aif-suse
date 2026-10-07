@@ -1,0 +1,17 @@
+# llama.cpp from the inference-engine chart, blueprint inference-llamacpp 1.0.0. Needs the chart in a
+# ClusterRepo named aif-engines: a git custom repository in AI Factory Settings.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: engine-llamacpp
+  namespace: ai-profiles
+  labels:
+    trainingjobs/profile: inference
+data:
+  profile.yaml: |
+    displayName: llama.cpp · Qwen2.5 0.5B (CPU)
+    description: llama.cpp's OpenAI-compatible server on CPU, serving Qwen2.5-0.5B-Instruct (GGUF, Q4_K_M).
+    framework: llama.cpp
+    gpu: CPU
+    status: beta
+    blueprint: { name: inference-llamacpp, version: 1.0.0 }

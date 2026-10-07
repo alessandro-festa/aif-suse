@@ -1,0 +1,71 @@
+# Inference engine: Ollama 1.0.0, the Application Collection ollama chart 1.76.0 on CPU with
+# granite4:350m-h. Its inference profile is ../profiles/41-engine-ollama.yaml.
+{
+  "apiVersion": "ai-factory.suse.com/v1alpha1",
+  "kind": "Blueprint",
+  "metadata": {
+    "name": "inference-ollama-1-0-0",
+    "labels": {
+      "ai-factory.suse.com/blueprint-name": "inference-ollama",
+      "ai-factory.suse.com/blueprint-version": "1.0.0",
+      "ai-factory.suse.com/source": "custom"
+    }
+  },
+  "spec": {
+    "displayName": "Ollama",
+    "version": "1.0.0",
+    "source": "Custom",
+    "description": "Ollama (SUSE Application Collection) on CPU, pulling and running granite4:350m-h,\na model small enough for any node.",
+    "components": [
+      {
+        "chartName": "ollama",
+        "chartRepo": "application-collection",
+        "chartVersion": "1.76.0",
+        "vendor": "suse",
+        "values": {
+          "fullnameOverride": "ollama",
+          "image": {
+            "registry": "dp.apps.rancher.io",
+            "repository": "containers/ollama",
+            "tag": "0.32.14-11.95",
+            "pullPolicy": "IfNotPresent"
+          },
+          "ollama": {
+            "gpu": {
+              "enabled": false,
+              "draEnabled": false
+            },
+            "models": {
+              "pull": [
+                "granite4:350m-h"
+              ],
+              "run": [
+                "granite4:350m-h"
+              ]
+            },
+            "port": 11434
+          },
+          "persistentVolume": {
+            "enabled": true,
+            "size": "20Gi",
+            "accessModes": [
+              "ReadWriteOnce"
+            ]
+          },
+          "resources": {
+            "requests": {
+              "cpu": "2",
+              "memory": "2Gi"
+            },
+            "limits": {}
+          },
+          "runtimeClassName": "",
+          "service": {
+            "type": "ClusterIP",
+            "port": 11434
+          }
+        }
+      }
+    ]
+  }
+}

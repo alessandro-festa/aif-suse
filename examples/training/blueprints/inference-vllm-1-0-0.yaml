@@ -1,0 +1,100 @@
+# Inference engine: vLLM 1.0.0, the Application Collection vllm chart 0.1.10 (router + one model
+# server), Qwen2.5-1.5B-Instruct on one GPU. Its inference profile is ../profiles/40-engine-vllm.yaml.
+{
+  "apiVersion": "ai-factory.suse.com/v1alpha1",
+  "kind": "Blueprint",
+  "metadata": {
+    "name": "inference-vllm-1-0-0",
+    "labels": {
+      "ai-factory.suse.com/blueprint-name": "inference-vllm",
+      "ai-factory.suse.com/blueprint-version": "1.0.0",
+      "ai-factory.suse.com/source": "custom"
+    }
+  },
+  "spec": {
+    "displayName": "vLLM",
+    "version": "1.0.0",
+    "source": "Custom",
+    "description": "OpenAI-compatible vLLM server (SUSE Application Collection) with its router,\nserving Qwen2.5-1.5B-Instruct on one NVIDIA GPU.",
+    "components": [
+      {
+        "chartName": "vllm",
+        "chartRepo": "application-collection",
+        "chartVersion": "0.1.10",
+        "vendor": "suse",
+        "values": {
+          "global": {
+            "imagePullSecrets": [
+              "application-collection"
+            ],
+            "imageRegistry": ""
+          },
+          "routerSpec": {
+            "enableRouter": true,
+            "registry": "dp.apps.rancher.io",
+            "repository": "containers/lmcache-lmstack-router",
+            "tag": "0.1.10-3.60",
+            "containerPort": 8000,
+            "servicePort": 80,
+            "serviceType": "ClusterIP",
+            "serviceDiscovery": "k8s",
+            "k8sServiceDiscoveryType": "pod-ip",
+            "routingLogic": "roundrobin",
+            "resources": {
+              "requests": {
+                "cpu": "400m",
+                "memory": "1000Mi"
+              },
+              "limits": {
+                "memory": "1000Mi"
+              }
+            }
+          },
+          "servingEngineSpec": {
+            "enableEngine": true,
+            "containerPort": 8000,
+            "servicePort": 80,
+            "runtimeClassName": "nvidia",
+            "modelSpec": [
+              {
+                "name": "qwen2-5-1-5b",
+                "modelURL": "Qwen/Qwen2.5-1.5B-Instruct",
+                "registry": "dp.apps.rancher.io",
+                "repository": "containers/vllm-openai",
+                "tag": "0.19.0-5.29",
+                "replicaCount": 1,
+                "requestCPU": 2,
+                "requestMemory": "6Gi",
+                "requestGPU": 1,
+                "pvcStorage": "20Gi",
+                "pvcAccessMode": [
+                  "ReadWriteOnce"
+                ],
+                "env": [
+                  {
+                    "name": "HF_TOKEN",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "huggingface-token",
+                        "key": "HF_TOKEN",
+                        "optional": true
+                      }
+                    }
+                  }
+                ],
+                "vllmConfig": {
+                  "dtype": "half",
+                  "maxModelLen": 8192,
+                  "extraArgs": [
+                    "--gpu-memory-utilization",
+                    "0.9"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

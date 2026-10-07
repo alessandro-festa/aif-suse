@@ -1,0 +1,117 @@
+{{- $engine := include "inference-engine.engine" . | fromYaml -}}
+{{- $gpus := int .Values.gpu.count -}}
+{{- if and $engine.needsGPU (lt $gpus 1) }}
+{{- fail (printf "engine %s runs on NVIDIA GPUs: set gpu.count to 1 or more" .Values.engine) }}
+{{- end }}
+{{- $tag := .Values.image.tag | default (ternary $engine.gpuTag $engine.tag (gt $gpus 0)) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "inference-engine.fullname" . }}
+  labels:
+    {{- include "inference-engine.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  # One model cache volume, written by one pod at a time.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "inference-engine.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "inference-engine.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Values.engine }}
+          image: "{{ .Values.image.repository | default $engine.image }}:{{ $tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if eq .Values.engine "sglang" }}
+          command: ["python3", "-m", "sglang.launch_server"]
+          {{- end }}
+          args:
+            {{- include "inference-engine.args" . | nindent 12 }}
+          env:
+            # where each engine keeps what it downloads
+            - name: LLAMA_CACHE
+              value: /models
+            - name: HF_HOME
+              value: /models
+            {{- if .Values.hfTokenSecret }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.hfTokenSecret }}
+                  key: HF_TOKEN
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+          # A first start downloads the model: allow it 30 minutes before liveness applies.
+          startupProbe:
+            httpGet:
+              path: {{ $engine.health }}
+              port: http
+            periodSeconds: 10
+            failureThreshold: 180
+          readinessProbe:
+            httpGet:
+              path: {{ $engine.health }}
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: {{ $engine.health }}
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            {{- $res := deepCopy .Values.resources }}
+            {{- if gt $gpus 0 }}
+            {{- $limits := $res.limits | default dict }}
+            {{- $_ := set $limits .Values.gpu.resourceName $gpus }}
+            {{- $_ := set $res "limits" $limits }}
+            {{- end }}
+            {{- toYaml $res | nindent 12 }}
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: models
+          {{- if .Values.cache.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "inference-engine.fullname" . }}-models
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        # SGLang and NCCL use shared memory beyond the container default of 64Mi.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -293,7 +293,7 @@ export default defineComponent({
       >
         <div>
           <dt>Serves</dt>
-          <dd>{{ summary.model || 'No vLLM model found: the deploy page cannot size this blueprint' }}</dd>
+          <dd>{{ summary.model || 'No model server found (vLLM, Ollama, llama.cpp or SGLang): the deploy page cannot size this blueprint' }}</dd>
         </div>
         <div v-if="summary.model">
           <dt>GPU</dt>
@@ -305,7 +305,7 @@ export default defineComponent({
         </div>
         <div>
           <dt>Gateway</dt>
-          <dd>{{ summary.gateway ? `LiteLLM (${ summary.gateway.release })` : 'None: the endpoint is the vLLM router' }}</dd>
+          <dd>{{ summary.gateway ? `LiteLLM (${ summary.gateway.release })` : summary.service ? `None: the endpoint is the ${ summary.engine } Service (${ summary.service.name })` : 'None: the endpoint is the vLLM router' }}</dd>
         </div>
       </dl>
     </section>

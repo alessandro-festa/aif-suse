@@ -1,0 +1,16 @@
+# Ollama from the Application Collection (chart ollama 1.76.0) on CPU, blueprint inference-ollama 1.0.0.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: engine-ollama
+  namespace: ai-profiles
+  labels:
+    trainingjobs/profile: inference
+data:
+  profile.yaml: |
+    displayName: Ollama · Granite 4 350M (CPU)
+    description: Ollama from the SUSE Application Collection running granite4:350m-h on CPU. Fits any node.
+    framework: Ollama
+    gpu: CPU
+    status: stable
+    blueprint: { name: inference-ollama, version: 1.0.0 }
