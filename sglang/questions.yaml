@@ -1,0 +1,45 @@
+questions:
+  - variable: model.id
+    label: Model ID
+    description: "Hugging Face model ID."
+    type: string
+    default: Qwen/Qwen2.5-1.5B-Instruct
+    group: Model
+  - variable: model.servedName
+    label: Served model name
+    description: "Name clients use in /v1/chat/completions. Empty: the model ID."
+    type: string
+    default: ""
+    group: Model
+  - variable: model.contextLength
+    label: Context length
+    type: int
+    default: 8192
+    group: Model
+  - variable: hfTokenSecret
+    label: Hugging Face token Secret
+    description: "Secret with an HF_TOKEN key, for gated or private models."
+    type: string
+    default: ""
+    group: Model
+  - variable: gpu.count
+    label: GPUs
+    description: "At least 1. More than 1 splits the model across them."
+    type: int
+    default: 1
+    group: Resources
+  - variable: resources.requests.cpu
+    label: CPU request
+    type: string
+    default: "2"
+    group: Resources
+  - variable: resources.requests.memory
+    label: Memory request
+    type: string
+    default: 8Gi
+    group: Resources
+  - variable: cache.size
+    label: Model cache size
+    type: string
+    default: 20Gi
+    group: Resources

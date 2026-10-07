@@ -1,0 +1,99 @@
+{{- $gpus := int .Values.gpu.count -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llama-cpp.fullname" . }}
+  labels:
+    {{- include "llama-cpp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  # One model cache volume, written by one pod at a time.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "llama-cpp.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "llama-cpp.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: llama-cpp
+          image: {{ include "llama-cpp.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            {{- include "llama-cpp.args" . | nindent 12 }}
+          env:
+            - name: LLAMA_CACHE
+              value: /models
+            {{- if .Values.hfTokenSecret }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.hfTokenSecret }}
+                  key: HF_TOKEN
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+          # A first start downloads the model: allow it 30 minutes before liveness applies.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 180
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            {{- $res := deepCopy .Values.resources }}
+            {{- if gt $gpus 0 }}
+            {{- $limits := $res.limits | default dict }}
+            {{- $_ := set $limits .Values.gpu.resourceName $gpus }}
+            {{- $_ := set $res "limits" $limits }}
+            {{- end }}
+            {{- toYaml $res | nindent 12 }}
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      volumes:
+        - name: models
+          {{- if .Values.cache.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "llama-cpp.fullname" . }}-models
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
