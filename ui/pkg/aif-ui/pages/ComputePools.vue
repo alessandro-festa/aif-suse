@@ -2,6 +2,10 @@
 import Banner from '@components/Banner/Banner.vue';
 import { Checkbox } from '@components/Form/Checkbox';
 import AsyncButton from '@shell/components/AsyncButton.vue';
+import LabeledSelect from '@shell/components/form/LabeledSelect.vue';
+import {
+  addonsFor, canInstallAddons, installAddon, listAddonInstalls, uninstallAddon
+} from '../services/addons';
 import {
   canEditPools, listComputePools, reclaimDraft, reclaimErrors, reclaimSpec, reclaimText, savePoolReclaim
 } from '../services/compute-pools';
@@ -14,7 +18,7 @@ export default {
   name: 'ComputePoolsPage',
 
   components: {
-    Banner, Checkbox, AsyncButton
+    Banner, Checkbox, AsyncButton, LabeledSelect
   },
 
   data() {
@@ -24,16 +28,23 @@ export default {
       editing: '', draft: null, saveError: '',
       // pools whose consumers are shown
       open: {},
+      // cluster add-ons: what is installed (Fleet HelmOps), and the install panel
+      installs: [], canInstall: false, adding: false, addCluster: '', addKey: '', addError: '',
       timer: null
     };
   },
 
   async fetch() {
     try {
-      const [{ installed, rows, undiscovered }, canEdit] = await Promise.all([
+      const [{ installed, rows, undiscovered }, canEdit, installs, canInstall] = await Promise.all([
         listComputePools(this.$store),
         canEditPools(this.$store),
+        listAddonInstalls(this.$store),
+        canInstallAddons(this.$store),
       ]);
+
+      this.installs = installs;
+      this.canInstall = canInstall;
 
       this.installed = installed;
       this.pools = rows;
@@ -73,10 +84,54 @@ export default {
     draftErrors() {
       return this.draft ? reclaimErrors(this.draft) : {};
     },
+    clusterOptions() {
+      const seen = new Map();
+
+      this.pools.forEach((p) => seen.set(p.clusterId, p.clusterName || p.clusterId));
+
+      return [...seen].map(([value, label]) => ({ label, value }));
+    },
+    addonOptions() {
+      return this.addCluster ? addonsFor(this.addCluster, this.pools, this.installs).map((a) => ({ label: `${ a.display } ${ a.version }`, value: a.key })) : [];
+    },
+    addAddon() {
+      return addonsFor(this.addCluster, this.pools, this.installs).find((a) => a.key === this.addKey) || null;
+    },
   },
 
   methods: {
     reclaimText,
+    clusterLabel(id) {
+      return this.clusterOptions.find((c) => c.value === id)?.label || id;
+    },
+    async install(done) {
+      this.addError = '';
+      try {
+        await installAddon(this.$store, this.addAddon, this.addCluster);
+        done(true);
+        this.adding = false;
+        this.addKey = '';
+        await this.$fetch();
+      } catch (e) {
+        this.addError = e?.message || e?._statusText || String(e);
+        done(false);
+      }
+    },
+    uninstall(i) {
+      this.$store.dispatch('management/promptModal', {
+        component:      'GenericPrompt',
+        componentProps: {
+          title:       `Uninstall ${ i.addon.display } from ${ this.clusterLabel(i.clusterId) }?`,
+          body:        `Fleet removes its release from the cluster. Runs that use it (${ i.addon.kind === 'sharing' ? 'its GPU shares' : i.addon.kind === 'scheduler' ? 'its queues' : 'its training jobs' }) stop working there.`,
+          applyMode:   'delete',
+          actionColor: 'bg-error',
+          applyAction: async() => {
+            await uninstallAddon(this.$store, i.addon, i.clusterId);
+            await this.$fetch();
+          },
+        },
+      });
+    },
     toggle(p) {
       this.open = { ...this.open, [p.name]: !this.open[p.name] };
     },
@@ -465,6 +520,99 @@ export default {
         </tr>
       </tbody>
     </table>
+
+    <section
+      v-if="installed && (canInstall || installs.length)"
+      class="pool-addons"
+    >
+      <header>
+        <h3>{{ t('suseai.pages.computePools.addons.title') }}</h3>
+        <button
+          v-if="canInstall && !adding"
+          class="btn btn-sm role-secondary"
+          @click="adding = true"
+        >
+          {{ t('suseai.pages.computePools.addons.install') }}
+        </button>
+      </header>
+      <p class="text-muted">
+        {{ t('suseai.pages.computePools.addons.description') }}
+      </p>
+
+      <div
+        v-if="adding"
+        class="pool-addon-form"
+      >
+        <div class="pool-addon-fields">
+          <LabeledSelect
+            v-model:value="addCluster"
+            :options="clusterOptions"
+            :label="t('suseai.pages.computePools.addons.cluster')"
+            @update:value="addKey = ''"
+          />
+          <LabeledSelect
+            v-model:value="addKey"
+            :options="addonOptions"
+            :disabled="!addCluster"
+            :label="t('suseai.pages.computePools.addons.addon')"
+            :placeholder="addCluster && !addonOptions.length ? t('suseai.pages.computePools.addons.nothingLeft') : ''"
+          />
+        </div>
+        <p
+          v-if="addAddon"
+          class="pool-addon-notes"
+        >
+          <span class="pool-tag">{{ addAddon.chart }} {{ addAddon.version }} → {{ addAddon.namespace }}</span>
+          {{ addAddon.notes }}
+        </p>
+        <Banner
+          v-if="addError"
+          color="error"
+          :label="addError"
+        />
+        <div class="pool-editor-actions">
+          <button
+            class="btn btn-sm role-secondary"
+            @click="adding = false; addError = ''"
+          >
+            {{ t('suseai.pages.computePools.reclaim.cancel') }}
+          </button>
+          <AsyncButton
+            mode="create"
+            size="sm"
+            :action-label="t('suseai.pages.computePools.addons.installAction')"
+            :disabled="!addAddon"
+            @click="install"
+          />
+        </div>
+      </div>
+
+      <table
+        v-if="installs.length"
+        class="pool-addon-list"
+      >
+        <tr
+          v-for="i in installs"
+          :key="`${ i.clusterId }/${ i.addon.key }`"
+        >
+          <td>{{ clusterLabel(i.clusterId) }}</td>
+          <td>{{ i.addon.display }} <span class="text-muted">{{ i.addon.version }}</span></td>
+          <td>
+            <span
+              v-clean-tooltip="i.message"
+              :class="['pool-status', `pool-status--${ i.ready ? 'success' : (/err/i.test(i.state) ? 'error' : 'info') }`]"
+            >{{ i.state }}</span>
+          </td>
+          <td>
+            <a
+              v-if="canInstall"
+              href="#"
+              @click.prevent="uninstall(i)"
+            >{{ t('suseai.pages.computePools.addons.uninstall') }}</a>
+          </td>
+        </tr>
+      </table>
+    </section>
   </div>
 </template>
 
@@ -500,6 +648,13 @@ export default {
 
 .pool-edit { margin-left: 8px; white-space: nowrap; }
 .pool-toggle { white-space: nowrap; }
+.pool-addons { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 12px;
+  header { display: flex; align-items: center; gap: 12px; h3 { margin: 0; } }
+}
+.pool-addon-form { border: 1px solid var(--border); border-radius: var(--border-radius); padding: 12px; margin: 8px 0 12px; max-width: 760px; }
+.pool-addon-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pool-addon-notes { margin: 10px 0 0; font-size: 13px; }
+.pool-addon-list { td { padding: 6px 16px 6px 0; } }
 .pool-consumers td { background: var(--body-bg); border-top: 1px solid var(--border); }
 .pool-consumers table { width: 100%; th, td { padding: 4px 10px 4px 0; text-align: left; font-size: 13px; background: none; border: none; } }
 

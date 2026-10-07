@@ -66,6 +66,15 @@ suseai:
         pods: Pods
         memory: Memory requested
         activity: Activity
+      addons:
+        title: Cluster add-ons
+        description: Schedulers, GPU sharing and the training runtime, installed on a downstream cluster by Fleet from their charts at a tested version. Once running, they show on that cluster’s pools.
+        install: Install an add-on
+        installAction: Install
+        cluster: Cluster
+        addon: Add-on
+        nothingLeft: Everything is installed here
+        uninstall: Uninstall
       reclaim:
         edit: Edit
         cancel: Cancel

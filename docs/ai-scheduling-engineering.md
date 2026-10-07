@@ -33,7 +33,7 @@ Branch: `aijob-scheduling` on the alessandro-festa fork (`origin`), based on SUS
 | 5b | Idle reclaim, UI: pool reclaim settings, run activity and reclaims, reclaim policy in profiles/Submit | built; unit-tested; to try in the browser | — |
 | 6 | Volcano backend: table entry, PodGroup gang, queue by annotation, pre-flight, Submit, observe | done, verified on the lab (Volcano 1.15.3 on downstream-1) | — |
 | 7 | HAMi on the GPU-sharing axis: `sharingLayers` table, `gpu.sharing: hami`, HAMi-aware pool GPU counts, Submit option | done; lab-verified up to scheduling (simulated GPUs: no real HAMi) | — |
-| 8 | Catalog entries (KAI, Kueue, Volcano, HAMi; Kubeflow training-only preset) + "install a scheduler here" | — | — |
+| 8 | Cluster add-ons from Compute Pools: KAI, Kueue, Volcano, HAMi as Fleet HelmOps; Kubeflow training-only blocked (F-67) | done for the four; Kueue verified live on downstream-2; Kubeflow awaiting a decision (O-33) | — |
 | 9 | Generic `AIJob.status.queue`; Trainer v2 `TrainJob` | — | — |
 | 10 | Exploration: training frameworks beyond PyTorch (JAX, TensorFlow, DeepSpeed); see design doc §8.1 | — (asked 2026-10-07) | — |
 
@@ -361,6 +361,23 @@ when the backend sets no scheduler; under Kueue they keep the queue label and su
 "kueueSkipped" (that is for DRA claims). Pools count HAMi nodes' GPUs from the registration (HAMi
 advertises each GPU as several `nvidia.com/gpu` slots). A share takes a slot, not a whole GPU. The
 run's GPUs record mode `hami`.
+
+**D-51 Add-ons are installed from Compute Pools, not Apps** (user's choice). `services/addons.ts`
+holds a small table:
+
+| Add-on | Chart | Version | Namespace |
+|---|---|---|---|
+| KAI | `oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler` | v0.18.3 | kai-scheduler (creates default-queue) |
+| Kueue | `oci://registry.k8s.io/kueue/charts/kueue` | 0.20.0 | kueue-system |
+| Volcano | volcano-sh helm repo | 1.15.3 | volcano-system |
+| HAMi | project-hami helm repo | 2.10.0 | hami-system; device plugin on `nvidia.com/gpu.present=true` |
+
+An install is the Apps path's `createFleetBundle`: a HelmOp in fleet-default named
+`aif-addon-<key>-<cluster>`, targeting that cluster by `management.cattle.io/cluster-name`, with
+credentials when the chart's ClusterRepo has them. The page lists those HelmOps with Fleet's
+state, uninstalls by deleting one, and offers an add-on only where the pools don't already report
+it (HAMi only with a GPU pool). It is shown to users who may create HelmOps in fleet-default (a
+SelfSubjectAccessReview). Detection afterwards is pool discovery's, within a minute.
 
 ---
 
@@ -705,6 +722,30 @@ its cluster at once and 10 s later. Terminating pods are no longer consumers. Li
 left its pool's consumers in ~3 s (it was 65 s). In the UI, a run whose AIJob is gone reads
 "Deleted, stopping", and one being deleted reads "Deleting".
 
+**F-66 [fact] Lab check (P8):** HelmOp `aif-addon-kueue-c-fg8qv` (as `createFleetBundle` builds
+it) installed Kueue 0.20.0 on downstream-2 in about 3 minutes (Ready=True), and c-fg8qv's pools
+then reported scheduler `kueue`. Left installed.
+
+**F-67 [blocker] The SUSE Kubeflow chart 0.4.1 cannot install "training only" on a plain
+cluster.** Values can turn off every optional component except `trainingOperator` and `trainer`,
+but:
+- three subcharts have no condition and always render: `kubeflow-istio-resources` (Istio Gateway,
+  VirtualService, AuthorizationPolicy, EnvoyFilter), `admission-webhook` (a cert-manager
+  Certificate and Issuer) and `user-namespace` (a kubeflow.org `Profile`, whose CRD only exists
+  with `profiles.enabled`);
+- disabled subcharts lose their value defaults, so `templates/validations.yaml` sees
+  `knativeServing.domain` / `kserve.ingressDomain` as '' and fails unless both are set to
+  `example.com`;
+- it refuses the well-known demo credentials (`auth.oidc.clientSecret`/`cookieSecret`,
+  `pipelines.seaweedfs.accessKey`/`secretKey`) even when those components are off, so an install
+  must supply generated values (or set demoMode, which is wrong here).
+
+Rendered training-only, it still installs Jupyter, the notebook controller, oauth2-proxy, the
+pipelines artifact services, an example profile and the Istio/cert-manager objects. So it needs
+Istio, cert-manager and profiles on the cluster. Fetched read-only through Rancher's
+`suse-ai-registry` (`?link=chart`), rendered locally; the HelmOp failed on the domain validation
+and was removed.
+
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator
 namespace. Discovery reuses it (D-15).
@@ -885,6 +926,8 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | O-30 | HAMi under Volcano (Volcano's vGPU device plugin, `volcano.sh/vgpu-memory`) as a second sharing layer | schedulers.yaml / chart | later |
 | O-31 | HAMi verified only up to scheduling: needs a real GPU node with HAMi's device plugin and scheduler | lab | when a GPU cluster is available |
 | O-32 | A HAMi share is one GPU per pod (as KAI's); HAMi allows several slices per pod | chart preflight | later |
+| O-33 | Kubeflow training runtime: choose between Istio + cert-manager prerequisites with the SUSE chart, upstream Kubeflow Trainer v2 (`oci://ghcr.io/kubeflow/charts/kubeflow-trainer`), or asking SUSE for a training-only mode (F-67) | add-ons | decision |
+| O-34 | Add-ons are pinned versions in the UI; upgrading one means editing `services/addons.ts` | add-ons | later |
 | O-17 | The UI's 3c flows (pool picker → cluster switch → submit; Projects on a downstream cluster) are covered by unit tests of their logic, not by component tests; try them in the browser | UI | now |
 
 ---
