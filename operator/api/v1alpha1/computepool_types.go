@@ -64,6 +64,36 @@ type ComputePoolSpec struct {
 	// Disabled keeps the pool out of placement. Its status is still refreshed.
 	// +optional
 	Disabled bool `json:"disabled,omitempty"`
+	// Reclaim frees the pool from runs that hold it without using it, for runs
+	// waiting in the queue. Unset: nothing on the pool is reclaimed.
+	// +optional
+	Reclaim *ComputePoolReclaim `json:"reclaim,omitempty"`
+}
+
+// ComputePoolReclaim says when a run on the pool counts as idle and may be
+// reclaimed. Durations are a number and a unit: m (minutes), h (hours) or d
+// (days), e.g. "30m", "2h", "3d".
+type ComputePoolReclaim struct {
+	// IdleTimeout is how long a run must stay idle before it is reclaimed, unless
+	// the run asks for longer (up to MaxIdleTimeout).
+	// +kubebuilder:validation:Pattern=`^[1-9][0-9]*(m|h|d)$`
+	IdleTimeout string `json:"idleTimeout"`
+	// MaxIdleTimeout is the longest idle timeout a run may ask for. Empty:
+	// IdleTimeout is also the ceiling.
+	// +kubebuilder:validation:Pattern=`^[1-9][0-9]*(m|h|d)$`
+	// +optional
+	MaxIdleTimeout string `json:"maxIdleTimeout,omitempty"`
+	// IdleThreshold is the utilisation, in percent, under which a run is idle:
+	// of its GPUs on a GPU pool, of its CPU request on a CPU pool.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	// +kubebuilder:default=5
+	// +optional
+	IdleThreshold int32 `json:"idleThreshold,omitempty"`
+	// OnlyWhenContended reclaims an idle run only when a run waiting in the queue
+	// would fit in its place. Defaults to true; false reclaims every idle run.
+	// +optional
+	OnlyWhenContended *bool `json:"onlyWhenContended,omitempty"`
 }
 
 // ComputePoolResources is an amount of the resources a pool is placed by.

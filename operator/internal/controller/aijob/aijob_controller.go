@@ -38,6 +38,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	resourcev1 "k8s.io/api/resource/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -248,6 +249,11 @@ func (r *AIJobReconciler) reconcileJob(ctx context.Context, job *v1alpha1.AIJob,
 		return r.cancel(ctx, job, t, installed)
 	}
 
+	// Reclaim: asked by the placement controller for a run idle in its pool.
+	if policy, asked := job.Annotations[v1alpha1.AIJobReclaimAnnotation]; asked {
+		return r.reclaim(ctx, job, t, installed, v1alpha1.AIJobReclaimPolicy(policy))
+	}
+
 	if st.Phase.IsTerminal() {
 		return r.afterCompletion(ctx, job, t, installed)
 	}
@@ -263,6 +269,9 @@ func (r *AIJobReconciler) reconcileJob(ctx context.Context, job *v1alpha1.AIJob,
 		installed = true
 	}
 	setCondition(st, gen, v1alpha1.AIJobConditionInstalled, metav1.ConditionTrue, "Installed", "release "+job.Name+" is installed")
+	if meta.IsStatusConditionTrue(st.Conditions, v1alpha1.AIJobConditionReclaimed) {
+		setCondition(st, gen, v1alpha1.AIJobConditionReclaimed, metav1.ConditionFalse, "Resumed", "installed again after a reclaim")
+	}
 
 	obs, err := r.observe(ctx, job, t)
 	if err != nil {
@@ -390,6 +399,63 @@ func (r *AIJobReconciler) cancel(ctx context.Context, job *v1alpha1.AIJob, t *ta
 	setCondition(st, gen, v1alpha1.AIJobConditionExecutionCleaned, metav1.ConditionTrue, "Cancelled", "release uninstalled on cancel")
 	r.event(job, corev1.EventTypeNormal, "Cancelled", "uninstalled release "+job.Name)
 	return reconcile.Result{}, nil
+}
+
+// reclaim uninstalls an idle run to free its pool. Suspend puts it back in the
+// queue, in its original submission order (its checkpoint volume is kept on the
+// cluster); Terminate ends it Reclaimed. The status is saved before the request
+// is dropped, so a crash in between repeats the reclaim rather than losing it.
+func (r *AIJobReconciler) reclaim(ctx context.Context, job *v1alpha1.AIJob, t *target, installed bool, policy v1alpha1.AIJobReclaimPolicy) (reconcile.Result, error) {
+	st, gen := &job.Status, job.Generation
+	before := job.DeepCopy()
+	if !st.Phase.IsTerminal() && st.Placement != nil && job.Spec.Pool == "" &&
+		(policy == v1alpha1.AIJobReclaimSuspend || policy == v1alpha1.AIJobReclaimTerminate) {
+		if installed {
+			if err := t.helm.DeleteRelease(ctx, job.Name); err != nil {
+				return reconcile.Result{}, fmt.Errorf("uninstall on reclaim: %w", err)
+			}
+		}
+		now := metav1.NewTime(r.now())
+		reason := "idle"
+		if st.Activity != nil && st.Activity.Message != "" {
+			reason = st.Activity.Message
+		}
+		st.ReclaimHistory = append(st.ReclaimHistory, v1alpha1.AIJobReclaimRecord{At: now, Pool: st.Placement.Pool, Policy: policy, Reason: reason})
+		if n := len(st.ReclaimHistory); n > 10 {
+			st.ReclaimHistory = st.ReclaimHistory[n-10:]
+		}
+		pool := st.Placement.Pool
+		if policy == v1alpha1.AIJobReclaimTerminate {
+			st.Phase = v1alpha1.AIJobPhaseReclaimed
+			st.CompletedAt = &now
+			st.Result = &v1alpha1.AIJobResult{Reason: "Reclaimed", Message: truncate("reclaimed while idle: "+reason, 1024)}
+			st.Cleanup.CompletedAt = &now
+			setCondition(st, gen, v1alpha1.AIJobConditionCompleted, metav1.ConditionTrue, string(v1alpha1.AIJobPhaseReclaimed), st.Result.Message)
+			setCondition(st, gen, v1alpha1.AIJobConditionExecutionCleaned, metav1.ConditionTrue, "Reclaimed", "release uninstalled on reclaim")
+		} else {
+			// back in the queue: forget where it ran and what it ran as
+			st.Phase = v1alpha1.AIJobPhasePending
+			st.Placement = nil
+			st.PlacementMessage = "reclaimed while idle; waiting for a compute pool"
+			st.Execution = v1alpha1.AIJobExecution{Release: job.Name}
+			st.Queue, st.Pods, st.PodCounts, st.Resources = nil, nil, nil, nil
+			st.AdmittedAt, st.StartedAt = nil, nil
+			setCondition(st, gen, v1alpha1.AIJobConditionInstalled, metav1.ConditionFalse, "Reclaimed", "uninstalled while idle; waiting for a compute pool")
+		}
+		st.Activity = nil
+		setCondition(st, gen, v1alpha1.AIJobConditionReclaimed, metav1.ConditionTrue, string(policy), reason)
+		r.event(job, corev1.EventTypeNormal, "Reclaimed", fmt.Sprintf("uninstalled from pool %s (%s): %s", pool, policy, reason))
+		if err := r.Status().Patch(ctx, job, ctrl.MergeFrom(before)); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+	// Done, or not applicable (finished meanwhile, pinned to a pool, Never): drop the request.
+	beforeMeta := job.DeepCopy()
+	delete(job.Annotations, v1alpha1.AIJobReclaimAnnotation)
+	if err := r.Patch(ctx, job, ctrl.MergeFrom(beforeMeta)); err != nil {
+		return reconcile.Result{}, err
+	}
+	return reconcile.Result{Requeue: true}, nil
 }
 
 // afterCompletion keeps the record final and removes the execution once its

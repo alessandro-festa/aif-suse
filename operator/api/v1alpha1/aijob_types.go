@@ -26,9 +26,9 @@ import (
 // keyed by it after the objects are gone.
 const AIJobJobIDLabel = "ai-factory.suse.com/job-id"
 
-// AIJobPhase is where a finite execution is in its life. Succeeded, Failed and
-// Cancelled are terminal and never change afterwards.
-// +kubebuilder:validation:Enum=Pending;Queued;Admitted;Running;Succeeded;Failed;Cancelled
+// AIJobPhase is where a finite execution is in its life. Succeeded, Failed,
+// Cancelled and Reclaimed are terminal and never change afterwards.
+// +kubebuilder:validation:Enum=Pending;Queued;Admitted;Running;Succeeded;Failed;Cancelled;Reclaimed
 type AIJobPhase string
 
 const (
@@ -39,11 +39,14 @@ const (
 	AIJobPhaseSucceeded AIJobPhase = "Succeeded"
 	AIJobPhaseFailed    AIJobPhase = "Failed"
 	AIJobPhaseCancelled AIJobPhase = "Cancelled"
+	// AIJobPhaseReclaimed: idle, and uninstalled to free its pool (reclaim
+	// policy Terminate).
+	AIJobPhaseReclaimed AIJobPhase = "Reclaimed"
 )
 
 // IsTerminal reports whether the phase is final.
 func (p AIJobPhase) IsTerminal() bool {
-	return p == AIJobPhaseSucceeded || p == AIJobPhaseFailed || p == AIJobPhaseCancelled
+	return p == AIJobPhaseSucceeded || p == AIJobPhaseFailed || p == AIJobPhaseCancelled || p == AIJobPhaseReclaimed
 }
 
 // AIJob condition types.
@@ -53,7 +56,73 @@ const (
 	AIJobConditionSuspended        = "Suspended"
 	AIJobConditionCompleted        = "Completed"
 	AIJobConditionExecutionCleaned = "ExecutionCleaned"
+	// AIJobConditionReclaimed is True after the job was uninstalled for being idle.
+	AIJobConditionReclaimed = "Reclaimed"
 )
+
+// AIJobReclaimAnnotation asks the AIJob controller to reclaim the job: set by
+// the placement controller to the policy to apply, removed once it is done.
+const AIJobReclaimAnnotation = "ai-factory.suse.com/reclaim"
+
+// AIJobReclaimPolicy is what happens to a run reclaimed for being idle.
+// +kubebuilder:validation:Enum=Suspend;Terminate;Never
+type AIJobReclaimPolicy string
+
+const (
+	// AIJobReclaimSuspend uninstalls the run and puts it back in the queue, in
+	// its original submission order. Its checkpoint volume is kept.
+	AIJobReclaimSuspend AIJobReclaimPolicy = "Suspend"
+	// AIJobReclaimTerminate uninstalls the run; it ends Reclaimed.
+	AIJobReclaimTerminate AIJobReclaimPolicy = "Terminate"
+	// AIJobReclaimNever leaves the run alone; it is still reported idle.
+	AIJobReclaimNever AIJobReclaimPolicy = "Never"
+)
+
+// AIJobReclaim is what the run asks for when it is idle. Its compute pool's
+// reclaim settings decide whether reclaim happens at all.
+type AIJobReclaim struct {
+	// +kubebuilder:default=Suspend
+	// +optional
+	Policy AIJobReclaimPolicy `json:"policy,omitempty"`
+	// IdleTimeout replaces the pool's, up to the pool's maxIdleTimeout. A number
+	// and m, h or d, e.g. "4h".
+	// +kubebuilder:validation:Pattern=`^[1-9][0-9]*(m|h|d)$`
+	// +optional
+	IdleTimeout string `json:"idleTimeout,omitempty"`
+}
+
+// AIJobActivity is how much of what it holds the run uses, sampled about every
+// minute while it runs in a pool that reclaims.
+type AIJobActivity struct {
+	// Source is what the utilisation is read from: gpu (DCGM exporter) or cpu
+	// (kubelet), with why when a GPU run is read from its CPU.
+	// +optional
+	Source string `json:"source,omitempty"`
+	// Utilisation is the last sample, in percent.
+	// +optional
+	Utilisation int32 `json:"utilisation"`
+	// SampledAt is when it was taken.
+	// +optional
+	SampledAt *metav1.Time `json:"sampledAt,omitempty"`
+	// LastActiveAt is the last sample at or above the pool's idle threshold.
+	// +optional
+	LastActiveAt *metav1.Time `json:"lastActiveAt,omitempty"`
+	// IdleSince is when the run went under the threshold; empty while active.
+	// +optional
+	IdleSince *metav1.Time `json:"idleSince,omitempty"`
+	// Message says why the run is not sampled, or what reclaim is waiting for.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// AIJobReclaimRecord is one reclaim of the run.
+type AIJobReclaimRecord struct {
+	At     metav1.Time        `json:"at"`
+	Pool   string             `json:"pool"`
+	Policy AIJobReclaimPolicy `json:"policy"`
+	// Reason is why: how long it was idle, and for which waiting run.
+	Reason string `json:"reason"`
+}
 
 // AIJobSource is a custom chart the execution is installed from: a chart in a
 // Rancher ClusterRepo, the same reference an App-sourced AIWorkload uses. Without
@@ -87,6 +156,7 @@ type AIJobRetention struct {
 // +kubebuilder:validation:XValidation:rule="(has(self.targetNamespace) ? self.targetNamespace : '') == (has(oldSelf.targetNamespace) ? oldSelf.targetNamespace : '')",message="spec.targetNamespace is immutable; submit a new AIJob"
 // +kubebuilder:validation:XValidation:rule="has(self.values) == has(oldSelf.values) && (!has(self.values) || self.values == oldSelf.values)",message="spec.values is immutable; submit a new AIJob"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.cancel) || !oldSelf.cancel || (has(self.cancel) && self.cancel)",message="spec.cancel cannot be undone"
+// +kubebuilder:validation:XValidation:rule="has(self.reclaim) == has(oldSelf.reclaim) && (!has(self.reclaim) || self.reclaim == oldSelf.reclaim)",message="spec.reclaim is immutable; submit a new AIJob"
 type AIJobSpec struct {
 	// DisplayName is a human-readable name. Informational.
 	// +optional
@@ -124,6 +194,10 @@ type AIJobSpec struct {
 	// release and the job ends Cancelled. It cannot be set back to false.
 	// +optional
 	Cancel bool `json:"cancel,omitempty"`
+	// Reclaim is what happens when the run sits idle in a pool that reclaims.
+	// Set from the run's profile.
+	// +optional
+	Reclaim *AIJobReclaim `json:"reclaim,omitempty"`
 }
 
 // AIJobExecution names what the release created to run the job.
@@ -295,6 +369,13 @@ type AIJobStatus struct {
 	Report *AIJobReport `json:"report,omitempty"`
 	// +optional
 	Cleanup AIJobCleanup `json:"cleanup,omitempty"`
+	// Activity is the run's utilisation, in a pool that reclaims idle runs.
+	// +optional
+	Activity *AIJobActivity `json:"activity,omitempty"`
+	// ReclaimHistory lists the run's reclaims, oldest first, the last 10.
+	// +kubebuilder:validation:MaxItems=10
+	// +optional
+	ReclaimHistory []AIJobReclaimRecord `json:"reclaimHistory,omitempty"`
 	// +listType=map
 	// +listMapKey=type
 	// +optional

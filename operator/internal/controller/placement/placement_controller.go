@@ -29,6 +29,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	controllerruntime "sigs.k8s.io/controller-runtime"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
@@ -79,33 +80,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		return reconcile.Result{}, err
 	}
 
-	// What was placed and has not started yet still takes room the pools'
-	// figures do not show: their pods are not on the nodes yet.
-	inflight := map[string][]Needs{}
-	var waiting []*v1alpha1.AIJob
-	for i := range jobs.Items {
-		j := &jobs.Items[i]
-		if j.Status.Phase.IsTerminal() || j.Spec.Cancel || !j.DeletionTimestamp.IsZero() {
-			continue
-		}
-		switch {
-		case j.Status.Placement != nil:
-			if j.Status.Phase == "" || j.Status.Phase == v1alpha1.AIJobPhasePending || j.Status.Phase == v1alpha1.AIJobPhaseQueued || j.Status.Phase == v1alpha1.AIJobPhaseAdmitted {
-				if n, err := needsOf(j); err == nil {
-					inflight[j.Status.Placement.Pool] = append(inflight[j.Status.Placement.Pool], n)
-				}
-			}
-		case j.Spec.Pool == "":
-			waiting = append(waiting, j)
-		}
-	}
-	sort.SliceStable(waiting, func(a, b int) bool {
-		ta, tb := waiting[a].CreationTimestamp, waiting[b].CreationTimestamp
-		if !ta.Equal(&tb) {
-			return ta.Before(&tb)
-		}
-		return waiting[a].Namespace+"/"+waiting[a].Name < waiting[b].Namespace+"/"+waiting[b].Name
-	})
+	waiting, inflight := queueState(jobs.Items, poolList.Items)
 
 	projects := map[string]*v1alpha1.AIProject{}
 	for _, j := range waiting {
@@ -146,6 +121,45 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		inflight[pool.Name] = append(inflight[pool.Name], n)
 	}
 	return reconcile.Result{RequeueAfter: resync}, nil
+}
+
+// queueState is the runs waiting for a pool, in submission order, and what was
+// placed in each pool that its figures do not show yet: runs that have not
+// started, and runs that started after the pool's nodes were last read.
+func queueState(jobs []v1alpha1.AIJob, pools []v1alpha1.ComputePool) ([]*v1alpha1.AIJob, map[string][]Needs) {
+	observed := map[string]*metav1.Time{}
+	for i := range pools {
+		observed[pools[i].Name] = pools[i].Status.ObservedAt
+	}
+	inflight := map[string][]Needs{}
+	var waiting []*v1alpha1.AIJob
+	for i := range jobs {
+		j := &jobs[i]
+		if j.Status.Phase.IsTerminal() || j.Spec.Cancel || !j.DeletionTimestamp.IsZero() {
+			continue
+		}
+		switch {
+		case j.Status.Placement != nil:
+			seen := observed[j.Status.Placement.Pool]
+			unseen := j.Status.StartedAt == nil || seen == nil || !seen.After(j.Status.StartedAt.Time)
+			if j.Status.Phase == "" || j.Status.Phase == v1alpha1.AIJobPhasePending || j.Status.Phase == v1alpha1.AIJobPhaseQueued || j.Status.Phase == v1alpha1.AIJobPhaseAdmitted ||
+				(j.Status.Phase == v1alpha1.AIJobPhaseRunning && unseen) {
+				if n, err := needsOf(j); err == nil {
+					inflight[j.Status.Placement.Pool] = append(inflight[j.Status.Placement.Pool], n)
+				}
+			}
+		case j.Spec.Pool == "":
+			waiting = append(waiting, j)
+		}
+	}
+	sort.SliceStable(waiting, func(a, b int) bool {
+		ta, tb := waiting[a].CreationTimestamp, waiting[b].CreationTimestamp
+		if !ta.Equal(&tb) {
+			return ta.Before(&tb)
+		}
+		return waiting[a].Namespace+"/"+waiting[a].Name < waiting[b].Namespace+"/"+waiting[b].Name
+	})
+	return waiting, inflight
 }
 
 func needsOf(j *v1alpha1.AIJob) (Needs, error) {

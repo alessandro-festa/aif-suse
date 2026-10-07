@@ -443,6 +443,14 @@ func main() {
 			setupLog.Error(err, "unable to create controller", "controller", "Placement")
 			os.Exit(1)
 		}
+		// idle reclaim: samples runs in pools that reclaim, through Rancher
+		if err := (&placementctrl.Reclaimer{
+			Client: mgr.GetClient(),
+			Probe:  &placementctrl.ProxyProbe{Connection: connectionHolder},
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "Reclaim")
+			os.Exit(1)
+		}
 	}
 	if enabled("computepool") {
 		if err := (&computepoolctrl.Reconciler{

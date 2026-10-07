@@ -83,6 +83,16 @@ func TestCRDRules(t *testing.T) {
 	cur.Spec.Disabled = true
 	require.NoError(t, c.Update(ctx, cur), "everything else about a pool can change")
 
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(p), cur))
+	cur.Spec.Reclaim = &v1alpha1.ComputePoolReclaim{IdleTimeout: "2h", MaxIdleTimeout: "3d"}
+	require.NoError(t, c.Update(ctx, cur), "an admin turns reclaim on")
+	assert.Equal(t, int32(5), cur.Spec.Reclaim.IdleThreshold, "the idle threshold defaults to 5%")
+	for _, bad := range []v1alpha1.ComputePoolReclaim{{IdleTimeout: "90"}, {IdleTimeout: "1w"}, {IdleTimeout: "2h", IdleThreshold: 101}, {}} {
+		require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(p), cur))
+		cur.Spec.Reclaim = &bad
+		assert.Error(t, c.Update(ctx, cur), "%+v", bad)
+	}
+
 	bad := &v1alpha1.ComputePool{
 		ObjectMeta: metav1.ObjectMeta{Name: "bad"},
 		Spec:       v1alpha1.ComputePoolSpec{ClusterID: "c-abc", Kind: "tpu"},

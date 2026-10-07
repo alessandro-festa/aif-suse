@@ -136,9 +136,27 @@ func TestCRDRules(t *testing.T) {
 		assert.Contains(t, err.Error(), field+" is immutable")
 	}
 
+	reclaiming := &v1alpha1.AIJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "reclaiming", Namespace: ns},
+		Spec:       v1alpha1.AIJobSpec{Reclaim: &v1alpha1.AIJobReclaim{IdleTimeout: "4h"}},
+	}
+	require.NoError(t, c.Create(ctx, reclaiming))
+	assert.Equal(t, v1alpha1.AIJobReclaimSuspend, reclaiming.Spec.Reclaim.Policy, "the reclaim policy defaults to Suspend")
+	cur := &v1alpha1.AIJob{}
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(reclaiming), cur))
+	cur.Spec.Reclaim.Policy = v1alpha1.AIJobReclaimNever
+	err = c.Update(ctx, cur)
+	require.Error(t, err, "a run cannot opt out of reclaim once submitted")
+	assert.Contains(t, err.Error(), "spec.reclaim is immutable")
+	badTimeout := &v1alpha1.AIJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "bad-timeout", Namespace: ns},
+		Spec:       v1alpha1.AIJobSpec{Reclaim: &v1alpha1.AIJobReclaim{IdleTimeout: "2w"}},
+	}
+	assert.Error(t, c.Create(ctx, badTimeout), "idle timeouts are minutes, hours or days")
+
 	builtIn := &v1alpha1.AIJob{ObjectMeta: metav1.ObjectMeta{Name: "built-in", Namespace: ns}}
 	require.NoError(t, c.Create(ctx, builtIn), "a job without a source installs the built-in chart")
-	cur := &v1alpha1.AIJob{}
+	cur = &v1alpha1.AIJob{}
 	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(builtIn), cur))
 	cur.Spec.Source = &v1alpha1.AIJobSource{RepoName: "r", ChartName: "c", Version: "1"}
 	err = c.Update(ctx, cur)

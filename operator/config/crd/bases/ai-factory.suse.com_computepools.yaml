@@ -139,6 +139,40 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-map-type: atomic
+              reclaim:
+                description: |-
+                  Reclaim frees the pool from runs that hold it without using it, for runs
+                  waiting in the queue. Unset: nothing on the pool is reclaimed.
+                properties:
+                  idleThreshold:
+                    default: 5
+                    description: |-
+                      IdleThreshold is the utilisation, in percent, under which a run is idle:
+                      of its GPUs on a GPU pool, of its CPU request on a CPU pool.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  idleTimeout:
+                    description: |-
+                      IdleTimeout is how long a run must stay idle before it is reclaimed, unless
+                      the run asks for longer (up to MaxIdleTimeout).
+                    pattern: ^[1-9][0-9]*(m|h|d)$
+                    type: string
+                  maxIdleTimeout:
+                    description: |-
+                      MaxIdleTimeout is the longest idle timeout a run may ask for. Empty:
+                      IdleTimeout is also the ceiling.
+                    pattern: ^[1-9][0-9]*(m|h|d)$
+                    type: string
+                  onlyWhenContended:
+                    description: |-
+                      OnlyWhenContended reclaims an idle run only when a run waiting in the queue
+                      would fit in its place. Defaults to true; false reclaims every idle run.
+                    type: boolean
+                required:
+                - idleTimeout
+                type: object
             required:
             - clusterId
             - kind

@@ -29,7 +29,8 @@ Branch: `aijob-scheduling` on the alessandro-festa fork (`origin`), based on SUS
 | 4b | Placement controller (meta-scheduler) + global queue + deferred placement; CPU-only runs in the chart | done, verified on the lab across two clusters | — |
 | 4c | UI: AI Projects page; project picker + "Automatic" pool in Submit/Deploy | built; requests verified through Rancher; to try in the browser | — |
 | IE | Inference engines: vLLM, Ollama (App Collection), llama.cpp, SGLang ("Inference Engines Apps" custom repo) as inference profiles; inference deploy in an AI project's pool | done; llama.cpp verified end to end on downstream-1; Apps page and deploy page to try in the browser | `50499978`, `06769b24`, `bd31a1cd` |
-| 5 | Activity controller (Prometheus via the proxy), idle reclaim, per-profile policy, hand-off | — | — |
+| 5a | Idle reclaim, operator: activity sampled through the proxy (kubelet CPU, DCGM GPU), pool reclaim settings, Suspend/Terminate/Never per run, hand-off to the waiting run | done, verified on the lab (CPU) | — |
+| 5b | Idle reclaim, UI: pool reclaim settings, run activity and reclaims, reclaim policy in profiles/Submit | — | — |
 | 6 | Volcano backend | — | — |
 | 7 | HAMi on the GPU-sharing axis | — | — |
 | 8 | Catalog entries (KAI, Kueue, Volcano, HAMi; Kubeflow training-only preset) + "install a scheduler here" | — | — |
@@ -47,7 +48,7 @@ His branch was 13 ahead / 25 behind. We took commits 1–11 and skipped `ac4b144
 *Rejected:* branching from his tip and merging `main` (keeps his history, but adopts his nav).
 
 **D-02 Workloads is a sub-menu; upstream's sidebar stays.**
-Workloads ▸ Deployments / Training Jobs / Projects / Compute Profiles / Compute Pools. The entry
+Workloads ▸ Deployments / Jobs / Projects / Compute Profiles / Compute Pools. The entry
 was "Queues & Quotas" and was renamed **Projects** at review.
 *Rejected:* dstanley's Catalog + Deployments reorganisation (a bigger UX change for the fork).
 Virtual types are prefixed (`training-jobs`, `ai-projects`, …): Rancher's nav treats a virtual
@@ -268,6 +269,47 @@ now fetches Rancher's same-origin `?link=icon` with the user's session and inlin
 only, at most 50 per load, 64 KiB each. Charts in a git repo reference their icon as
 `file://<chart>/icon.png` (F-46). Logos are the projects' own: llama.cpp (MIT), SGLang (Apache-2.0).
 
+**D-40 Activity is sampled directly, not from Prometheus** (user's choice). Every minute, for
+each running run the queue placed in a pool with `spec.reclaim`, the operator reads through the
+Rancher proxy:
+- CPU: the kubelet stats summary of the run's nodes, its pods' usage against their CPU requests;
+- GPU: the DCGM exporter's metrics (a Service labelled `app=nvidia-dcgm-exporter`), averaged over
+  the GPUs attributed to the run's pods.
+
+A GPU run whose GPUs the exporter does not attribute to pods is read from its CPU, and
+`status.activity.source` says why. No Monitoring is needed; Prometheus can be added later as a
+second source. The idle window lives in `status.activity` (`idleSince`, `lastActiveAt`).
+
+**D-41 Only training runs the queue placed are reclaimed** (user's choice: training only). Runs
+submitted to a named pool (`spec.pool`) are reported idle, not reclaimed: they have no queue to go
+back to. Endpoints (AIWorkloads) are out of scope.
+
+**D-42 Suspend = uninstall and requeue** (user's choice). The release is uninstalled, the placement
+cleared, and the AIJob waits in the queue again at its original submission time. Its checkpoint
+PVC (`helm.sh/resource-policy: keep`) stays on that cluster, and a reinstall in the same namespace
+adopts it. Terminate uninstalls and ends the run in a new terminal phase `Reclaimed`. Never leaves
+it, still reporting idle. `spec.reclaim` (policy, idleTimeout) is immutable, set from the profile;
+the policy defaults to Suspend.
+
+**D-43 Reclaim settings are per pool and off by default.** `ComputePool.spec.reclaim`:
+- `idleTimeout` and `maxIdleTimeout`: a number and m/h/d, such as `30m`, `2h` or `3d`;
+- `idleThreshold`: percent, default 5;
+- `onlyWhenContended`: default true.
+
+A run's own `idleTimeout` may be shorter, or longer up to `maxIdleTimeout`. An admin has to turn
+reclaim on, so nothing is evicted by surprise after an upgrade.
+
+**D-44 The hand-off places the waiting run before the idle one leaves.** In the same pass the
+reclaimer places the contender on the pool, then annotates the idle run
+(`ai-factory.suse.com/reclaim: <policy>`); the AIJob controller uninstalls it and drops the
+annotation after saving the status. Placing first matters: the idle run goes back to the queue
+*ahead* of the contender (earlier submission), and would otherwise be placed straight back. The
+contender's pods wait in Kubernetes until the idle run's are gone.
+
+**D-45 A run reclaimed for idling is no contender** until it is installed again (condition
+`Reclaimed` True → False "Resumed"). Found live (F-51): two idle runs took the pool from each
+other in turn. It resumes when room frees, not by displacing another run.
+
 ---
 
 ## 3. Findings
@@ -442,7 +484,7 @@ pass case, live.
 **F-37 [trap] With no profiles there is no Deploy.** Compute Profiles shows a tile, and a
 Deploy button, per profile ConfigMap in `ai-profiles` on local. A fresh install has none, and the
 lab had none. Apply `examples/training/profiles/00-namespace-rbac.yaml` and the training profiles
-(10–13, 30–38) to get some. The full form (Submit) is reached from Training Jobs → **New** →
+(10–13, 30–38) to get some. The full form (Submit) is reached from Jobs → **New** →
 "Custom training job (full form)".
 
 **F-38 [trap] Rancher refuses a duplicate project role binding** ("duplicate prtb not allowed").
@@ -501,6 +543,34 @@ nothing). After `git push origin inference-engines`, patch `spec.forceUpdate`.
 → `c-xvstz`/`vision`: Fleet Running, pod Ready in about a minute, `/v1/models` lists
 `qwen2.5-0.5b-instruct-q4_k_m`, a chat completion answers. The chart's PVC keeps the model across
 reinstalls (`helm.sh/resource-policy: keep`), so it outlives the endpoint and must be deleted by hand.
+
+**F-49 [bug, ours, fixed P5a] Pools counted nodes no run can land on.** Discovery skipped
+cordoned nodes but not tainted ones, so a kind cluster's control plane (`NoSchedule`) doubled
+c-xvstz-cpu to 20 CPUs, and c-fg8qv-cpu was *only* a control plane. Nodes with a `NoSchedule` or
+`NoExecute` taint other than `nvidia.com/gpu` (the one the training chart tolerates) are no longer
+capacity or a reason to create a pool. c-fg8qv-cpu now has 0 nodes; discovery does not delete a
+pool whose nodes went away (O-27).
+
+**F-50 [bug, ours, fixed P5a] A second run was placed on top of one that had just started.** The
+queue counted only not-yet-started runs as taking room the pool's figures don't show, but the
+figures lag a minute. A run that started after the pool was last read (`status.observedAt`) counted
+nowhere. Such runs now count as inflight until the pool is read again.
+
+**F-51 [fact] Lab check (P5a), c-xvstz-cpu with `idleTimeout: 2m`.**
+- `idle-a` (5 CPU, `sleep infinity`) was running; `busy-b` (4 CPU) waited, with 2.9 CPU free.
+- About 2 minutes after its first idle sample, idle-a was reclaimed (Suspend, history "idle for
+  2m0s (under 5% of its cpu), for aif-vision/busy-b"), and busy-b was placed and Running once
+  idle-a's pod left.
+- busy-b, also idle, was then reclaimed for idle-a, which led to D-45. With the rule, idle-a stays:
+  "idle for 2m0s; reclaimed when a waiting run needs the pool".
+
+**F-52 [fact] The lab's DCGM exporter (downstream-2, simulated GPUs) reports no pod attribution
+(`pod=""`) and 0%.** The GPU path is covered by unit tests only; on the lab a GPU run falls back to
+its CPU. A real GPU Operator maps pods when the kubelet pod-resources socket is mounted.
+
+**F-53 [fact, pre-existing] `internal/controller/aiworkload` envtest "GitOps reconcile — HelmOp
+absent after prior sync" fails on a clean checkout of `0d960c3d` too** (409 UID precondition on
+delete, envtest 1.31). Not touched by this work.
 
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator
@@ -638,6 +708,9 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | Inference summary + checks | `ui/pkg/aif-ui/training/inference.ts` | `summarizeBlueprint` (`vllmSummary`, `otherEngineSummary`), `inferenceChecks`, `endpointUrl`, `aiWorkloadFor(…, recordNamespace)` |
 | Inference deploy | `ui/pkg/aif-ui/training/pages/DeployEndpoint.vue` | project → pool; `createAIWorkload` on local |
 | Custom app logos | `ui/pkg/aif-ui/services/app-collection.ts` | `rancherIconUrl`, `inlineRancherIcon`, in `fetchCustomRepoApps` |
+| Activity sampling | `operator/internal/controller/placement/activity.go` | `Probe` / `ProxyProbe`, `cpuUtilisation`, `gpuUtilisation`, `sample`, `parseIdleDuration` |
+| Idle reclaim | `operator/internal/controller/placement/reclaim.go` | `Reclaimer` (a manager Runnable, 1 min), `nextActivity`, `decide`, `contender`, `fitsIfFreed`; `queueState` shared with placement |
+| Reclaim action | `operator/internal/controller/aijob/aijob_controller.go` `reclaim` | on `ai-factory.suse.com/reclaim`; Suspend / Terminate |
 
 ---
 
@@ -660,7 +733,7 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | O-13 | Verify project isolation live with a non-admin Rancher user (member and read-only) | lab | before release |
 | O-14 | ~~Project members need to read ComputePools~~ done in 3c (D-26) | — | — |
 | O-15 | ~~The Projects page must set the AI-project label~~ done in 3c: creation, Run:AI adoption, and "Make AI project" for existing projects | — | — |
-| O-16 | The Training Jobs list reads AIJobs through the cluster store on local; check what a non-admin member sees (Steve lists namespaces the user can access) | UI | with O-13 |
+| O-16 | The Jobs list reads AIJobs through the cluster store on local; check what a non-admin member sees (Steve lists namespaces the user can access) | UI | with O-13 |
 | O-18 | Placement ignores per-node fit (a 4-GPU-per-node run counts pool totals), priority and fair-share | `placement/fit.go` | later |
 | O-19 | A placed job that stays unadmitted is not re-placed elsewhere (design §6.3 step 4) | placement | later |
 | O-20 | Picking members by typed user ID or group principal is crude; use Rancher's principal search | `AIProjects.vue` | later |
@@ -669,6 +742,10 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | O-23 | The Endpoints list (Workloads, inference tab) reads AIWorkloads through the cluster store; the deploy page sends you to it on local | `Workloads.vue` | with O-16 |
 | O-24 | SGLang and vLLM engine profiles are untested on a real GPU (the lab's GPUs are simulated); `lmsysorg/sglang:latest` is not pinned | lab / `charts/inference-engines/sglang` | when a GPU cluster is available |
 | O-25 | The `inference-engines` branch is published by hand (`git subtree split`); automate it, or a chart version bump on push | CI | later |
+| O-26 | A run can opt out with `spec.reclaim.policy: Never` at submit; let a pool refuse Never (or cap it) | `ComputePool.spec.reclaim` | later |
+| O-27 | Discovery does not delete a pool whose nodes are gone (c-fg8qv-cpu, 0 nodes) | `computepool` | later |
+| O-28 | A Suspended run requeued onto another cluster starts without its checkpoint (the PVC stays where it ran); needs shared storage or checkpoint-to-object-store in the profile | chart / profiles | later |
+| O-29 | Placement still counts pool totals, not per-node fit (O-18): a 12-CPU pod is "placed" on two 10-CPU nodes | `placement/fit.go` | later |
 | O-17 | The UI's 3c flows (pool picker → cluster switch → submit; Projects on a downstream cluster) are covered by unit tests of their logic, not by component tests; try them in the browser | UI | now |
 
 ---
@@ -706,9 +783,9 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
   route to the pool's cluster and the page re-fetches. New facts `pool`, `poolsAvailable` and
   `aiProjectNamespace`, and preflight checks `pool` ("Choose a compute pool") and `project`
   ("Namespace … is not in an AI project"). Submit POSTs the AIJob to local with `spec.pool` and
-  `spec.targetNamespace`, then returns to Training Jobs on local. Without pools (an older
+  `spec.targetNamespace`, then returns to Jobs on local. Without pools (an older
   operator), everything works as before.
-- Training Jobs: placed runs get their pods from the placement cluster, per namespace, tagged
+- Jobs: placed runs get their pods from the placement cluster, per namespace, tagged
   `__clusterId`. Rows and `Run` carry `clusterId`; RunDetail reads events and logs from it.
 - Projects: a cluster picker on local; on a downstream cluster, "Make an existing Rancher project
   an AI project". New and Run:AI-adopted projects are marked through the steve project model

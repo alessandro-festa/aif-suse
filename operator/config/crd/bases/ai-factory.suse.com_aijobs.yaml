@@ -95,6 +95,27 @@ spec:
               profile:
                 description: Profile names the profile that chose the values. Informational.
                 type: string
+              reclaim:
+                description: |-
+                  Reclaim is what happens when the run sits idle in a pool that reclaims.
+                  Set from the run's profile.
+                properties:
+                  idleTimeout:
+                    description: |-
+                      IdleTimeout replaces the pool's, up to the pool's maxIdleTimeout. A number
+                      and m, h or d, e.g. "4h".
+                    pattern: ^[1-9][0-9]*(m|h|d)$
+                    type: string
+                  policy:
+                    default: Suspend
+                    description: AIJobReclaimPolicy is what happens to a run reclaimed
+                      for being idle.
+                    enum:
+                    - Suspend
+                    - Terminate
+                    - Never
+                    type: string
+                type: object
               retention:
                 description: Retention bounds how long the execution objects are kept.
                 properties:
@@ -157,11 +178,46 @@ spec:
             - message: spec.cancel cannot be undone
               rule: '!has(oldSelf.cancel) || !oldSelf.cancel || (has(self.cancel)
                 && self.cancel)'
+            - message: spec.reclaim is immutable; submit a new AIJob
+              rule: has(self.reclaim) == has(oldSelf.reclaim) && (!has(self.reclaim)
+                || self.reclaim == oldSelf.reclaim)
           status:
             description: |-
               AIJobStatus is written by the operator only. Timestamps are observed facts;
               durations are computed by readers.
             properties:
+              activity:
+                description: Activity is the run's utilisation, in a pool that reclaims
+                  idle runs.
+                properties:
+                  idleSince:
+                    description: IdleSince is when the run went under the threshold;
+                      empty while active.
+                    format: date-time
+                    type: string
+                  lastActiveAt:
+                    description: LastActiveAt is the last sample at or above the pool's
+                      idle threshold.
+                    format: date-time
+                    type: string
+                  message:
+                    description: Message says why the run is not sampled, or what
+                      reclaim is waiting for.
+                    type: string
+                  sampledAt:
+                    description: SampledAt is when it was taken.
+                    format: date-time
+                    type: string
+                  source:
+                    description: |-
+                      Source is what the utilisation is read from: gpu (DCGM exporter) or cpu
+                      (kubelet), with why when a GPU run is read from its CPU.
+                    type: string
+                  utilisation:
+                    description: Utilisation is the last sample, in percent.
+                    format: int32
+                    type: integer
+                type: object
               admittedAt:
                 format: date-time
                 type: string
@@ -256,8 +312,8 @@ spec:
                 type: integer
               phase:
                 description: |-
-                  AIJobPhase is where a finite execution is in its life. Succeeded, Failed and
-                  Cancelled are terminal and never change afterwards.
+                  AIJobPhase is where a finite execution is in its life. Succeeded, Failed,
+                  Cancelled and Reclaimed are terminal and never change afterwards.
                 enum:
                 - Pending
                 - Queued
@@ -266,6 +322,7 @@ spec:
                 - Succeeded
                 - Failed
                 - Cancelled
+                - Reclaimed
                 type: string
               placement:
                 description: |-
@@ -350,6 +407,37 @@ spec:
                   workload:
                     type: string
                 type: object
+              reclaimHistory:
+                description: ReclaimHistory lists the run's reclaims, oldest first,
+                  the last 10.
+                items:
+                  description: AIJobReclaimRecord is one reclaim of the run.
+                  properties:
+                    at:
+                      format: date-time
+                      type: string
+                    policy:
+                      description: AIJobReclaimPolicy is what happens to a run reclaimed
+                        for being idle.
+                      enum:
+                      - Suspend
+                      - Terminate
+                      - Never
+                      type: string
+                    pool:
+                      type: string
+                    reason:
+                      description: 'Reason is why: how long it was idle, and for which
+                        waiting run.'
+                      type: string
+                  required:
+                  - at
+                  - policy
+                  - pool
+                  - reason
+                  type: object
+                maxItems: 10
+                type: array
               report:
                 description: Report is what the run reported about itself, for a run
                   that prints one.

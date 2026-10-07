@@ -69,10 +69,29 @@ func slug(s string) string {
 // one for GPU nodes that do not name their product, and one for the CPU-only
 // nodes. Pools are only proposed for kinds of node the cluster has. Every pool
 // is named after its cluster: its kind and GPU model tell them apart.
+// takesRuns says whether a training run can land on the node: it is not
+// cordoned, and every NoSchedule/NoExecute taint on it is one the training chart
+// tolerates (nvidia.com/gpu). A control-plane node is tainted, so it is not
+// capacity.
+func takesRuns(n corev1.Node) bool {
+	if n.Spec.Unschedulable {
+		return false
+	}
+	for _, t := range n.Spec.Taints {
+		if (t.Effect == corev1.TaintEffectNoSchedule || t.Effect == corev1.TaintEffectNoExecute) && t.Key != gpuResource.String() {
+			return false
+		}
+	}
+	return true
+}
+
 func discoverPools(clusterID, clusterName string, nodes []corev1.Node) []desiredPool {
 	products := map[string]bool{}
 	unnamedGPU, cpu := false, false
 	for _, n := range nodes {
+		if !takesRuns(n) {
+			continue
+		}
 		switch p := n.Labels[gpuProductLabel]; {
 		case p != "":
 			products[p] = true
@@ -197,8 +216,8 @@ func poolStatus(spec v1alpha1.ComputePoolSpec, nodes []corev1.Node, pods []corev
 	models := map[string]bool{}
 	var minMemMiB int64
 	for _, n := range nodes {
-		// A cordoned node takes no new work, so it is not capacity a job can be placed on.
-		if n.Spec.Unschedulable || !sel.Matches(labels.Set(n.Labels)) {
+		// A cordoned or tainted node takes no run, so it is not capacity a run can be placed on.
+		if !takesRuns(n) || !sel.Matches(labels.Set(n.Labels)) {
 			continue
 		}
 		in[n.Name] = true

@@ -156,3 +156,27 @@ func TestOnlyAIProjectRunsWithoutAPoolAreTheQueues(t *testing.T) {
 	assert.Nil(t, h.job("aif-vision", "done").Status.Placement)
 	assert.Nil(t, h.job("default", "admin").Status.Placement, "not in an AI project")
 }
+
+// A run that started after the pool's nodes were last read is not in its figures
+// yet: it still takes room, or a second run would be placed on top of it.
+func TestARunJustStartedStillTakesRoomUntilThePoolIsReadAgain(t *testing.T) {
+	p := gpuPool("a-l40s", "c-a", 4)
+	p.Status.ObservedAt = &metav1.Time{Time: t0}
+	first := run("first", "aif-vision", 0, gpus(4))
+	first.Status.Phase = v1alpha1.AIJobPhaseRunning
+	first.Status.Placement = &v1alpha1.AIJobPlacement{Pool: "a-l40s", ClusterID: "c-a", Namespace: "vision"}
+	startedAfter := metav1.NewTime(t0.Add(30 * time.Second))
+	first.Status.StartedAt = &startedAfter
+	h := newHarness(t, vision(), ns("aif-vision", "vision"), p, first, run("second", "aif-vision", 1, gpus(2)))
+	h.pass()
+	assert.Nil(t, h.job("aif-vision", "second").Status.Placement, "the first run's GPUs are taken, though the pool does not show them yet")
+
+	cur := &v1alpha1.ComputePool{}
+	require.NoError(t, h.c.Get(context.Background(), types.NamespacedName{Name: "a-l40s"}, cur))
+	cur.Status.ObservedAt = &metav1.Time{Time: t0.Add(time.Minute)}
+	cur.Status.Requested.GPUs = 4
+	require.NoError(t, h.c.Update(context.Background(), cur))
+	h.pass()
+	assert.Nil(t, h.job("aif-vision", "second").Status.Placement, "now the pool shows them; still no room, and not counted twice")
+	assert.Contains(t, h.job("aif-vision", "second").Status.PlacementMessage, "0 GPUs free, 2 needed")
+}

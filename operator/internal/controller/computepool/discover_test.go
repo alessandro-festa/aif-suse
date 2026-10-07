@@ -142,3 +142,25 @@ func TestDetectStackReadsTheChartsSchedulerTable(t *testing.T) {
 	assert.Equal(t, []string{"training-operator", "trainer-v2"}, detectStack([]string{"kubeflow.org", "trainer.kubeflow.org"}, nil, backends).Training)
 	assert.Equal(t, stack{}, detectStack([]string{"apps", "batch"}, nil, backends))
 }
+
+func TestATaintedNodeIsNotCapacityUnlessRunsTolerateIt(t *testing.T) {
+	cp := cpuNode("control-plane")
+	cp.Spec.Taints = []corev1.Taint{{Key: "node-role.kubernetes.io/control-plane", Effect: corev1.TaintEffectNoSchedule}}
+	gpuTainted := h100("g1")
+	gpuTainted.Spec.Taints = []corev1.Taint{{Key: "nvidia.com/gpu", Value: "present", Effect: corev1.TaintEffectNoSchedule}}
+	soft := cpuNode("soft")
+	soft.Spec.Taints = []corev1.Taint{{Key: "dedicated", Effect: corev1.TaintEffectPreferNoSchedule}}
+	nodes := []corev1.Node{cp, gpuTainted, soft}
+
+	pools := discoverPools("c-abc", "prod", nodes)
+	require.Len(t, pools, 2)
+	st, err := poolStatus(pools[1].Spec, nodes, nil, stack{})
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), st.Nodes, "the control plane takes no run; a PreferNoSchedule taint does not keep runs off")
+	assert.Equal(t, "16", st.Allocatable.CPU.String())
+	gpu, err := poolStatus(pools[0].Spec, nodes, nil, stack{})
+	require.NoError(t, err)
+	assert.Equal(t, int64(8), gpu.Allocatable.GPUs, "the training chart tolerates the nvidia.com/gpu taint")
+
+	assert.Empty(t, discoverPools("c-cp", "cp", []corev1.Node{cp}), "a cluster of only a control plane has no pool")
+}
