@@ -26,7 +26,7 @@ suseai:
   pages:
     computePools:
       title: Compute Pools
-      description: The nodes AI Factory can place work on, discovered on every downstream cluster Rancher manages — one pool per GPU model and one for CPU-only nodes, each named after its cluster — with what each has and is using, and the schedulers, GPU sharing and training runtime the cluster runs. Refreshed every minute. Rancher's local cluster runs no AI work and is not listed.
+      description: The nodes AI Factory can place work on, discovered on every downstream cluster Rancher manages — one pool per GPU model and one for CPU-only nodes, each named after its cluster — with what each has and is using, and the schedulers, GPU sharing and training runtime the cluster runs. Refreshed every minute. Rancher’s local cluster runs no AI work and is not listed.
       loading: Reading compute pools...
       empty: No compute pools yet. The operator discovers them within a minute of starting.
       notInstalled: This AI Factory operator does not discover compute pools yet. Upgrade the operator to a version that includes ComputePool.
@@ -50,13 +50,13 @@ suseai:
       inUse: in use
       builtin:
         scheduler: Kubernetes default
-        schedulerTip: No add-on scheduler (KAI, Kueue, Volcano, Run:ai) is installed. AI Factory's queue chooses the pool; the Kubernetes scheduler places the pods.
+        schedulerTip: No add-on scheduler (KAI, Kueue, Volcano, Run:ai) is installed. AI Factory’s queue chooses the pool; the Kubernetes scheduler places the pods.
         sharing: Whole GPUs
         training: Kubernetes Job
         trainingTip: Every cluster runs training as plain Kubernetes Jobs. A Kubeflow runtime, when installed, is listed beside it.
       consumers:
         toggle: Who uses this pool
-        none: Nothing runs on this pool's nodes.
+        none: Nothing runs on this pool’s nodes.
         what: Run or workload
         otherPods: other pods
         cpu: CPU requested
@@ -69,7 +69,7 @@ suseai:
       reclaim:
         edit: Edit
         cancel: Cancel
-        help: A queued run under the threshold for the whole idle time is reclaimed by its profile's policy (Suspend requeues it, Terminate ends it, Never leaves it), and the waiting run takes its place.
+        help: A queued run under the threshold for the whole idle time is reclaimed by its profile’s policy (Suspend requeues it, Terminate ends it, Never leaves it), and the waiting run takes its place.
         enabled: Reclaim idle runs in this pool
         idleTimeout: Idle after
         durationHint: A number and m, h or d, e.g. 30m, 2h, 3d
