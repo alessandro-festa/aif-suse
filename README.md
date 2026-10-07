@@ -7,6 +7,7 @@ from there), one chart per engine:
 |---|---|---|
 | `llama-cpp` | llama.cpp `llama-server`, a GGUF model | CPU, or NVIDIA GPU |
 | `sglang` | SGLang, a Hugging Face model | NVIDIA GPU |
+| `ray-serve` | Ray Serve on a KubeRay RayService, a Hugging Face model (needs KubeRay) | CPU, or NVIDIA GPU |
 
 AI Factory serves them as Apps from a git custom repository, "Inference Engines Apps" (ClusterRepo
 `aif-engines`), which points at the fork's `inference-engines` branch. That branch holds only this
