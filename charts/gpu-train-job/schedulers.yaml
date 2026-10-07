@@ -24,7 +24,8 @@
 #   quota          where GPU entitlement lives: queue-tree (scheduling.run.ai/v2 Queues) |
 #                  clusterqueue (Kueue ClusterQueues) | volcano-queue (scheduling.volcano.sh
 #                  Queues, cluster-scoped, with a capability) | none
-#   sharing        GPU-sharing modes it places: kai-fraction (pod annotation gpu-memory)
+#   sharing        GPU-sharing modes it places itself: kai-fraction (pod annotation gpu-memory)
+#   sharingWith    GPU-sharing layers (below, sharingLayers) a run under it may use instead
 backends:
   none:
     display: Default scheduler
@@ -35,6 +36,7 @@ backends:
     gang: none
     quota: none
     sharing: []
+    sharingWith: [hami]
   kueue:
     display: Kueue
     detect:
@@ -47,6 +49,7 @@ backends:
     gang: admission
     quota: clusterqueue
     sharing: []
+    sharingWith: [hami]
   kai:
     display: KAI scheduler
     detect:
@@ -61,6 +64,7 @@ backends:
     gang: podgrouper
     quota: queue-tree
     sharing: [kai-fraction]
+    sharingWith: []
   runai:
     display: Run:AI scheduler
     detect:
@@ -75,6 +79,7 @@ backends:
     gang: podgrouper
     quota: queue-tree
     sharing: []
+    sharingWith: []
   volcano:
     display: Volcano
     detect:
@@ -90,3 +95,22 @@ backends:
     gang: podgroup
     quota: volcano-queue
     sharing: []
+    sharingWith: []
+
+# GPU-sharing layers a run can use beside its scheduler (gpu.sharing names one). A layer splits a
+# GPU into memory/compute slices that its own device plugin advertises and its own scheduler places.
+#   display        name shown to people
+#   detect         installed when a node carries `nodeAnnotation` (the layer's device registration)
+#   schedulerName  pod spec.schedulerName for a run under a scheduler that sets none
+#   resources      the extended resources a pod asks for: one GPU slot (gpu), MiB of GPU memory
+#                  (memory), percent of the GPU's compute (cores)
+sharingLayers:
+  hami:
+    display: HAMi
+    detect:
+      nodeAnnotation: hami.io/node-nvidia-register
+    schedulerName: hami-scheduler
+    resources:
+      gpu: nvidia.com/gpu
+      memory: nvidia.com/gpumem
+      cores: nvidia.com/gpucores

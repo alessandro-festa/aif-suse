@@ -179,10 +179,14 @@ func detectStack(groups []string, nodes []corev1.Node, backends map[string]train
 			sharing[s] = true
 		}
 	}
-	for _, n := range nodes {
-		if _, ok := n.Annotations[hamiNodeAnnotation]; ok {
-			sharing["hami"] = true
-			break
+	// sharing layers (HAMi) are installed where a node carries their device registration
+	layers, _ := trainchart.SharingLayers()
+	for name, l := range layers {
+		for _, n := range nodes {
+			if _, ok := n.Annotations[l.Detect.NodeAnnotation]; ok && l.Detect.NodeAnnotation != "" {
+				sharing[name] = true
+				break
+			}
 		}
 	}
 	for s := range sharing {
@@ -226,7 +230,11 @@ func poolStatus(spec v1alpha1.ComputePoolSpec, nodes []corev1.Node, pods []corev
 		out.Nodes++
 		cpu.Add(n.Status.Allocatable[corev1.ResourceCPU])
 		mem.Add(n.Status.Allocatable[corev1.ResourceMemory])
-		if q, ok := n.Status.Allocatable[gpuResource]; ok {
+		if devices := hamiDevices(n); devices > 0 {
+			// HAMi's device plugin advertises each GPU as several nvidia.com/gpu slots;
+			// its registration lists the physical GPUs
+			out.Allocatable.GPUs += devices
+		} else if q, ok := n.Status.Allocatable[gpuResource]; ok {
 			out.Allocatable.GPUs += q.Value()
 		}
 		if p := n.Labels[gpuProductLabel]; p != "" {
@@ -264,8 +272,12 @@ func poolStatus(spec v1alpha1.ComputePoolSpec, nodes []corev1.Node, pods []corev
 			c.Requested.CPU.Add(ct.Resources.Requests[corev1.ResourceCPU])
 			c.Requested.Memory.Add(ct.Resources.Requests[corev1.ResourceMemory])
 			// An extended resource's request always equals its limit; either may be set.
+			// A share (a sharing layer's GPU memory, e.g. HAMi's nvidia.com/gpumem) takes a
+			// slot, not a whole GPU.
 			var gpus int64
-			if q, ok := ct.Resources.Limits[gpuResource]; ok {
+			if isShare(ct) {
+				gpus = 0
+			} else if q, ok := ct.Resources.Limits[gpuResource]; ok {
 				gpus = q.Value()
 			} else if q, ok := ct.Resources.Requests[gpuResource]; ok {
 				gpus = q.Value()
@@ -406,4 +418,33 @@ func readUsage(ctx context.Context, r ClusterReader, nodes []corev1.Node) podUsa
 		return nil
 	}
 	return parseUsage(summaries)
+}
+
+// hamiDevices is how many physical GPUs HAMi registered on the node (its
+// registration lists one "uuid,slots,memory,cores,type,numa,healthy" entry per
+// GPU, ":"-separated); 0 when it registered none.
+func hamiDevices(n corev1.Node) int64 {
+	reg := n.Annotations[hamiNodeAnnotation]
+	var c int64
+	for _, e := range strings.Split(reg, ":") {
+		if strings.TrimSpace(e) != "" {
+			c++
+		}
+	}
+	return c
+}
+
+// isShare says whether a container asks for a sharing layer's GPU memory.
+func isShare(c corev1.Container) bool {
+	layers, _ := trainchart.SharingLayers()
+	for _, l := range layers {
+		r := corev1.ResourceName(l.Resources.Memory)
+		if _, ok := c.Resources.Limits[r]; ok {
+			return true
+		}
+		if _, ok := c.Resources.Requests[r]; ok {
+			return true
+		}
+	}
+	return false
 }

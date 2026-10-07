@@ -32,7 +32,7 @@ Branch: `aijob-scheduling` on the alessandro-festa fork (`origin`), based on SUS
 | 5a | Idle reclaim, operator: activity sampled through the proxy (kubelet CPU, DCGM GPU), pool reclaim settings, Suspend/Terminate/Never per run, hand-off to the waiting run | done, verified on the lab (CPU) | — |
 | 5b | Idle reclaim, UI: pool reclaim settings, run activity and reclaims, reclaim policy in profiles/Submit | built; unit-tested; to try in the browser | — |
 | 6 | Volcano backend: table entry, PodGroup gang, queue by annotation, pre-flight, Submit, observe | done, verified on the lab (Volcano 1.15.3 on downstream-1) | — |
-| 7 | HAMi on the GPU-sharing axis | — | — |
+| 7 | HAMi on the GPU-sharing axis: `sharingLayers` table, `gpu.sharing: hami`, HAMi-aware pool GPU counts, Submit option | done; lab-verified up to scheduling (simulated GPUs: no real HAMi) | — |
 | 8 | Catalog entries (KAI, Kueue, Volcano, HAMi; Kubeflow training-only preset) + "install a scheduler here" | — | — |
 | 9 | Generic `AIJob.status.queue`; Trainer v2 `TrainJob` | — | — |
 | 10 | Exploration: training frameworks beyond PyTorch (JAX, TensorFlow, DeepSpeed); see design doc §8.1 | — (asked 2026-10-07) | — |
@@ -348,6 +348,20 @@ exists and is Open. The UI checks the same, plus a queue's `nvidia.com/gpu` capa
 none/kueue/kai/runai stay byte-identical (32-case matrix). `status.queue.kaiQueue` carries
 Volcano's queue too, until the generic status.queue (Phase 9).
 
+**D-50 HAMi is a sharing layer, not a scheduler.** schedulers.yaml gains `sharingLayers.hami`:
+- detection by the node annotation `hami.io/node-nvidia-register`;
+- `schedulerName: hami-scheduler`;
+- resources `nvidia.com/gpu` (one slot), `nvidia.com/gpumem` (MiB) and `nvidia.com/gpucores` (%).
+
+Each backend gains `sharingWith` (its own `sharing` stays what it places itself, which is what
+detection uses). HAMi works with `none` and `kueue`. Not with KAI, which has its own fractions, nor
+with Volcano, whose HAMi integration uses `volcano.sh/vgpu-*` resources (O-30). A run opts in with
+`gpu.sharing: hami` + `sharedMemoryMiB` (+ `sharedCoresPercent`). Its pods use `hami-scheduler`
+when the backend sets no scheduler; under Kueue they keep the queue label and suspend, and are not
+"kueueSkipped" (that is for DRA claims). Pools count HAMi nodes' GPUs from the registration (HAMi
+advertises each GPU as several `nvidia.com/gpu` slots). A share takes a slot, not a whole GPU. The
+run's GPUs record mode `hami`.
+
 ---
 
 ## 3. Findings
@@ -648,6 +662,25 @@ and workloads are grouped by namespace + Helm release (`app.kubernetes.io/instan
 c-xvstz-cpu showed `llama-cpp` requesting 2 CPU and using ~0 CPU / 470 MiB. Scale note: this adds
 to O-10.
 
+**F-60 [trap] gofmt rewrites `''` to `”` inside Go doc comments**, and so inside kubebuilder
+markers: two CEL rules (`spec.pool`, `spec.targetNamespace` immutability) broke after a
+`gofmt -w api/v1alpha1/aijob_types.go`. They were restored and the CRDs regenerated. Never gofmt
+the API types without checking `git diff` for `”`.
+
+**F-61 [bug, ours, P6, fixed P7] A Volcano run read back from values became "Default scheduler"**:
+`formFromValues` listed the schedulers by hand without `volcano`. Found while adding HAMi's fields.
+
+**F-62 [fact] Lab check (P7), simulated GPUs, so no real HAMi.**
+- A fake HAMi registration (2 devices) on downstream-2-worker made c-fg8qv-gpu-l40s report
+  sharing `hami` and 2 GPUs (the node advertises `nvidia.com/gpu: 2`; a real HAMi would advertise
+  20 slots).
+- `hami-share-1` (4096 MiB, 30%) in AIProject aiteam was placed on that pool and installed. Its pod
+  asked `hami-scheduler` for `nvidia.com/gpu: 1`, `gpumem: 4096`, `gpucores: 30`, and stayed
+  Pending (no HAMi scheduler).
+- With the registration removed, `hami-share-2` failed at install: "gpu.sharing=hami but no node
+  carries hami.io/node-nvidia-register…".
+- Annotation removed and runs deleted afterwards.
+
 **F-24 [fact] Settings already has a way to create the token**: Settings → Rancher API Access →
 Authorize creates a Rancher API token as the logged-in user and stores it in the operator
 namespace. Discovery reuses it (D-15).
@@ -825,6 +858,9 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 | O-27 | Discovery does not delete a pool whose nodes are gone (c-fg8qv-cpu, 0 nodes) | `computepool` | later |
 | O-28 | A Suspended run requeued onto another cluster starts without its checkpoint (the PVC stays where it ran); needs shared storage or checkpoint-to-object-store in the profile | chart / profiles | later |
 | O-29 | Placement still counts pool totals, not per-node fit (O-18): a 12-CPU pod is "placed" on two 10-CPU nodes | `placement/fit.go` | later |
+| O-30 | HAMi under Volcano (Volcano's vGPU device plugin, `volcano.sh/vgpu-memory`) as a second sharing layer | schedulers.yaml / chart | later |
+| O-31 | HAMi verified only up to scheduling: needs a real GPU node with HAMi's device plugin and scheduler | lab | when a GPU cluster is available |
+| O-32 | A HAMi share is one GPU per pod (as KAI's); HAMi allows several slices per pod | chart preflight | later |
 | O-17 | The UI's 3c flows (pool picker → cluster switch → submit; Projects on a downstream cluster) are covered by unit tests of their logic, not by component tests; try them in the browser | UI | now |
 
 ---
@@ -833,6 +869,8 @@ kubectl --context kind-sims-datacenter apply -f examples/training/blueprints/ -f
 
 - Commits are authored by the fork owner with no co-author trailer; pushed only to `origin`, only
   when asked.
+- Do not `gofmt -w` the API types: it rewrites `''` in kubebuilder CEL markers (F-60).
+- UI strings go through Rancher's `t()`, which escapes HTML: use ’ rather than `'`, or `t(key, {}, true)`.
 - Generated copies always have a test that fails when they drift: the embedded chart
   (`TestArchiveMatchesChartSource`) and the UI scheduler table (`schedulers-parity.test.ts`).
 - Refactors are proven with before/after renders (§4.4), not just green tests.

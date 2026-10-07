@@ -148,6 +148,34 @@ for t in tpls:
   done
 done
 
+# HAMi: a share asks for one GPU slot, gpumem (and gpucores) on every pod, placed by hami-scheduler
+# when the scheduler sets none; under Kueue the workload keeps its queue label.
+for sched in none kueue; do
+  out=$(helm template t . --set gpu.sharing=hami --set gpu.sharedMemoryMiB=4096 --set gpu.sharedCoresPercent=30 \
+    --set scheduler.type=$sched $([ $sched = kueue ] && echo --set scheduler.queue=q) --set job.nodes=2 2>&1)
+  if printf '%s\n' "$out" | python3 -c '
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+assert not any(d["kind"] == "ResourceClaimTemplate" for d in docs)
+job = next(d for d in docs if d["kind"] == "Job")
+s = job["spec"]["template"]["spec"]
+want = {"nvidia.com/gpu": "1", "nvidia.com/gpumem": "4096", "nvidia.com/gpucores": "30"}
+r = s["containers"][0]["resources"]
+assert all(r["limits"].get(k) == v and r["requests"].get(k) == v for k, v in want.items()), r
+assert s["schedulerName"] == "hami-scheduler", s.get("schedulerName")'; then
+    printf '✓ %s\n' "hami under $sched: one GPU slot + gpumem + gpucores, hami-scheduler"
+  else
+    printf '✗ %s\n' "hami under $sched: wrong resources or scheduler"; fail=1
+  fi
+done
+for bad in "--set scheduler.type=kai --set scheduler.queue=q" "--set gpu.sharedMemoryMiB=0" "--set gpu.sharedClaim=c --set gpu.mode=dra"; do
+  if helm template t . --set gpu.sharing=hami --set gpu.sharedMemoryMiB=4096 $bad >/dev/null 2>&1; then
+    printf '✗ %s\n' "hami accepted: $bad"; fail=1
+  else
+    printf '✓ %s\n' "hami refused: $bad"
+  fi
+done
+
 echo
 [ $fail -eq 0 ] && echo "chart render checks passed" || echo "chart render checks FAILED"
 exit $fail

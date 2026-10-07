@@ -405,13 +405,17 @@ func gpuFacts(pods []corev1.Pod, claims map[string]*resourcev1.ResourceClaim, no
 			continue
 		}
 		var n int64
+		mode := "device-plugin"
 		for _, c := range p.Spec.Containers {
+			if layer := sharingLayerOf(c); layer != "" {
+				mode = layer // a share of one GPU through a sharing layer (HAMi)
+			}
 			if q, ok := c.Resources.Limits[gpuResource]; ok {
 				n += q.Value()
 			}
 		}
 		for i := int64(0); i < n; i++ {
-			out = append(out, v1alpha1.AIJobGPU{Pod: p.Name, Mode: "device-plugin", Product: product})
+			out = append(out, v1alpha1.AIJobGPU{Pod: p.Name, Mode: mode, Product: product})
 		}
 	}
 	return out
@@ -455,4 +459,16 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// sharingLayerOf is the sharing layer (HAMi) whose GPU memory the container asks
+// for, or "".
+func sharingLayerOf(c corev1.Container) string {
+	layers, _ := trainchart.SharingLayers()
+	for name, l := range layers {
+		if _, ok := c.Resources.Limits[corev1.ResourceName(l.Resources.Memory)]; ok {
+			return name
+		}
+	}
+	return ""
 }

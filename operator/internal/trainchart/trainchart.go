@@ -55,6 +55,23 @@ type Backend struct {
 	Gang          string        `json:"gang"`
 	Quota         string        `json:"quota"`
 	Sharing       []string      `json:"sharing"`
+	// SharingWith are the sharing layers (SharingLayers) a run under it may use.
+	SharingWith []string `json:"sharingWith"`
+}
+
+// SharingLayer is a GPU-sharing layer a run can use beside its scheduler (HAMi).
+type SharingLayer struct {
+	Display string `json:"display"`
+	Detect  struct {
+		// NodeAnnotation is the layer's device registration on a node.
+		NodeAnnotation string `json:"nodeAnnotation"`
+	} `json:"detect"`
+	SchedulerName string `json:"schedulerName"`
+	Resources     struct {
+		GPU    string `json:"gpu"`
+		Memory string `json:"memory"`
+		Cores  string `json:"cores"`
+	} `json:"resources"`
 }
 
 // BackendProbe says the backend is installed when the cluster serves Group and
@@ -75,46 +92,62 @@ type BackendQueue struct {
 	NamespaceLabel string `json:"namespaceLabel,omitempty"`
 }
 
+// table is schedulers.yaml.
+type table struct {
+	Backends      map[string]Backend      `json:"backends"`
+	SharingLayers map[string]SharingLayer `json:"sharingLayers"`
+}
+
 var (
-	backendsOnce sync.Once
-	backends     map[string]Backend
-	backendsErr  error
+	tableOnce sync.Once
+	theTable  table
+	tableErr  error
 )
+
+func readOnce() (table, error) {
+	tableOnce.Do(func() { theTable, tableErr = readTable(archive) })
+	return theTable, tableErr
+}
 
 // Backends returns the scheduler backends the built-in chart knows, by
 // scheduler.type.
 func Backends() (map[string]Backend, error) {
-	backendsOnce.Do(func() { backends, backendsErr = readBackends(archive) })
-	return backends, backendsErr
+	t, err := readOnce()
+	return t.Backends, err
 }
 
-func readBackends(tgz []byte) (map[string]Backend, error) {
+// SharingLayers returns the GPU-sharing layers the built-in chart knows, by
+// gpu.sharing.
+func SharingLayers() (map[string]SharingLayer, error) {
+	t, err := readOnce()
+	return t.SharingLayers, err
+}
+
+func readTable(tgz []byte) (table, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(tgz))
 	if err != nil {
-		return nil, err
+		return table{}, err
 	}
 	tr := tar.NewReader(gz)
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return nil, fmt.Errorf("%s/schedulers.yaml not in the chart", Name)
+			return table{}, fmt.Errorf("%s/schedulers.yaml not in the chart", Name)
 		}
 		if err != nil {
-			return nil, err
+			return table{}, err
 		}
 		if h.Name != Name+"/schedulers.yaml" {
 			continue
 		}
 		b, err := io.ReadAll(tr)
 		if err != nil {
-			return nil, err
+			return table{}, err
 		}
-		var doc struct {
-			Backends map[string]Backend `json:"backends"`
-		}
+		var doc table
 		if err := yaml.UnmarshalStrict(b, &doc); err != nil {
-			return nil, fmt.Errorf("schedulers.yaml: %w", err)
+			return table{}, fmt.Errorf("schedulers.yaml: %w", err)
 		}
-		return doc.Backends, nil
+		return doc, nil
 	}
 }

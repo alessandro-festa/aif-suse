@@ -75,9 +75,16 @@ gpu:
   #   sharedClaim (dra only): the name of an existing ResourceClaim in the namespace, configured for
   #     MPS, that every pod attaches to; sharedMemoryMiB caps the run per process
   #     (CUDA_MPS_PINNED_DEVICE_MEM_LIMIT). Not queued: Kueue cannot admit pods on an existing claim.
+  #   sharing=hami: HAMi (a sharing layer, schedulers.yaml sharingLayers). The pod asks for one GPU
+  #     slot and sharedMemoryMiB of nvidia.com/gpumem (and sharedCoresPercent of nvidia.com/gpucores),
+  #     placed by hami-scheduler, capped by HAMi-core. With scheduler.type none or kueue.
   # 0 = whole GPUs.
   sharedClaim: ""
   sharedMemoryMiB: 0
+  # The sharing layer for a share: "" = the scheduler's own (KAI) or sharedClaim; hami = HAMi.
+  sharing: ""
+  # HAMi only: percent of the GPU's compute the pod may use (nvidia.com/gpucores); 0 = no cap.
+  sharedCoresPercent: 0
 
 # Multi-node NVLink domain (systems whose NVLink fabric spans nodes, e.g. GB200/GB300 NVL72 racks):
 # one ComputeDomain per run, sized to job.nodes. The NVIDIA DRA

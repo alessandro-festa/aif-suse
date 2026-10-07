@@ -25,6 +25,43 @@ export interface SchedulerBackend {
   quota: 'queue-tree' | 'clusterqueue' | 'volcano-queue' | 'none';
   /** GPU-sharing modes it places. kai-fraction: the pod's gpu-memory annotation. */
   sharing: 'kai-fraction'[];
+  /** Sharing layers (SHARING_LAYERS) a run under it may use instead. */
+  sharingWith: SharingLayerName[];
+}
+
+export type SharingLayerName = 'hami';
+
+/** A GPU-sharing layer a run can use beside its scheduler (schedulers.yaml sharingLayers). */
+export interface SharingLayer {
+  display: string;
+  /** Installed when a node carries this annotation (the layer's device registration). */
+  detect: { nodeAnnotation: string };
+  /** Pod spec.schedulerName for a run under a scheduler that sets none. */
+  schedulerName: string;
+  /** Extended resources a pod asks for: one GPU slot, MiB of GPU memory, percent of compute. */
+  resources: { gpu: string; memory: string; cores: string };
+}
+
+export const SHARING_LAYERS: Record<SharingLayerName, SharingLayer> = {
+  hami: {
+    display:       'HAMi',
+    detect:        { nodeAnnotation: 'hami.io/node-nvidia-register' },
+    schedulerName: 'hami-scheduler',
+    resources:     {
+      gpu: 'nvidia.com/gpu', memory: 'nvidia.com/gpumem', cores: 'nvidia.com/gpucores'
+    },
+  },
+};
+
+/** The sharing layers installed, from the nodes' registrations. */
+export function sharingLayersOn(nodes: any[]): SharingLayerName[] {
+  return (Object.keys(SHARING_LAYERS) as SharingLayerName[])
+    .filter((k) => (nodes || []).some((n) => n?.metadata?.annotations?.[SHARING_LAYERS[k].detect.nodeAnnotation] !== undefined));
+}
+
+/** A run under scheduler s may share a GPU through layer l. */
+export function worksWithLayer(s: SchedulerType, l: SharingLayerName): boolean {
+  return backendOf(s).sharingWith.includes(l);
 }
 
 export const SCHEDULER_BACKENDS: Record<SchedulerType, SchedulerBackend> = {
@@ -37,6 +74,7 @@ export const SCHEDULER_BACKENDS: Record<SchedulerType, SchedulerBackend> = {
     gang:          'none',
     quota:         'none',
     sharing:       [],
+    sharingWith: ['hami'],
   },
   kueue: {
     display:       'Kueue',
@@ -47,6 +85,7 @@ export const SCHEDULER_BACKENDS: Record<SchedulerType, SchedulerBackend> = {
     gang:          'admission',
     quota:         'clusterqueue',
     sharing:       [],
+    sharingWith: ['hami'],
   },
   kai: {
     display:       'KAI scheduler',
@@ -57,6 +96,7 @@ export const SCHEDULER_BACKENDS: Record<SchedulerType, SchedulerBackend> = {
     gang:          'podgrouper',
     quota:         'queue-tree',
     sharing:       ['kai-fraction'],
+    sharingWith: [],
   },
   runai: {
     display:       'Run:AI scheduler',
@@ -67,6 +107,7 @@ export const SCHEDULER_BACKENDS: Record<SchedulerType, SchedulerBackend> = {
     gang:          'podgrouper',
     quota:         'queue-tree',
     sharing:       [],
+    sharingWith: [],
   },
   volcano: {
     display:       'Volcano',
@@ -79,6 +120,7 @@ export const SCHEDULER_BACKENDS: Record<SchedulerType, SchedulerBackend> = {
     gang:      'podgroup',
     quota:     'volcano-queue',
     sharing:   [],
+    sharingWith: [],
   },
 };
 

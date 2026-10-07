@@ -72,6 +72,19 @@ else an error.
 {{- end -}}
 
 {{/*
+The sharing layer gpu.sharing names (schedulers.yaml sharingLayers), as YAML; empty for none.
+*/}}
+{{- define "gpu-train-job.sharingLayer" -}}
+{{- with .Values.gpu.sharing -}}
+{{- $layers := ($.Files.Get "schedulers.yaml" | fromYaml).sharingLayers -}}
+{{- if not (hasKey $layers .) -}}
+{{- fail (printf "gpu.sharing %q is not one of: %s" . (keys $layers | sortAlpha | join ", ")) -}}
+{{- end -}}
+{{- index $layers . | toYaml -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 "true" when the backend admits a run by unsuspending it, so the workload is created suspended.
 */}}
 {{- define "gpu-train-job.suspended" -}}
@@ -130,6 +143,9 @@ else dra if the DeviceClass exists. Offline (helm template) auto resolves to dev
 {{- if and (eq (int .Values.job.gpusPerNode) 0) (eq (int .Values.gpu.sharedMemoryMiB) 0) -}}
 {{- /* A CPU-only run (a CPU compute pool): no GPU request, no claim, no GPU checks. */ -}}
 none
+{{- else if and (eq .Values.gpu.sharing "hami") (gt (int .Values.gpu.sharedMemoryMiB) 0) -}}
+{{- /* A GPU-memory share under HAMi: one GPU slot plus nvidia.com/gpumem, placed by hami-scheduler. */ -}}
+hami
 {{- else if and (has "kai-fraction" $backend.sharing) (gt (int .Values.gpu.sharedMemoryMiB) 0) (not .Values.gpu.sharedClaim) -}}
 {{- /* A GPU-memory share under KAI: KAI places the pod on a GPU by its gpu-memory annotation and
        HAMi-core / NvFractions caps it. No whole nvidia.com/gpu and no DRA claim: KAI rejects a pod

@@ -17,9 +17,9 @@ limitations under the License.
 package computepool
 
 import (
-	"fmt"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 

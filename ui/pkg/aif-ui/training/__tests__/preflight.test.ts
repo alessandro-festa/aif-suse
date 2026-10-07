@@ -822,3 +822,35 @@ describe('Volcano', () => {
     expect(sev(form, { volcanoInstalled: true, volcanoQueues: [] }, 'queue'), 'queues not readable: a warning').toEqual(['warn']);
   });
 });
+
+describe('HAMi', () => {
+  const form: Form = {
+    ...DEFAULT_FORM, namespace: 'default', releaseName: 'train-1', gpuShareMiB: 4096, gpuSharing: 'hami', gpuCoresPercent: 30, gpusPerNode: 1
+  };
+  const share = (f: Form, over: Partial<Facts>) => runPreflight(f, facts(over)).filter((c) => c.id === 'gpu-share').map((c) => c.severity);
+
+  it('needs HAMi on the cluster and a scheduler it works with', () => {
+    expect(share(form, { sharingLayers: ['hami'] })).toEqual(['pass']);
+    expect(share(form, {})).toEqual(['fail']);
+    expect(share({ ...form, scheduler: 'kai', queue: 'q' }, { sharingLayers: ['hami'], kaiInstalled: true })).toEqual(['fail']);
+    expect(share({ ...form, gpuCoresPercent: 120 }, { sharingLayers: ['hami'] })).toEqual(['fail']);
+  });
+
+  it('installs as gpu.sharing with its compute cap, and stays under Kueue', () => {
+    const v = chartValues({ ...form, scheduler: 'kueue', queue: 'q' });
+
+    expect(v.gpu).toMatchObject({
+      sharing: 'hami', sharedMemoryMiB: 4096, sharedCoresPercent: 30, sharedClaim: ''
+    });
+    expect(v.scheduler).toMatchObject({ type: 'kueue', queue: 'q' });
+    const back = formFromValues(v, DEFAULT_FORM);
+
+    expect(back.unmapped).toEqual([]);
+    expect(back.form).toMatchObject({ gpuSharing: 'hami', gpuCoresPercent: 30, gpuShareMiB: 4096 });
+    expect(chartValues({ ...form, gpuShareMiB: 0 }).gpu).toMatchObject({ sharing: '', sharedCoresPercent: 0 });
+  });
+
+  it('a Volcano run reads back as Volcano', () => {
+    expect(formFromValues({ scheduler: { type: 'volcano', queue: 'team-a' } }, DEFAULT_FORM).form.scheduler).toBe('volcano');
+  });
+});

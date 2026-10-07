@@ -503,7 +503,8 @@ spec:
                           description: Device is the DRA device name (DRA only).
                           type: string
                         mode:
-                          description: Mode is dra or device-plugin.
+                          description: Mode is dra, device-plugin, or a sharing layer
+                            (hami) for a share of one GPU.
                           type: string
                         pod:
                           type: string

@@ -2,11 +2,13 @@
 // easy to unit test and to reuse from a CLI or admission policy later.
 
 import { GpuType, gpuShort, sameGpu } from './gputypes';
-import { SharedGpu, sharedGpuChecks, kaiShareChecks } from './gpushare';
+import {
+  gib, SharedGpu, sharedGpuChecks, kaiShareChecks
+} from './gpushare';
 import { ClusterCapacity, QueueIndex, availability, explain } from './quota';
 import {
-  backendForSchedulerName, backendOf, defaultQueue, holdsPods, placesGpuMemoryShares, podQueueLabel, SchedulerType, usesQueueTree,
-  workloadQueueLabel
+  backendForSchedulerName, backendOf, defaultQueue, holdsPods, placesGpuMemoryShares, podQueueLabel, SchedulerType, SHARING_LAYERS, SharingLayerName,
+  usesQueueTree, workloadQueueLabel, worksWithLayer
 } from './schedulers';
 
 // How each scheduler binds a run (schedulerName, queue label) is in schedulers.ts, the chart's
@@ -81,6 +83,8 @@ export interface Facts {
   localQueues: QueueInfo[];
   clusterQueues: QueueInfo[];
   kaiQueues: QueueInfo[];
+  // GPU-sharing layers installed (HAMi), from the nodes' device registrations
+  sharingLayers?: SharingLayerName[];
   // Volcano: installed (it serves scheduling.volcano.sh Queues), and its queues with their state
   // (Open, Closed, Closing) and GPU capability (null = uncapped)
   volcanoInstalled?: boolean;
@@ -157,6 +161,10 @@ export interface Form {
   // claim's name, picked per namespace by the page; profiles do not store it.
   gpuShareMiB: number;
   gpuSharedClaim: string;
+  // A share through a sharing layer (gpu.sharing): 'hami' = HAMi slices the GPU; '' = the scheduler's
+  // own share (KAI) or the shared claim. gpuCoresPercent caps the share's compute under HAMi (0 = none).
+  gpuSharing: '' | 'hami';
+  gpuCoresPercent: number;
   scheduler: SchedulerType;
   queue: string;
   priorityClassName: string;
@@ -226,6 +234,8 @@ export const DEFAULT_FORM: Form = {
   pullSecret:             '',
   gpuShareMiB:            0,
   gpuSharedClaim:         '',
+  gpuSharing:             '',
+  gpuCoresPercent:        0,
   scheduler:              'none',
   queue:                  '',
   priorityClassName:      '',
@@ -680,7 +690,21 @@ export function runPreflight(form: Form, facts: Facts): Check[] {
   }
 
   // 7c. a shared GPU: the claim, one GPU per pod, and the memory left on it
-  if (kaiShare) {
+  if (form.gpuShareMiB > 0 && form.gpuSharing) {
+    const layer = SHARING_LAYERS[form.gpuSharing];
+
+    if (!worksWithLayer(form.scheduler, form.gpuSharing)) {
+      add('gpu-share', 'fail', `${ layer.display } does not work with ${ backendOf(form.scheduler).display }`, `Share through ${ layer.display } with the default scheduler or Kueue.`);
+    } else if (!(facts.sharingLayers || []).includes(form.gpuSharing)) {
+      add('gpu-share', 'fail', `${ layer.display } is not installed on this cluster`, `No node carries ${ layer.detect.nodeAnnotation }: ${ layer.display } is missing, or its device plugin has not registered a GPU.`);
+    } else if (form.gpusPerNode > 1) {
+      add('gpu-share', 'fail', 'A share is part of one GPU per pod', 'Set GPUs per worker to 1, or allocate whole GPUs.');
+    } else if (form.gpuCoresPercent < 0 || form.gpuCoresPercent > 100) {
+      add('gpu-share', 'fail', 'GPU compute is a percentage of one GPU', 'Between 0 (no cap) and 100.');
+    } else {
+      add('gpu-share', 'pass', `${ gib(form.gpuShareMiB) } of a GPU per pod through ${ layer.display }`, form.gpuCoresPercent ? `and ${ form.gpuCoresPercent }% of its compute` : 'compute not capped');
+    }
+  } else if (kaiShare) {
     kaiShareChecks(form.gpuShareMiB, form.gpusPerNode, facts, backendOf(form.scheduler).display).forEach((c) => add(c.id, c.severity, c.title, c.detail));
   } else if (form.gpuShareMiB > 0) {
     sharedGpuChecks(form.namespace, form.gpuSharedClaim, form.gpuShareMiB, form.nodes, form.gpusPerNode, facts, mode, form.scheduler).forEach((c) => add(c.id, c.severity, c.title, c.detail));
@@ -1029,7 +1053,8 @@ export function joinArgs(parts: string[]): string {
 
 /** A shared-GPU run in a Kueue project: installed without Kueue (see chartValuesFor). */
 export function kueueSkipped(f: Form): boolean {
-  return f.gpuShareMiB > 0 && f.scheduler === 'kueue';
+  // a HAMi share asks for extended resources, not a claim: Kueue admits it
+  return f.gpuShareMiB > 0 && f.scheduler === 'kueue' && !f.gpuSharing;
 }
 
 /**
@@ -1055,8 +1080,11 @@ export function chartValuesFor(f: Form, podsReadable: boolean): any {
     gpu: {
       mode:            f.gpuMode,
       productName:     f.gpuProduct,
-      sharedClaim:     f.gpuShareMiB > 0 && !placesGpuMemoryShares(f.scheduler) ? f.gpuSharedClaim : '', // KAI shares need no claim
-      sharedMemoryMiB: f.gpuShareMiB > 0 ? f.gpuShareMiB : 0,
+      // KAI and HAMi shares need no claim
+      sharedClaim:        f.gpuShareMiB > 0 && !placesGpuMemoryShares(f.scheduler) && !f.gpuSharing ? f.gpuSharedClaim : '',
+      sharedMemoryMiB:    f.gpuShareMiB > 0 ? f.gpuShareMiB : 0,
+      sharing:            f.gpuShareMiB > 0 ? f.gpuSharing : '',
+      sharedCoresPercent: f.gpuShareMiB > 0 && f.gpuSharing ? f.gpuCoresPercent : 0,
     },
     computeDomain: { enabled: f.computeDomain },
     // Kueue marks a workload that attaches to an existing ResourceClaim Inadmissible ("DRA resource
@@ -1131,8 +1159,10 @@ export function formFromValues(values: any, base: Form): { form: Form; unmapped:
   set('gpuProduct', doc.gpu?.productName, str);
   set('gpuSharedClaim', doc.gpu?.sharedClaim, str);
   set('gpuShareMiB', doc.gpu?.sharedMemoryMiB, num);
+  set('gpuSharing', doc.gpu?.sharing, oneOf(['', 'hami'] as const, base.gpuSharing));
+  set('gpuCoresPercent', doc.gpu?.sharedCoresPercent, num);
   set('computeDomain', doc.computeDomain?.enabled, (x) => !!x);
-  set('scheduler', doc.scheduler?.type, oneOf(['none', 'kueue', 'kai', 'runai'] as const, base.scheduler));
+  set('scheduler', doc.scheduler?.type, oneOf(['none', 'kueue', 'kai', 'runai', 'volcano'] as const, base.scheduler));
   set('queue', doc.scheduler?.queue, str);
   set('priorityClassName', doc.scheduler?.priorityClassName, str);
   set('rendezvous', doc.rendezvous?.backend, oneOf(['c10d', 'etcd-v2'] as const, base.rendezvous));
@@ -1203,7 +1233,7 @@ export function formFromValues(values: any, base: Form): { form: Form; unmapped:
     image:            ['repository', 'tag'],
     job:              ['kind', 'mode', 'nodes', 'gpusPerNode', 'script', 'command', 'args', 'activeDeadlineSeconds'],
     env:              null,
-    gpu:              ['mode', 'productName', 'sharedClaim', 'sharedMemoryMiB'],
+    gpu:              ['mode', 'productName', 'sharedClaim', 'sharedMemoryMiB', 'sharing', 'sharedCoresPercent'],
     computeDomain:    ['enabled'],
     scheduler:        ['type', 'queue', 'priorityClassName'],
     rendezvous:       ['backend', 'endpoint'],

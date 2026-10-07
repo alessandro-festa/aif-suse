@@ -246,7 +246,7 @@ type AIJobPodCounts struct {
 // AIJobGPU is one GPU a pod was given.
 type AIJobGPU struct {
 	Pod string `json:"pod"`
-	// Mode is dra or device-plugin.
+	// Mode is dra, device-plugin, or a sharing layer (hami) for a share of one GPU.
 	Mode string `json:"mode"`
 	// Device is the DRA device name (DRA only).
 	// +optional

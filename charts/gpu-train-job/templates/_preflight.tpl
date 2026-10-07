@@ -4,10 +4,40 @@ real cause instead of leaving a Pending pod with no events. Disable with preflig
 */}}
 {{- define "gpu-train-job.preflight" -}}
 {{- $backend := include "gpu-train-job.backend" . | fromYaml }}
-{{- if and (gt (int .Values.gpu.sharedMemoryMiB) 0) (not .Values.gpu.sharedClaim) (not (has "kai-fraction" $backend.sharing)) }}
-  {{- fail "preflight: gpu.sharedMemoryMiB (a GPU-memory share) needs scheduler.type=kai (KAI GPU sharing) or gpu.sharedClaim (an MPS ResourceClaim under DRA)." }}
+{{- if and (gt (int .Values.gpu.sharedMemoryMiB) 0) (not .Values.gpu.sharedClaim) (not (has "kai-fraction" $backend.sharing)) (not .Values.gpu.sharing) }}
+  {{- fail "preflight: gpu.sharedMemoryMiB (a GPU-memory share) needs scheduler.type=kai (KAI GPU sharing), gpu.sharing=hami (HAMi), or gpu.sharedClaim (an MPS ResourceClaim under DRA)." }}
 {{- end }}
-{{- if and (eq (include "gpu-train-job.gpuMode" .) "kai-fraction") (gt (int .Values.job.gpusPerNode) 1) }}
+{{- with .Values.gpu.sharing }}
+  {{- $layer := include "gpu-train-job.sharingLayer" $ | fromYaml }}
+  {{- if not (has . ($backend.sharingWith | default list)) }}
+    {{- $with := list }}
+    {{- range $n, $b := ($.Files.Get "schedulers.yaml" | fromYaml).backends }}
+      {{- if has $.Values.gpu.sharing ($b.sharingWith | default list) }}{{ $with = append $with $n }}{{ end }}
+    {{- end }}
+    {{- fail (printf "preflight: gpu.sharing=%s does not work with scheduler.type=%s (it works with scheduler.type: %s)." . $.Values.scheduler.type (join ", " ($with | sortAlpha))) }}
+  {{- end }}
+  {{- if eq (int $.Values.gpu.sharedMemoryMiB) 0 }}
+    {{- fail (printf "preflight: gpu.sharing=%s needs gpu.sharedMemoryMiB, the GPU memory each pod gets." .) }}
+  {{- end }}
+  {{- if $.Values.gpu.sharedClaim }}
+    {{- fail (printf "preflight: gpu.sharing=%s and gpu.sharedClaim are two ways to share a GPU; use one." .) }}
+  {{- end }}
+  {{- if gt (int $.Values.gpu.sharedCoresPercent) 100 }}
+    {{- fail "preflight: gpu.sharedCoresPercent is a percentage of one GPU (at most 100)." }}
+  {{- end }}
+  {{- /* the layer must be installed: some node carries its device registration */ -}}
+  {{- $online := lookup "v1" "Namespace" "" $.Release.Namespace }}
+  {{- if $online }}
+    {{- $found := false }}
+    {{- range (lookup "v1" "Node" "" "").items }}
+      {{- if hasKey (.metadata.annotations | default dict) $layer.detect.nodeAnnotation }}{{ $found = true }}{{ end }}
+    {{- end }}
+    {{- if not $found }}
+      {{- fail (printf "preflight: gpu.sharing=%s but no node carries %s, so %s is not installed (or its device plugin has not registered a GPU)." . $layer.detect.nodeAnnotation $layer.display) }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- if and (has (include "gpu-train-job.gpuMode" .) (list "kai-fraction" "hami")) (gt (int .Values.job.gpusPerNode) 1) }}
   {{- fail (printf "preflight: a GPU-memory share is one fraction of one GPU per pod; job.gpusPerNode=%d. Use gpusPerNode=1, or whole GPUs (gpu.sharedMemoryMiB=0)." (int .Values.job.gpusPerNode)) }}
 {{- end }}
 {{- if and .Values.storage.checkpointCreate.enabled .Values.storage.checkpointPVC }}

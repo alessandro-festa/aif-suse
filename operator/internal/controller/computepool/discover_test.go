@@ -235,3 +235,22 @@ func TestPoolStatusSaysWhatIsActuallyUsedAndNamesReleases(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, st.Used, "stats not read: no figure rather than zero")
 }
+
+func TestHAMiGPUsAreCountedAsDevicesAndSharesTakeNoWholeGPU(t *testing.T) {
+	layers, err := trainchart.SharingLayers()
+	require.NoError(t, err)
+	assert.Equal(t, hamiNodeAnnotation, layers["hami"].Detect.NodeAnnotation, "the chart's table and the operator agree on HAMi's registration")
+
+	n := l4("g1")
+	n.Status.Allocatable[gpuResource] = *resource.NewQuantity(20, resource.DecimalSI) // 2 GPUs × 10 HAMi slots
+	n.Annotations = map[string]string{hamiNodeAnnotation: "GPU-a,10,23034,100,NVIDIA-L4,0,true:GPU-b,10,23034,100,NVIDIA-L4,0,true:"}
+	share := pod("g1", corev1.PodRunning, "1", "4Gi", 1)
+	share.Spec.Containers[0].Resources.Limits["nvidia.com/gpumem"] = resource.MustParse("4096")
+	whole := pod("g1", corev1.PodRunning, "1", "4Gi", 1)
+
+	st, err := poolStatus(v1alpha1.ComputePoolSpec{Kind: v1alpha1.ComputePoolKindGPU}, []corev1.Node{n}, []corev1.Pod{share, whole}, stack{}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), st.Allocatable.GPUs, "two physical GPUs, not twenty slots")
+	assert.Equal(t, int64(1), st.Requested.GPUs, "the share takes a slot, not a GPU")
+	assert.Equal(t, []string{"hami"}, detectStack(nil, []corev1.Node{n}, nil).Sharing)
+}

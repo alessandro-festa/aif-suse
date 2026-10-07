@@ -257,3 +257,12 @@ func TestAVolcanoRunWaitingInItsQueueIsQueued(t *testing.T) {
 	require.NotNil(t, st.Queue)
 	assert.Equal(t, "team-a", st.Queue.KAIQueue, "read from the annotation")
 }
+
+func TestAHAMiShareIsRecordedAsOne(t *testing.T) {
+	p := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p0"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("1"), "nvidia.com/gpumem": resource.MustParse("4096")}},
+	}}}}
+	gpus := gpuFacts([]corev1.Pod{p}, nil, nil)
+	require.Len(t, gpus, 1)
+	assert.Equal(t, "hami", gpus[0].Mode)
+}

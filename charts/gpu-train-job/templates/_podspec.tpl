@@ -124,6 +124,10 @@ together with the kai.scheduler/queue label, to gang-schedule the whole group).
 {{- define "gpu-train-job.podScheduling" -}}
 {{- with (include "gpu-train-job.backend" . | fromYaml).schedulerName }}
 schedulerName: {{ . }}
+{{- else }}
+{{- if eq (include "gpu-train-job.gpuMode" .) "hami" }}
+schedulerName: {{ (include "gpu-train-job.sharingLayer" . | fromYaml).schedulerName }}
+{{- end }}
 {{- end }}
 {{- with .Values.scheduler.priorityClassName }}
 priorityClassName: {{ . | quote }}
@@ -131,7 +135,7 @@ priorityClassName: {{ . | quote }}
 {{- /* gpu.productName under the device plugin: GPU Feature Discovery's product label. Under DRA the
        claim's selector does it instead (resourceclaimtemplate.yaml). */}}
 {{- $ns := deepCopy (.Values.nodeSelector | default dict) }}
-{{- if and .Values.gpu.productName (has (include "gpu-train-job.gpuMode" .) (list "device-plugin" "kai-fraction")) }}
+{{- if and .Values.gpu.productName (has (include "gpu-train-job.gpuMode" .) (list "device-plugin" "kai-fraction" "hami")) }}
 {{- $_ := set $ns "nvidia.com/gpu.product" (.Values.gpu.productName | replace " " "-") }}
 {{- end }}
 {{- with $ns }}
@@ -181,15 +185,28 @@ scheduling.k8s.io/group-name: {{ include "gpu-train-job.fullname" . | quote }}
 {{- end -}}
 
 {{- define "gpu-train-job.resourceBlock" -}}
+{{- $hami := dict -}}
+{{- if eq (include "gpu-train-job.gpuMode" .) "hami" -}}
+{{- $r := (include "gpu-train-job.sharingLayer" . | fromYaml).resources -}}
+{{- $_ := set $hami $r.gpu "1" -}}
+{{- $_ := set $hami $r.memory (int .Values.gpu.sharedMemoryMiB | toString) -}}
+{{- if gt (int .Values.gpu.sharedCoresPercent) 0 }}{{ $_ := set $hami $r.cores (int .Values.gpu.sharedCoresPercent | toString) }}{{ end -}}
+{{- end }}
 requests:
   {{- toYaml .Values.resources.requests | nindent 2 }}
   {{- if eq (include "gpu-train-job.gpuMode" .) "device-plugin" }}
   {{ .Values.gpu.resourceName }}: {{ .Values.job.gpusPerNode | quote }}
   {{- end }}
+  {{- range $k, $v := $hami }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
 limits:
   {{- toYaml .Values.resources.limits | nindent 2 }}
   {{- if eq (include "gpu-train-job.gpuMode" .) "device-plugin" }}
   {{ .Values.gpu.resourceName }}: {{ .Values.job.gpusPerNode | quote }}
+  {{- end }}
+  {{- range $k, $v := $hami }}
+  {{ $k }}: {{ $v | quote }}
   {{- end }}
 {{- if eq (include "gpu-train-job.gpuMode" .) "dra" }}
 claims:

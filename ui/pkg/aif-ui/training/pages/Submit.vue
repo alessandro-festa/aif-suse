@@ -36,7 +36,9 @@ import {
 } from '../placement';
 import { IDLE_DURATION, RECLAIM_POLICIES, RECLAIM_POLICY_HELP } from '../reclaim';
 import { getAllClusters } from '../../services/rancher-apps';
-import { backendOf, placesGpuMemoryShares, usesQueueTree } from '../schedulers';
+import {
+  backendOf, placesGpuMemoryShares, SHARING_LAYERS, SharingLayerName, sharingLayersOn, usesQueueTree, worksWithLayer
+} from '../schedulers';
 import { groupOf, readiness } from '../readiness';
 import { gpuInventory, gpuShort, hasGfdLabels } from '../gputypes';
 import { gib, pickSharedClaim, sharedGpus } from '../gpushare';
@@ -289,6 +291,9 @@ export default defineComponent({
           { label: `Shared — part of a GPU, queued by ${ backendOf(this.form.scheduler).display }`, value: '__kai__' },
         ];
       }
+      // a sharing layer (HAMi) slices a GPU by memory itself, under a scheduler it works with
+      const layers = (this.facts.sharingLayers || []).filter((l: SharingLayerName) => worksWithLayer(this.form.scheduler, l))
+        .map((l: SharingLayerName) => ({ label: `Shared — part of a GPU, placed by ${ SHARING_LAYERS[l].display }`, value: `__layer:${ l }` }));
       const shared = this.facts.sharedGpus.filter((g: any) => g.namespace === this.form.namespace).map((g: any) => ({
         label: `Shared: ${ g.name } — ${ g.product ? gpuShort(g.product) : 'not allocated yet' }${ g.totalMiB ? `, ${ gib(g.usedMiB) } of ${ gib(g.totalMiB) } in use by ${ g.users.length }` : '' } (${ g.strategy })`,
         value: g.name,
@@ -296,12 +301,16 @@ export default defineComponent({
 
       return [
         { label: 'Exclusive — a GPU of its own', value: '' },
+        ...layers,
         ...shared,
-        ...(shared.length ? [] : [{ label: 'Shared — this project has no shared GPU yet', value: '__none__' }]),
+        ...(shared.length || layers.length ? [] : [{ label: 'Shared — this project has no shared GPU yet', value: '__none__' }]),
       ];
     },
     gpuAllocation: {
       get(): string {
+        if (this.form.gpuShareMiB > 0 && this.form.gpuSharing) {
+          return `__layer:${ this.form.gpuSharing }`;
+        }
         if (this.form.gpuShareMiB > 0 && placesGpuMemoryShares(this.form.scheduler)) {
           return '__kai__';
         }
@@ -309,11 +318,14 @@ export default defineComponent({
         return this.form.gpuShareMiB > 0 ? (this.form.gpuSharedClaim || '__none__') : '';
       },
       set(v: string) {
+        const layer = v.startsWith('__layer:') ? v.slice('__layer:'.length) : '';
+
+        this.form.gpuSharing = layer as any;
         if (!v) {
           this.form.gpuShareMiB = 0;
           this.form.gpuSharedClaim = '';
         } else {
-          this.form.gpuSharedClaim = v === '__none__' || v === '__kai__' ? '' : v;
+          this.form.gpuSharedClaim = v === '__none__' || v === '__kai__' || layer ? '' : v;
           if (!this.form.gpuShareMiB) {
             this.form.gpuShareMiB = 4096;
           }
@@ -1088,6 +1100,7 @@ export default defineComponent({
       facts.gpuTypes = gpuInventory(slices, claims, nodes);
       facts.sharedGpus = sharedGpus(claims, pods, slices);
       facts.gfdLabels = hasGfdLabels(nodes);
+      facts.sharingLayers = sharingLayersOn(nodes);
       facts.gpuNodeMemoryMiB = Math.max(0, ...nodes.map((n: any) => parseInt(n.metadata?.labels?.['nvidia.com/gpu.memory'] || '0', 10) || 0));
       facts.gpuDeviceMemory = Math.max(0, ...slices.filter((s: any) => s.spec?.driver === GPU_DEVICE_CLASS)
         .flatMap((s: any) => (s.spec?.devices || []).map((d: any) => parseMem(d.capacity?.memory?.value) || 0)));
@@ -1718,7 +1731,20 @@ export default defineComponent({
                   v-model:value.number="gpuShareGiB"
                   type="number"
                   label="GPU memory per pod (GiB)"
-                  tooltip="A hard cap: the run cannot allocate more (HAMi-core or NvFractions under KAI, MPS on a DRA shared claim)."
+                  tooltip="A hard cap: the run cannot allocate more (HAMi-core or NvFractions under KAI, HAMi-core under HAMi, MPS on a DRA shared claim)."
+                />
+              </div>
+            </div>
+            <div
+              v-if="form.gpuShareMiB > 0 && form.gpuSharing"
+              class="row"
+            >
+              <div class="col span-4">
+                <LabeledInput
+                  v-model:value.number="form.gpuCoresPercent"
+                  type="number"
+                  label="GPU compute per pod (%)"
+                  tooltip="The share of the GPU's compute each pod may use (nvidia.com/gpucores); 0 leaves it uncapped."
                 />
               </div>
             </div>

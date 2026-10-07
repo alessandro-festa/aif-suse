@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import yaml from 'js-yaml';
 import { queueOf } from '../trainingruns';
 import {
-  backendForSchedulerName, defaultQueue, holdsPods, placesGpuMemoryShares, POD_HOLDING_SCHEDULERS, podQueueAnnotation, podQueueLabel, SCHEDULER_BACKENDS, usesQueueTree, workloadQueueLabel
+  backendForSchedulerName, defaultQueue, holdsPods, placesGpuMemoryShares, POD_HOLDING_SCHEDULERS, podQueueAnnotation, podQueueLabel, SCHEDULER_BACKENDS, SHARING_LAYERS, sharingLayersOn, usesQueueTree, workloadQueueLabel, worksWithLayer
 } from '../schedulers';
 
 // schedulers.ts is a copy of the chart's schedulers.yaml, which the chart's templates and the
@@ -44,5 +44,18 @@ describe('a run\'s queue in the Jobs list', () => {
     expect(queueOf({}, { 'kai.scheduler/queue': 'team-a' }, 'kai-scheduler')).toBe('team-a');
     expect(queueOf({}, {}, 'volcano', { 'scheduling.volcano.sh/queue-name': 'team-b' })).toBe('team-b');
     expect(queueOf({}, {}, 'default-scheduler', { 'scheduling.volcano.sh/queue-name': 'x' })).toBe('');
+  });
+});
+
+describe('GPU-sharing layers', () => {
+  it('are the chart\'s schedulers.yaml sharingLayers', () => {
+    expect(SHARING_LAYERS).toEqual(chartTable.sharingLayers);
+  });
+
+  it('are found on the nodes, and work with the default scheduler and Kueue only', () => {
+    expect(sharingLayersOn([{ metadata: { annotations: { 'hami.io/node-nvidia-register': 'GPU-a,10,23034,100,NVIDIA-L4,0,true' } } }])).toEqual(['hami']);
+    expect(sharingLayersOn([{ metadata: {} }])).toEqual([]);
+    expect(['none', 'kueue'].every((s) => worksWithLayer(s as any, 'hami'))).toBe(true);
+    expect(['kai', 'runai', 'volcano'].some((s) => worksWithLayer(s as any, 'hami'))).toBe(false);
   });
 });
