@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: p-no-gpu
+  namespace: aif-submit
+spec:
+  restartPolicy: Never
+  containers:
+  - name: c
+    image: busybox:1.36
+    command:
+    - 'true'

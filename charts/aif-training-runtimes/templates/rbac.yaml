@@ -1,0 +1,32 @@
+{{- if .Values.rbac.enabled }}
+# Who may train in a namespace: submit, follow and delete TrainJobs there, and read what they run.
+# Bound per project (a Rancher RoleTemplate named ai-trainer, external, or a RoleBinding); with
+# rbac.aggregateToEdit, part of Kubernetes' edit role too. The runtimes themselves are readable by
+# every authenticated user (Trainer's kubeflow-trainer-view-cluster-runtimes).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ai-trainer
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: aif-training-runtimes
+    {{- if .Values.rbac.aggregateToEdit }}
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+    {{- end }}
+rules:
+  - apiGroups: ["trainer.kubeflow.org"]
+    resources: ["trainjobs"]
+    verbs: ["create", "get", "list", "watch", "patch", "delete"]
+  - apiGroups: ["trainer.kubeflow.org"]
+    resources: ["trainjobs/status"]
+    verbs: ["get"]
+  - apiGroups: ["trainer.kubeflow.org"]
+    resources: ["trainingruntimes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["jobset.x-k8s.io"]
+    resources: ["jobsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events"]
+    verbs: ["get", "list", "watch"]
+{{- end }}

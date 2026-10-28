@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: p-bad-init
+  namespace: aif-submit
+  labels:
+    kai.scheduler/queue: aif-submit
+spec:
+  restartPolicy: Never
+  containers:
+  - name: c
+    image: nvcr.io/nvidia/cuda:12.8.0-base-ubuntu24.04
+    command:
+    - 'true'
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+  schedulerName: kai-scheduler
+  initContainers:
+  - name: init
+    image: docker.io/library/busybox:1.36
+    command:
+    - 'true'

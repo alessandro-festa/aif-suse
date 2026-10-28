@@ -1,0 +1,14 @@
+[project]
+name = "aif-training"
+version = "0.1.0"
+description = "SUSE AI Factory's options for the Kubeflow Trainer SDK: run a TrainJob in its project's KAI queue"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["kubeflow>=0.3.1", "kubernetes>=28"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["aif_training"]

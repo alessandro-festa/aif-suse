@@ -1,0 +1,123 @@
+{{- if .Values.policy.namespaceLabels.enabled }}
+{{- $labels := list .Values.policy.queueLabel "ai-factory.suse.com/managed" }}
+# The labels every other policy here trusts, on every namespace, managed or not:
+#   - kai.scheduler/queue: assigning queue B needs `assign` on ai-factory.suse.com/namespacequeues
+#     named B; moving A -> B needs it on both A and B; removing A needs it on A
+#   - ai-factory.suse.com/managed: changing it needs `set` on ai-factory.suse.com/managednamespaces
+#     named for the namespace, independent of queues
+# Cluster admins have both; the aif-queue-assigner and aif-namespace-manager ClusterRoles grant them
+# (with resourceNames, for particular queues or namespaces). Rancher's project owners, who can
+# otherwise edit their namespaces, don't. Other updates to a namespace pass unchecked.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: aif-namespace-labels
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: aif-training-runtimes
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["namespaces"]
+  matchConditions:
+    - name: platform-labels-set-or-changed
+      expression: >-
+        {{ toJson $labels }}.exists(k, request.operation == 'CREATE' ?
+          object.metadata.?labels[?k].hasValue() :
+          object.metadata.?labels[?k].orValue('') != oldObject.metadata.?labels[?k].orValue(''))
+  variables:
+    - name: queue
+      expression: object.metadata.?labels[?'{{ .Values.policy.queueLabel }}'].orValue('')
+    - name: oldQueue
+      expression: >-
+        request.operation == 'UPDATE' ? oldObject.metadata.?labels[?'{{ .Values.policy.queueLabel }}'].orValue('') : ''
+    - name: managed
+      expression: object.metadata.?labels[?'ai-factory.suse.com/managed'].orValue('')
+    - name: oldManaged
+      expression: >-
+        request.operation == 'UPDATE' ? oldObject.metadata.?labels[?'ai-factory.suse.com/managed'].orValue('') : ''
+    - name: mayOld
+      expression: >-
+        variables.oldQueue == '' ||
+        authorizer.group('ai-factory.suse.com').resource('namespacequeues').name(variables.oldQueue).check('assign').allowed()
+    - name: mayNew
+      expression: >-
+        variables.queue == '' ||
+        authorizer.group('ai-factory.suse.com').resource('namespacequeues').name(variables.queue).check('assign').allowed()
+  validations:
+    # the queue: unchanged, or authorized on the queue it had and the queue it gets
+    - expression: variables.queue == variables.oldQueue || (variables.mayOld && variables.mayNew)
+      messageExpression: >-
+        "only the platform assigns KAI queues to namespaces ({{ .Values.policy.queueLabel }}): " +
+        (variables.oldQueue == '' ? "assigning " + variables.queue :
+         variables.queue == '' ? "removing " + variables.oldQueue :
+         "moving from " + variables.oldQueue + " to " + variables.queue) +
+        " needs assign on namespacequeues " +
+        [variables.oldQueue, variables.queue].filter(x, x != '').join(" and ") + ", which " + request.userInfo.username + " lacks"
+      reason: Forbidden
+    # AI Factory management: its own permission, for this namespace
+    - expression: >-
+        variables.managed == variables.oldManaged ||
+        authorizer.group('ai-factory.suse.com').resource('managednamespaces').name(object.metadata.name).check('set').allowed()
+      messageExpression: >-
+        "only the platform decides which namespaces AI Factory manages (ai-factory.suse.com/managed): " +
+        request.userInfo.username + " lacks set on managednamespaces " + object.metadata.name
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: aif-namespace-labels
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: aif-training-runtimes
+spec:
+  policyName: aif-namespace-labels
+  validationActions: {{ toJson .Values.policy.actions }}
+---
+# Who may assign KAI queues to namespaces, beside cluster admins: bind it to the platform's quota
+# admins (policy.namespaceLabels.assigners), or copy it with resourceNames to delegate particular queues.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aif-queue-assigner
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: aif-training-runtimes
+rules:
+  - apiGroups: ["ai-factory.suse.com"]
+    resources: ["namespacequeues"]
+    verbs: ["assign"]
+---
+# Who may bring namespaces under AI Factory's management, or take them out (policy.namespaceLabels.managers).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aif-namespace-manager
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: aif-training-runtimes
+rules:
+  - apiGroups: ["ai-factory.suse.com"]
+    resources: ["managednamespaces"]
+    verbs: ["set"]
+{{- range $role, $subjects := dict "aif-queue-assigner" .Values.policy.namespaceLabels.assigners "aif-namespace-manager" .Values.policy.namespaceLabels.managers }}
+{{- with $subjects }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $role }}
+  labels:
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+    app.kubernetes.io/part-of: aif-training-runtimes
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $role }} }
+subjects:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- end }}
+{{- end }}

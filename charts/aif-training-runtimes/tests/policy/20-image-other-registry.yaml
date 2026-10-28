@@ -1,0 +1,28 @@
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: t-img-bad
+  namespace: aif-submit
+spec:
+  runtimeRef:
+    name: aif-share-4g
+  trainer:
+    numNodes: 1
+    command:
+    - python
+    - -c
+    - print('hi')
+    image: ghcr.io/someone/trainer:latest
+  runtimePatches:
+  - manager: ai-factory.suse.com/policy-test
+    trainingRuntimeSpec:
+      template:
+        spec:
+          replicatedJobs:
+          - name: node
+            template:
+              spec:
+                template:
+                  metadata:
+                    labels:
+                      kai.scheduler/queue: aif-submit

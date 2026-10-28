@@ -1,0 +1,14 @@
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: t-unmanaged
+  namespace: tenant-default
+spec:
+  runtimeRef:
+    name: aif-share-4g
+  trainer:
+    numNodes: 1
+    command:
+    - python
+    - -c
+    - print('hi')

@@ -1,0 +1,39 @@
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: t-two-queues
+  namespace: aif-submit
+spec:
+  runtimeRef:
+    name: aif-share-4g
+  trainer:
+    numNodes: 1
+    command:
+    - python
+    - -c
+    - print('hi')
+  runtimePatches:
+  - manager: ai-factory.suse.com/policy-test-a
+    trainingRuntimeSpec:
+      template:
+        spec:
+          replicatedJobs:
+          - name: node
+            template:
+              spec:
+                template:
+                  metadata:
+                    labels:
+                      kai.scheduler/queue: aif-submit
+  - manager: ai-factory.suse.com/policy-test-b
+    trainingRuntimeSpec:
+      template:
+        spec:
+          replicatedJobs:
+          - name: node
+            template:
+              spec:
+                template:
+                  metadata:
+                    labels:
+                      kai.scheduler/queue: scdoc-transcription

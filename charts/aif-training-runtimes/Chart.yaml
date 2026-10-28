@@ -1,0 +1,16 @@
+apiVersion: v2
+name: aif-training-runtimes
+description: >-
+  Kubeflow Trainer runtimes for SUSE AI Factory projects: PyTorch on a KAI GPU share, on whole
+  GPUs and on CPUs, with an admission policy that keeps each TrainJob in its project's KAI queue
+  and within the runtime's limits
+type: application
+version: 0.1.0
+# ValidatingAdmissionPolicy (v1)
+kubeVersion: ">=1.30.0-0"
+# the Kubeflow Trainer releases these runtimes and the policy cover: 2.1 (TrainJob
+# podTemplateOverrides) and 2.2 and later (runtimePatches; SUSE's Kubeflow chart 0.4 ships 2.2.1).
+# Use the Kubeflow SDK release built for the installed Trainer: 0.3.x for 2.1, 0.4.x for 2.2.
+appVersion: "trainer-v2.1-v2.2"
+annotations:
+  ai-factory.suse.com/kubeflow-trainer-versions: "v2.1, v2.2"

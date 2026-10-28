@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: p-bad-image
+  namespace: aif-submit
+  labels:
+    kai.scheduler/queue: aif-submit
+spec:
+  restartPolicy: Never
+  containers:
+  - name: c
+    image: ghcr.io/someone/miner:latest
+    command:
+    - 'true'
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+  schedulerName: kai-scheduler

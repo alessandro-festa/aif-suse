@@ -1,0 +1,177 @@
+# Kubeflow Trainer runtimes for AI Factory projects, and the policy that governs TrainJobs.
+#
+# A TrainJob names one of these runtimes (its compute profile) and carries its project's KAI queue
+# on its trainer pods: label kai.scheduler/queue: <the project's queue>, the kai.scheduler/queue
+# label AI Factory's Projects page sets on the namespace. Trainer 2.1 sets pod metadata through
+# podTemplateOverrides, Trainer 2.2 and later through runtimePatches; the policy reads either.
+# sdk/aif-training's project() option sets it. See README.md.
+
+# The scheduler every runtime's pods use.
+schedulerName: kai-scheduler
+
+# Where the runtimes' pods may run, for every runtime unless it sets its own (e.g. keep CPU runs off
+# storage nodes). Empty: anywhere the scheduler places them.
+nodeSelector: {}
+tolerations: []
+
+# The image, unless a runtime names its own. It must have pip: the Kubeflow SDK installs a
+# function's packages when the job starts. Mirror it for air-gapped clusters.
+image: pytorch/pytorch:2.7.1-cuda12.8-cudnn9-runtime
+
+# The compute profiles: each is a ClusterTrainingRuntime that a TrainJob names, and that
+# `client.list_runtimes()` lists. A share profile carries its share of one GPU's memory (KAI, held by
+# HAMi-core or NvFractions): the job doesn't set one. Adding a profile is adding an entry.
+runtimes:
+  # Per profile, beside the fields below (all optional): displayName, framework, gpu (a label for
+  # people), status (ready, beta), purpose (training, test, benchmark), requires ({driver, arch}),
+  # image, imagePullSecrets, env, resources ({requests, limits}: the default per node), maxCpu and
+  # maxMemory (caps on what a job asks for), registries, maxRuntimeHours, priorityClassName,
+  # nodeSelector, tolerations, shmSize, network (overrides the network block below).
+  - name: aif-share-4g
+    displayName: 4 GiB GPU share
+    kind: share
+    description: PyTorch on a 4 GiB share of one GPU (KAI), one node
+    gpuMemoryMiB: 4096
+    maxNodes: 1
+    maxRuntimeHours: 4
+    resources: { requests: { cpu: "2", memory: 8Gi } }
+    maxCpu: "8"
+    maxMemory: 32Gi
+  - name: aif-share-8g
+    displayName: 8 GiB GPU share
+    kind: share
+    description: PyTorch on an 8 GiB share of one GPU (KAI), one node
+    gpuMemoryMiB: 8192
+    maxNodes: 1
+    maxRuntimeHours: 8
+    resources: { requests: { cpu: "4", memory: 16Gi } }
+    maxCpu: "16"
+    maxMemory: 64Gi
+  # Whole GPUs, one or more nodes; torchrun starts a process per GPU. The job asks for the GPUs per
+  # node (resourcesPerNode), up to maxGpusPerNode.
+  - name: aif-gpu
+    displayName: Whole GPUs
+    kind: gpu
+    description: PyTorch on whole GPUs (KAI), one to four nodes
+    maxNodes: 4
+    maxGpusPerNode: 8
+    maxRuntimeHours: 24
+    resources: { requests: { cpu: "8", memory: 32Gi } }
+  # No GPU: preprocessing, evaluation on CPUs, tests.
+  - name: aif-cpu
+    displayName: CPU only
+    kind: cpu
+    description: PyTorch on CPUs (KAI), one to four nodes
+    maxNodes: 4
+    maxRuntimeHours: 8
+    resources: { requests: { cpu: "2", memory: 4Gi } }
+    maxCpu: "32"
+    maxMemory: 128Gi
+    shmSize: 1Gi
+
+# /dev/shm for the runtimes' pods (memory-backed): NCCL and PyTorch's data loaders need more than the
+# container default of 64 MiB. A profile's shmSize overrides it; empty: the default.
+shmSize: 8Gi
+
+# Pull secrets for the runtimes' images, unless a profile sets its own.
+imagePullSecrets: []
+
+# Multi-node networking for NCCL, for every GPU profile unless it overrides it (network: on the
+# profile). Rendezvous runs over the pod network; NCCL can be pinned to a secondary interface.
+network:
+  # Multus NetworkAttachmentDefinition for NCCL's secondary interface (e.g. nccl-macvlan). Empty: none.
+  multusNetwork: ""
+  # The interface NCCL binds to (net1 with Multus). Empty: NCCL chooses.
+  ncclSocketIfname: ""
+  ncclIbDisable: "1"
+  ncclDebug: WARN
+  # The node's network namespace: the only way to reach an RDMA rail with no pod-network presence,
+  # at the cost of the pod's own IP and of port collisions between two runs on one node.
+  hostNetwork: false
+  # RDMA / RoCE (sets NCCL_IB_DISABLE=0). Either an RDMA device plugin's resource (resourceName, e.g.
+  # rdma/rdma_shared_device_a, from the NVIDIA Network Operator; the container gets IPC_LOCK), or the
+  # node's verbs devices (devicePath, mounted from the node; the container runs privileged).
+  rdma:
+    enabled: false
+    resourceName: ""
+    resourceCount: 1
+    devicePath: /dev/infiniband
+    # Node path holding libibverbs, librdmacm and the provider (e.g. libmlx5), ahead of CUDA on
+    # LD_LIBRARY_PATH; empty for images that ship them (NGC PyTorch does).
+    hostLibPath: ""
+    hostLibMountPath: /host-rdma-libs
+  # NCCL RDMA tuning, each set only when non-empty.
+  ncclIbHca: ""          # HCA ports, e.g. "mlx5_0:1,mlx5_1:1" to stripe across both rails
+  ncclIbGidIndex: ""     # RoCEv2 GID index, usually 3
+  ncclNetGdrLevel: ""    # 0: host staging, no GPUDirect RDMA
+  ncclCrossNic: ""       # 1: a ring may span more than one NIC
+
+policy:
+  # The ValidatingAdmissionPolicy for TrainJobs (Kubernetes 1.30+).
+  enabled: true
+  # The namespace label that names a project's KAI queue, and the pod label KAI reads.
+  queueLabel: kai.scheduler/queue
+  # Only this chart's runtimes may be used (false: any runtime, still checked for the queue).
+  runtimesOnly: true
+  # Deny (enforce) or Warn and Audit (try it first).
+  actions: [Deny]
+  # The namespaces the policy applies to: AI Factory's project namespaces. {} applies it to every
+  # namespace. A namespace outside it can still name these runtimes, unchecked; KAI then places its
+  # pods in its default queue.
+  # Whatever creates project namespaces (the Projects page) sets this label; a namespace without
+  # it is not checked.
+  namespaceSelector:
+    matchLabels:
+      ai-factory.suse.com/managed: "true"
+  # KAI's GPU-share annotations, refused in a TrainJob's patches: a job's share comes from its profile.
+  shareAnnotations: [gpu-memory, gpu-fraction, gpu-fraction-num-devices]
+  # Image prefixes a job's image (trainer.image) may come from, for every profile unless it sets its
+  # own registries. Compared as written: list Docker Hub images as e.g. pytorch/ or
+  # docker.io/pytorch/. Empty: any registry.
+  registries:
+    - dp.apps.rancher.io/containers/
+    - registry.suse.com/
+    - nvcr.io/nvidia/
+    - pytorch/
+    - docker.io/pytorch/
+  # The runtime limit, in hours, for profiles without their own maxRuntimeHours. 0: none.
+  maxRuntimeHours: 0
+  # Whether a job may set its pods' placement (nodeSelector, affinity, tolerations) in its patches.
+  # false: the profile decides where its runs go (e.g. the GPU type).
+  allowPlacement: false
+  # A third policy, on namespaces: assigning, moving or removing a namespace's queue needs `assign` on
+  # ai-factory.suse.com/namespacequeues for the queues involved (aif-queue-assigner); changing
+  # ai-factory.suse.com/managed needs `set` on managednamespaces (aif-namespace-manager). Cluster
+  # admins have both. Rancher's project owners can otherwise
+  # edit their namespaces' labels: point one at another project's queue, or take it out of these
+  # policies.
+  namespaceLabels:
+    enabled: true
+    # subjects bound to aif-queue-assigner, e.g. [{kind: Group, name: gpu-quota-admins, apiGroup: rbac.authorization.k8s.io}]
+    assigners: []
+    # subjects bound to aif-namespace-manager: may set or remove ai-factory.suse.com/managed
+    managers: []
+  pods:
+    # A second policy, on pods: in the same namespaces, a pod that asks for GPUs (whole, or a KAI
+    # share) must use KAI and its namespace's queue, however it was created.
+    enabled: true
+
+# A volume per run for its outputs (adapter, metrics), mounted at mountPath; the job finds it in
+# OUTPUT_DIR. Needs JobSet v0.11 or later (volumeClaimPolicies): JobSet v0.10 drops the field and
+# the job runs without the volume. A multi-node run needs ReadWriteMany (CephFS, Longhorn RWX).
+outputs:
+  enabled: false
+  size: 10Gi
+  storageClassName: ""          # the cluster's default
+  accessModes: [ReadWriteOnce]
+  mountPath: /outputs
+  # Keep the volume when the TrainJob is deleted.
+  retain: true
+
+rbac:
+  # ClusterRole ai-trainer: submit, follow and delete TrainJobs, and read their pods, logs and events.
+  # Bound per project by a Rancher RoleTemplate of the same name (README), or by any RoleBinding.
+  enabled: true
+  # Also add these rules to Kubernetes' edit role, which Rancher's Project Member inherits: every
+  # project member can then train, with no RoleTemplate.
+  aggregateToEdit: false

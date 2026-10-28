@@ -1,0 +1,31 @@
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: t-cpu-ok
+  namespace: aif-submit
+spec:
+  runtimeRef:
+    name: aif-share-4g
+  trainer:
+    numNodes: 1
+    command:
+    - python
+    - -c
+    - print('hi')
+    resourcesPerNode:
+      requests:
+        cpu: '4'
+        memory: 16Gi
+  runtimePatches:
+  - manager: ai-factory.suse.com/policy-test
+    trainingRuntimeSpec:
+      template:
+        spec:
+          replicatedJobs:
+          - name: node
+            template:
+              spec:
+                template:
+                  metadata:
+                    labels:
+                      kai.scheduler/queue: aif-submit

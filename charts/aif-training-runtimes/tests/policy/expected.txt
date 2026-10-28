@@ -1,0 +1,36 @@
+01-valid-share-profile: admitted: a share profile, in the project's queue
+02-valid-whole-gpu: admitted: one whole GPU, in the project's queue
+03-no-queue: refused: the pods carry no queue
+04-wrong-queue: refused: another project's queue
+05-share-in-patch: refused: a job setting its own share: it comes from the profile
+06-bigger-share-in-patch: refused: a job raising its share above the profile's
+07-too-many-nodes: refused: more nodes than the profile allows
+08-too-many-gpus: refused: more GPUs per node than the profile allows
+09-gpus-on-cpu: refused: whole GPUs on the CPU profile
+10-gpus-on-share: refused: whole GPUs on a share profile
+11-other-runtime: refused: a runtime that is not an AI Factory profile
+12-unmanaged-namespace: admitted: a namespace outside policy.namespaceSelector is not checked
+13-second-patch-share: refused: a later patch adding a share
+14-second-patch-queue: refused: a later patch naming another project's queue
+15-fraction-on-cpu: refused: a KAI share annotation on the CPU profile
+16-fraction-on-share: refused: gpu-fraction on a share profile
+17-namespaced-runtime: refused: a namespaced TrainingRuntime borrowing a profile's name
+18-multi-node-rwo-outputs: refused: 2 nodes on ReadWriteOnce outputs (outputs.enabled, RWO; admitted otherwise)
+19-image-allowed-registry: admitted: an image from an allowed registry
+20-image-other-registry: refused: an image from a registry outside the profile's
+21-deadline-within-limit: admitted: a deadline within the profile's runtime limit
+22-deadline-over-limit: refused: a deadline beyond the profile's runtime limit (4 h)
+23-cpu-within-cap: admitted: CPU and memory within the profile's caps
+24-cpu-over-cap: refused: more CPU than the profile allows
+25-memory-over-cap: refused: more memory than the profile allows
+26-placement-in-patch: refused: a nodeSelector in the job's patches
+27-privileged-in-patch: refused: a privileged container in the job's patches
+28-hostpath-in-patch: refused: a node path mounted through the job's patches
+29-pvc-in-patch: admitted: a project PVC mounted through the job's patches (a dataset)
+30-serviceaccount-in-patch: refused: another service account in the job's patches
+31-pod-gpu-default-scheduler: refused: a GPU pod not scheduled by KAI
+32-pod-kai-other-queue: refused: a KAI pod in another project's queue
+33-pod-kai-own-queue: admitted: a KAI pod in its project's queue
+34-pod-gpu-other-registry: refused: a GPU pod running an image from an unapproved registry
+35-pod-gpu-init-other-registry: refused: a GPU pod whose init container comes from an unapproved registry
+36-pod-no-gpu: admitted: a pod without GPUs is not checked (busybox from Docker Hub)

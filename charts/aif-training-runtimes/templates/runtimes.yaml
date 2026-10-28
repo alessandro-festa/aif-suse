@@ -1,0 +1,214 @@
+{{- range .Values.runtimes }}
+{{- $net := mergeOverwrite (deepCopy $.Values.network) (.network | default dict) }}
+{{- $rdma := $net.rdma | default dict }}
+{{- $hours := .maxRuntimeHours | default $.Values.policy.maxRuntimeHours | default 0 }}
+{{- $shm := .shmSize | default $.Values.shmSize }}
+{{- $res := .resources | default dict }}
+---
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: ClusterTrainingRuntime
+metadata:
+  name: {{ .name }}
+  labels:
+    trainer.kubeflow.org/framework: torch
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+    app.kubernetes.io/part-of: aif-training-runtimes
+    ai-factory.suse.com/runtime-kind: {{ .kind }}
+    ai-factory.suse.com/purpose: {{ .purpose | default "training" }}
+  annotations:
+    # what a Profiles page and `client.list_runtimes()` show
+    description: {{ .description | quote }}
+    ai-factory.suse.com/display-name: {{ .displayName | default .name | quote }}
+    ai-factory.suse.com/framework: {{ .framework | default "PyTorch" | quote }}
+    ai-factory.suse.com/status: {{ .status | default "ready" | quote }}
+    {{- with .gpu }}
+    ai-factory.suse.com/gpu: {{ . | quote }}
+    {{- end }}
+    {{- with .requires }}
+    ai-factory.suse.com/requires: {{ toJson . | quote }}
+    {{- end }}
+    {{- with .gpuMemoryMiB }}
+    ai-factory.suse.com/gpu-memory-mib: {{ . | quote }}
+    {{- end }}
+    ai-factory.suse.com/max-nodes: {{ .maxNodes | quote }}
+    {{- with .maxGpusPerNode }}
+    ai-factory.suse.com/max-gpus-per-node: {{ . | quote }}
+    {{- end }}
+    {{- if $hours }}
+    ai-factory.suse.com/max-runtime-hours: {{ $hours | quote }}
+    {{- end }}
+    {{- with (.registries | default $.Values.policy.registries) }}
+    ai-factory.suse.com/registries: {{ join "," . | quote }}
+    {{- end }}
+spec:
+  mlPolicy:
+    numNodes: 1
+    # torchrun's processes per node: Trainer picks them (a process per GPU). Trainer 2.2 dropped the
+    # numProcPerNode field, and 2.1 defaults it to auto.
+    torch: {}
+  template:
+    spec:
+      {{- if $.Values.outputs.enabled }}
+      # A volume per TrainJob for its outputs, created by JobSet (v0.11 or later) and shared by the
+      # job's nodes; kept after the job is deleted when retain is set.
+      volumeClaimPolicies:
+        - templates:
+            - metadata:
+                name: outputs
+                # JobSet adds jobset.sigs.k8s.io/jobset-name: <job>; these mark it as a run's outputs
+                labels:
+                  ai-factory.suse.com/kind: outputs
+                  app.kubernetes.io/part-of: aif-training-runtimes
+              spec:
+                accessModes: {{ toJson $.Values.outputs.accessModes }}
+                {{- with $.Values.outputs.storageClassName }}
+                storageClassName: {{ . }}
+                {{- end }}
+                resources:
+                  requests:
+                    storage: {{ $.Values.outputs.size }}
+          retentionPolicy:
+            whenDeleted: {{ if $.Values.outputs.retain }}Retain{{ else }}Delete{{ end }}
+      {{- end }}
+      replicatedJobs:
+        - name: node
+          groupName: default
+          replicas: 1
+          template:
+            metadata:
+              labels:
+                trainer.kubeflow.org/trainjob-ancestor-step: trainer
+            spec:
+              {{- if $hours }}
+              # the profile's runtime limit: each node's Job fails after it (counted from when its
+              # pods are created, so time waiting in KAI's queue counts too)
+              activeDeadlineSeconds: {{ mul $hours 3600 }}
+              {{- end }}
+              template:
+                {{- if or (eq .kind "share") $net.multusNetwork }}
+                metadata:
+                  annotations:
+                    {{- if eq .kind "share" }}
+                    # the profile's share of one GPU's memory, in MiB (KAI)
+                    gpu-memory: {{ .gpuMemoryMiB | quote }}
+                    {{- end }}
+                    {{- with $net.multusNetwork }}
+                    # the secondary interface NCCL uses (Multus NetworkAttachmentDefinition)
+                    k8s.v1.cni.cncf.io/networks: {{ . | quote }}
+                    {{- end }}
+                {{- end }}
+                spec:
+                  schedulerName: {{ $.Values.schedulerName }}
+                  {{- with .priorityClassName }}
+                  priorityClassName: {{ . }}
+                  {{- end }}
+                  {{- if $net.hostNetwork }}
+                  # the node's network namespace (an RDMA rail with no pod-network presence); the
+                  # matching dnsPolicy keeps cluster Services, and so the rendezvous, resolvable
+                  hostNetwork: true
+                  dnsPolicy: ClusterFirstWithHostNet
+                  {{- end }}
+                  {{- with (.nodeSelector | default $.Values.nodeSelector) }}
+                  nodeSelector:
+                    {{- toYaml . | nindent 20 }}
+                  {{- end }}
+                  {{- with (.tolerations | default $.Values.tolerations) }}
+                  tolerations:
+                    {{- toYaml . | nindent 20 }}
+                  {{- end }}
+                  {{- with (.imagePullSecrets | default $.Values.imagePullSecrets) }}
+                  imagePullSecrets:
+                    {{- toYaml . | nindent 20 }}
+                  {{- end }}
+                  containers:
+                    - name: node
+                      image: {{ .image | default $.Values.image }}
+                      env:
+                        {{- if $.Values.outputs.enabled }}
+                        - name: OUTPUT_DIR
+                          value: {{ $.Values.outputs.mountPath }}
+                        {{- end }}
+                        {{- if ne .kind "cpu" }}
+                        - name: NCCL_DEBUG
+                          value: {{ $net.ncclDebug | default "WARN" | quote }}
+                        - name: NCCL_IB_DISABLE
+                          value: {{ if $rdma.enabled }}"0"{{ else }}{{ $net.ncclIbDisable | default "1" | quote }}{{ end }}
+                        {{- range $k, $env := dict "ncclSocketIfname" "NCCL_SOCKET_IFNAME" "ncclIbHca" "NCCL_IB_HCA" "ncclIbGidIndex" "NCCL_IB_GID_INDEX" "ncclNetGdrLevel" "NCCL_NET_GDR_LEVEL" "ncclCrossNic" "NCCL_CROSS_NIC" }}
+                        {{- with (get $net $k) }}
+                        - name: {{ $env }}
+                          value: {{ . | quote }}
+                        {{- end }}
+                        {{- end }}
+                        {{- if and $rdma.enabled $rdma.hostLibPath }}
+                        # the node's libibverbs, librdmacm and provider libraries, ahead of CUDA's
+                        - name: LD_LIBRARY_PATH
+                          value: {{ printf "%s:/usr/local/nvidia/lib64:/usr/local/cuda/lib64" ($rdma.hostLibMountPath | default "/host-rdma-libs") | quote }}
+                        {{- end }}
+                        {{- end }}
+                        {{- range .env }}
+                        - {{ toYaml . | nindent 26 | trim }}
+                        {{- end }}
+                      {{- if or $res (and $rdma.enabled $rdma.resourceName) }}
+                      resources:
+                        {{- with $res.requests }}
+                        requests:
+                          {{- toYaml . | nindent 26 }}
+                        {{- end }}
+                        {{- if or $res.limits (and $rdma.enabled $rdma.resourceName) }}
+                        limits:
+                          {{- with $res.limits }}
+                          {{- toYaml . | nindent 26 }}
+                          {{- end }}
+                          {{- if and $rdma.enabled $rdma.resourceName }}
+                          {{ $rdma.resourceName }}: {{ $rdma.resourceCount | default 1 }}
+                          {{- end }}
+                        {{- end }}
+                      {{- end }}
+                      {{- if $rdma.enabled }}
+                      securityContext:
+                        {{- if $rdma.resourceName }}
+                        # an RDMA device plugin hands over the HCA; libibverbs still pins memory
+                        capabilities:
+                          add: ["IPC_LOCK"]
+                        {{- else }}
+                        # the verbs devices from the node: libibverbs needs a privileged container to open them
+                        privileged: true
+                        {{- end }}
+                      {{- end }}
+                      volumeMounts:
+                        {{- if $.Values.outputs.enabled }}
+                        - name: outputs
+                          mountPath: {{ $.Values.outputs.mountPath }}
+                        {{- end }}
+                        {{- if $shm }}
+                        - name: dshm
+                          mountPath: /dev/shm
+                        {{- end }}
+                        {{- if and $rdma.enabled (not $rdma.resourceName) }}
+                        - name: rdma-devices
+                          mountPath: {{ $rdma.devicePath | default "/dev/infiniband" }}
+                        {{- end }}
+                        {{- if and $rdma.enabled $rdma.hostLibPath }}
+                        - name: rdma-libs
+                          mountPath: {{ $rdma.hostLibMountPath | default "/host-rdma-libs" }}
+                          readOnly: true
+                        {{- end }}
+                  volumes:
+                    {{- if $shm }}
+                    # NCCL's and the data loaders' shared memory: the container default is 64 MiB
+                    - name: dshm
+                      emptyDir:
+                        medium: Memory
+                        sizeLimit: {{ $shm }}
+                    {{- end }}
+                    {{- if and $rdma.enabled (not $rdma.resourceName) }}
+                    - name: rdma-devices
+                      hostPath:
+                        path: {{ $rdma.devicePath | default "/dev/infiniband" }}
+                    {{- end }}
+                    {{- if and $rdma.enabled $rdma.hostLibPath }}
+                    - name: rdma-libs
+                      hostPath:
+                        path: {{ $rdma.hostLibPath }}
+                    {{- end }}
+{{- end }}

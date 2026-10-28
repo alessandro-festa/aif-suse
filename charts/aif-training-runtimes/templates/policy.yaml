@@ -1,0 +1,270 @@
+{{- if .Values.policy.enabled }}
+{{- $q := .Values.policy.queueLabel }}
+{{- $names := list }}
+{{- range .Values.runtimes }}{{ $names = append $names .name }}{{ end }}
+{{- $shares := list }}
+{{- range .Values.runtimes }}{{ if eq .kind "share" }}{{ $shares = append $shares (printf "%s: %d MiB" .name (int .gpuMemoryMiB)) }}{{ end }}{{ end }}
+{{- $rwx := has "ReadWriteMany" .Values.outputs.accessModes }}
+# TrainJobs stay in their project's KAI queue and within their runtime's limits. Checked when a
+# TrainJob is created or its spec changes, not on the controller's own updates (finalizers, status).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: aif-trainjobs
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: aif-training-runtimes
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["trainer.kubeflow.org"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["trainjobs"]
+  matchConditions:
+    - name: created-or-spec-changed
+      expression: request.operation == 'CREATE' || oldObject.spec != object.spec
+  variables:
+    - name: runtime
+      expression: object.spec.runtimeRef.name
+    - name: runtimeKind
+      expression: object.spec.runtimeRef.?kind.orValue('ClusterTrainingRuntime')
+    # the project's queue: its namespace's label
+    - name: nsQueue
+      expression: namespaceObject.metadata.?labels[?'{{ $q }}'].orValue('')
+    # The trainer pods' metadata, from every patch that sets it: podTemplateOverrides (Trainer 2.1,
+    # a list of maps) and runtimePatches (Trainer 2.2 and later, as in SUSE's Kubeflow chart 0.4; a
+    # list per patch). Every entry is checked: a later patch can override an earlier one.
+    - name: pto
+      expression: >-
+        object.spec.?podTemplateOverrides.orValue([])
+          .filter(o, o.targetJobs.exists(t, t.name == 'node'))
+          .map(o, o.?metadata.orValue({}))
+    - name: rp
+      expression: >-
+        object.spec.?runtimePatches.orValue([]).map(p,
+          p.?trainingRuntimeSpec.?template.?spec.?replicatedJobs.orValue([])
+            .filter(r, r.name == 'node')
+            .map(r, r.?template.?spec.?template.?metadata.orValue({})))
+    # ... and their pod spec, from the same patches
+    - name: ptoSpec
+      expression: >-
+        object.spec.?podTemplateOverrides.orValue([])
+          .filter(o, o.targetJobs.exists(t, t.name == 'node'))
+          .map(o, o.?spec.orValue({}))
+    - name: rpSpec
+      expression: >-
+        object.spec.?runtimePatches.orValue([]).map(p,
+          p.?trainingRuntimeSpec.?template.?spec.?replicatedJobs.orValue([])
+            .filter(r, r.name == 'node')
+            .map(r, r.?template.?spec.?template.?spec.orValue({})))
+    - name: image
+      expression: object.spec.?trainer.?image.orValue('')
+    - name: hasQueue
+      expression: >-
+        {{ include "aif.anyMeta" (printf "m.?labels[?'%s'].hasValue()" $q) }}
+    - name: queuesMatch
+      expression: >-
+        {{ include "aif.allMeta" (printf "!m.?labels[?'%s'].hasValue() || m.labels['%s'] == variables.nsQueue" $q $q) }}
+    # KAI's GPU-share annotations: a job's share comes from its profile, never from its patches
+    - name: hasShare
+      expression: >-
+        {{ include "aif.anyMeta" (printf "%s.exists(k, m.?annotations[?k].hasValue())" (toJson .Values.policy.shareAnnotations)) }}
+    - name: numNodes
+      expression: object.spec.?trainer.?numNodes.orValue(1)
+    # what the job asks for per node, beside GPUs (quantities, int-or-string: dyn() as below)
+    - name: cpu
+      expression: >-
+        object.spec.?trainer.?resourcesPerNode.?limits[?'cpu'].orValue(
+          object.spec.?trainer.?resourcesPerNode.?requests[?'cpu'].orValue('0'))
+    - name: memory
+      expression: >-
+        object.spec.?trainer.?resourcesPerNode.?limits[?'memory'].orValue(
+          object.spec.?trainer.?resourcesPerNode.?requests[?'memory'].orValue('0'))
+    # A quantity (int-or-string): typed as a string when the policy is compiled, an int or a string
+    # at run time. dyn() converts from what is there.
+    - name: gpusPerNode
+      expression: >-
+        int(dyn(object.spec.?trainer.?resourcesPerNode.?limits[?'nvidia.com/gpu'].orValue(
+          object.spec.?trainer.?resourcesPerNode.?requests[?'nvidia.com/gpu'].orValue(0))))
+  validations:
+    {{- if .Values.policy.runtimesOnly }}
+    - expression: variables.runtimeKind == 'ClusterTrainingRuntime' && variables.runtime in {{ toJson $names }}
+      messageExpression: >-
+        "TrainJobs here use one of the AI Factory ClusterTrainingRuntimes ({{ join ", " $names }}), not " +
+        variables.runtimeKind + " " + variables.runtime
+      reason: Forbidden
+    {{- end }}
+    - expression: variables.nsQueue != ''
+      messageExpression: >-
+        "namespace " + namespaceObject.metadata.name + " has no KAI queue ({{ $q }} label): is it an AI Factory project with a GPU quota?"
+      reason: Forbidden
+    - expression: variables.hasQueue && variables.queuesMatch
+      messageExpression: >-
+        "this project's TrainJobs run in KAI queue " + variables.nsQueue + ": label the trainer pods {{ $q }}: " + variables.nsQueue + " (podTemplateOverrides on Trainer 2.1, runtimePatches on 2.2 and later), in every patch that sets it"
+      reason: Forbidden
+    - expression: "!variables.hasShare"
+      messageExpression: >-
+        "a job's GPU share comes from its profile ({{ join ", " $shares }}): remove {{ join ", " .Values.policy.shareAnnotations }} from the job's patches"
+      reason: Invalid
+    {{- if not .Values.policy.allowPlacement }}
+    - expression: >-
+        !{{ include "aif.anySpec" "s.?nodeSelector.hasValue() || s.?affinity.hasValue() || s.?tolerations.hasValue()" }}
+      message: "a job's placement comes from its profile: remove nodeSelector, affinity and tolerations from the job's patches"
+      reason: Forbidden
+    {{- end }}
+    # The profile decides how its pods run: a job can't widen it through its patches
+    - expression: >-
+        !{{ include "aif.anySpec" "s.?securityContext.hasValue() || s.?containers.orValue([]).exists(c, c.?securityContext.hasValue()) || s.?initContainers.orValue([]).exists(c, c.?securityContext.hasValue())" }}
+      message: "a job's security settings come from its profile: remove securityContext from the job's patches"
+      reason: Forbidden
+    - expression: >-
+        !{{ include "aif.anySpec" "s.?serviceAccountName.hasValue()" }}
+      message: "a job runs as its profile's service account: remove serviceAccountName from the job's patches"
+      reason: Forbidden
+    - expression: >-
+        !{{ include "aif.anySpec" "s.?volumes.orValue([]).exists(v, !(v.?persistentVolumeClaim.hasValue() || v.?configMap.hasValue() || v.?secret.hasValue() || v.?emptyDir.hasValue() || v.?projected.hasValue() || v.?downwardAPI.hasValue() || v.?ephemeral.hasValue()))" }}
+      message: "a job may mount PersistentVolumeClaims, ConfigMaps, Secrets, emptyDir and ephemeral volumes, not node paths or other volume types"
+      reason: Forbidden
+    {{- range .Values.runtimes }}
+    {{- $n := .name }}
+    {{- $reg := .registries | default $.Values.policy.registries }}
+    {{- $hours := .maxRuntimeHours | default $.Values.policy.maxRuntimeHours | default 0 }}
+    {{- with $reg }}
+    - expression: variables.runtime != '{{ $n }}' || variables.image == '' || {{ toJson . }}.exists(p, variables.image.startsWith(p))
+      messageExpression: >-
+        "{{ $n }} runs images from {{ join ", " . }}, not " + variables.image
+      reason: Forbidden
+    {{- end }}
+    {{- if $hours }}
+    - expression: >-
+        variables.runtime != '{{ .name }}' || !object.spec.?activeDeadlineSeconds.hasValue() ||
+        object.spec.activeDeadlineSeconds <= {{ mul $hours 3600 }}
+      messageExpression: >-
+        "{{ .name }} runs for at most {{ $hours }} h (activeDeadlineSeconds {{ mul $hours 3600 }}), not " + string(object.spec.activeDeadlineSeconds) + " s"
+      reason: Invalid
+    {{- end }}
+    {{- with .maxCpu }}
+    - expression: >-
+        variables.runtime != '{{ $n }}' || quantity(string(dyn(variables.cpu))).compareTo(quantity('{{ . }}')) <= 0
+      messageExpression: >-
+        "{{ $n }} runs with at most {{ . }} CPU per node (resourcesPerNode), not " + string(dyn(variables.cpu))
+      reason: Invalid
+    {{- end }}
+    {{- with .maxMemory }}
+    - expression: >-
+        variables.runtime != '{{ $n }}' || quantity(string(dyn(variables.memory))).compareTo(quantity('{{ . }}')) <= 0
+      messageExpression: >-
+        "{{ $n }} runs with at most {{ . }} of memory per node (resourcesPerNode), not " + string(dyn(variables.memory))
+      reason: Invalid
+    {{- end }}
+    - expression: variables.runtime != '{{ .name }}' || variables.numNodes <= {{ .maxNodes }}
+      messageExpression: >-
+        "{{ .name }} runs on at most {{ .maxNodes }} node(s), not " + string(variables.numNodes)
+      reason: Invalid
+    {{- if eq .kind "gpu" }}
+    - expression: variables.runtime != '{{ .name }}' || (variables.gpusPerNode >= 1 && variables.gpusPerNode <= {{ .maxGpusPerNode }})
+      messageExpression: >-
+        "{{ .name }} runs on 1 to {{ .maxGpusPerNode }} whole GPUs per node (resourcesPerNode nvidia.com/gpu), not " + string(variables.gpusPerNode)
+      reason: Invalid
+    {{- else }}
+    - expression: variables.runtime != '{{ .name }}' || variables.gpusPerNode == 0
+      message: "{{ .name }} does not take whole GPUs (resourcesPerNode nvidia.com/gpu); use the GPU runtime for them"
+      reason: Invalid
+    {{- end }}
+    {{- end }}
+    {{- if and .Values.outputs.enabled (not $rwx) }}
+    # one outputs volume per job, ReadWriteOnce: it attaches to one node only
+    - expression: variables.numNodes <= 1
+      messageExpression: >-
+        "this cluster's outputs volumes are ReadWriteOnce, which attach to one node: a " + string(variables.numNodes) + "-node run needs ReadWriteMany outputs (outputs.accessModes)"
+      reason: Invalid
+    {{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: aif-trainjobs
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: aif-training-runtimes
+spec:
+  policyName: aif-trainjobs
+  validationActions: {{ toJson .Values.policy.actions }}
+  {{- with .Values.policy.namespaceSelector }}
+  matchResources:
+    namespaceSelector:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+{{- if .Values.policy.pods.enabled }}
+---
+# The backstop: any pod that asks for GPUs in a project namespace (whole GPUs, or a KAI share)
+# goes through KAI in its project's queue, however it was created. The TrainJob policy gives the
+# readable error early; this one closes the pod-create route. Checked on create: KAI updates the
+# pods it places.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: aif-gpu-pods
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: aif-training-runtimes
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+  matchConditions:
+    - name: asks-for-gpus
+      expression: >-
+        object.spec.?schedulerName.orValue('') == '{{ .Values.schedulerName }}' ||
+        {{ toJson .Values.policy.shareAnnotations }}.exists(k, object.metadata.?annotations[?k].hasValue()) ||
+        (object.spec.containers + object.spec.?initContainers.orValue([])).exists(c,
+          c.?resources.?limits[?'nvidia.com/gpu'].hasValue() || c.?resources.?requests[?'nvidia.com/gpu'].hasValue())
+  variables:
+    - name: nsQueue
+      expression: namespaceObject.metadata.?labels[?'{{ $q }}'].orValue('')
+    # every image the pod runs, however it was set: the profile, trainer.image, a patch, a Deployment
+    - name: images
+      expression: >-
+        (object.spec.containers + object.spec.?initContainers.orValue([])).map(c, c.image)
+  validations:
+    {{- with .Values.policy.registries }}
+    - expression: variables.images.all(i, {{ toJson . }}.exists(p, i.startsWith(p)))
+      messageExpression: >-
+        "pods that use GPUs in this project run images from {{ join ", " . }}, not " +
+        variables.images.filter(i, !{{ toJson . }}.exists(p, i.startsWith(p))).join(", ")
+      reason: Forbidden
+    {{- end }}
+    - expression: object.spec.?schedulerName.orValue('') == '{{ .Values.schedulerName }}'
+      message: "pods that use GPUs in this project are scheduled by KAI: set schedulerName: {{ .Values.schedulerName }}"
+      reason: Forbidden
+    - expression: >-
+        variables.nsQueue != '' && object.metadata.?labels[?'{{ $q }}'].orValue('') == variables.nsQueue
+      messageExpression: >-
+        variables.nsQueue == '' ?
+          "namespace " + namespaceObject.metadata.name + " has no KAI queue ({{ $q }} label): is it an AI Factory project with a GPU quota?" :
+          "pods that use GPUs in this project run in its KAI queue: label them {{ $q }}: " + variables.nsQueue
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: aif-gpu-pods
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/part-of: aif-training-runtimes
+spec:
+  policyName: aif-gpu-pods
+  validationActions: {{ toJson .Values.policy.actions }}
+  {{- with .Values.policy.namespaceSelector }}
+  matchResources:
+    namespaceSelector:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+{{- end }}
+{{- end }}
