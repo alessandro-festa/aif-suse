@@ -1,0 +1,28 @@
+apiVersion: scheduling.run.ai/v2
+kind: Queue
+metadata: { name: aif-root }
+spec:
+  resources:
+    gpu:    { quota: -1, limit: -1, overQuotaWeight: 1 }
+    cpu:    { quota: -1, limit: -1, overQuotaWeight: 1 }
+    memory: { quota: -1, limit: -1, overQuotaWeight: 1 }
+---
+apiVersion: scheduling.run.ai/v2
+kind: Queue
+metadata: { name: aif-submit }
+spec:
+  parentQueue: aif-root
+  resources:
+    gpu:    { quota: 1, limit: -1, overQuotaWeight: 1 }
+    cpu:    { quota: -1, limit: -1, overQuotaWeight: 1 }
+    memory: { quota: -1, limit: -1, overQuotaWeight: 1 }
+---
+apiVersion: scheduling.run.ai/v2
+kind: Queue
+metadata: { name: scdoc-transcription }
+spec:
+  parentQueue: aif-root
+  resources:
+    gpu:    { quota: 0, limit: -1, overQuotaWeight: 1 }
+    cpu:    { quota: -1, limit: -1, overQuotaWeight: 1 }
+    memory: { quota: -1, limit: -1, overQuotaWeight: 1 }

@@ -1,0 +1,3 @@
+# Dave's defaults, plus outputs (policy case 18 expects RWO outputs volumes)
+outputs:
+  enabled: true
