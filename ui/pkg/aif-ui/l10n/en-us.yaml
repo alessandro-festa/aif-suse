@@ -1,5 +1,8 @@
 product:
   suseai: SUSE AI Factory
+nav:
+  group:
+    aifWorkloads: Workloads
 suseai:
   product:
     name: SUSE AI

@@ -59,6 +59,9 @@ export const PAGE_TYPES = {
   REPOSITORIES: 'repositories',
   BLUEPRINTS:   'blueprints',
   WORKLOADS:    'workloads',
+  // Workloads group: Kubeflow Trainer scheduling (KAI queues, project onboarding, runtimes, TrainJobs).
+  // Prefixed so Rancher's nav never mistakes it for a resource type of the same name.
+  SCHEDULING:   'aif-scheduling',
   SETTINGS:     'settings',
   ABOUT:        'about',
 } as const;
@@ -100,11 +103,20 @@ export const VIRTUAL_TYPES: VirtualTypeConfig[] = [
   },
   {
     name:  PAGE_TYPES.WORKLOADS,
-    label: 'Workloads',
+    label: 'Deployments',
     route: {
       name:   `c-cluster-${ PRODUCT }-${ PAGE_TYPES.WORKLOADS }`,
       params: { product: PRODUCT, cluster: BLANK_CLUSTER },
       meta:   { product: PRODUCT }
+    }
+  },
+  {
+    name:  PAGE_TYPES.SCHEDULING,
+    label: 'Scheduling',
+    route: {
+      name:   `c-cluster-${ PRODUCT }-${ PAGE_TYPES.SCHEDULING }`,
+      params: { product: PRODUCT, cluster: MANAGEMENT_CLUSTER },
+      meta:   { product: PRODUCT, cluster: MANAGEMENT_CLUSTER }
     }
   },
   {
@@ -132,13 +144,20 @@ export const NAV_WEIGHTS: Record<string, number> = {
   [PAGE_TYPES.OVERVIEW]:   50,
   [PAGE_TYPES.APPS]:       40,
   [PAGE_TYPES.BLUEPRINTS]: 30,
-  [PAGE_TYPES.WORKLOADS]:  20,
   [PAGE_TYPES.SETTINGS]:   10,
+  // Order inside the Workloads group
+  [PAGE_TYPES.WORKLOADS]:  2,
+  [PAGE_TYPES.SCHEDULING]: 1,
   [PAGE_TYPES.ABOUT]:      5,
 };
 
 // === Basic Types Configuration ===
-export const BASIC_TYPES = [PAGE_TYPES.OVERVIEW, PAGE_TYPES.APPS, PAGE_TYPES.BLUEPRINTS, PAGE_TYPES.WORKLOADS, PAGE_TYPES.SETTINGS, PAGE_TYPES.ABOUT];
+export const BASIC_TYPES = [PAGE_TYPES.OVERVIEW, PAGE_TYPES.APPS, PAGE_TYPES.BLUEPRINTS, PAGE_TYPES.SETTINGS, PAGE_TYPES.ABOUT];
+
+// Workloads is a sub-menu: inference deployments plus scheduling. Label from l10n nav.group.aifWorkloads.
+export const WORKLOADS_GROUP = 'aifWorkloads';
+export const WORKLOADS_GROUP_WEIGHT = 20;
+export const WORKLOADS_GROUP_TYPES = [PAGE_TYPES.WORKLOADS, PAGE_TYPES.SCHEDULING];
 
 // === Export defaults ===
 export default SUSEAI_PRODUCT;

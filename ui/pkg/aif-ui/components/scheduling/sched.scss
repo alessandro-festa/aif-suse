@@ -1,0 +1,23 @@
+// Shared look for the Scheduling tabs: plain tables, outlined tags and status dots (no solid badges).
+.toolbar { display: flex; align-items: center; gap: 12px; margin: 8px 0 12px; }
+.toolbar .grow { flex: 1; }
+table.grid { width: 100%; border-collapse: collapse; }
+table.grid th { text-align: left; font-weight: 600; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.grid td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.grid tr.sub td { background: var(--body-bg); }
+.tag { display: inline-block; border: 1px solid var(--border); border-radius: 10px; padding: 0 8px; font-size: 12px; line-height: 20px; margin: 0 4px 2px 0; white-space: nowrap; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; background: var(--muted); }
+.dot.ok { background: var(--success); }
+.dot.warn { background: var(--warning); }
+.dot.bad { background: var(--error); }
+.dot.run { background: var(--info); }
+.muted { color: var(--muted); }
+.err { color: var(--error); }
+.empty { padding: 24px; text-align: center; color: var(--muted); }
+.mono { font-family: monospace; font-size: 12px; }
+.actions { white-space: nowrap; text-align: right; }
+.actions .btn { margin-left: 6px; }
+.form { border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-bottom: 16px; }
+.form .row { display: flex; gap: 12px; margin-bottom: 12px; }
+.form .row > * { flex: 1; }
+pre.log { max-height: 360px; overflow: auto; background: var(--body-bg); border: 1px solid var(--border); padding: 8px; font-size: 12px; white-space: pre-wrap; }

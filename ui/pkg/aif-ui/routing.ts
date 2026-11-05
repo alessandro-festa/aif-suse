@@ -69,6 +69,14 @@ export default [
     meta:      { product: PRODUCT, category: 'settings' }
   },
 
+  // Workloads > Scheduling: KAI queues, project onboarding, runtimes and TrainJobs
+  {
+    name:      `c-cluster-${ PRODUCT }-${ PAGE_TYPES.SCHEDULING }`,
+    path:      `/c/:cluster/${ PRODUCT }/${ PAGE_TYPES.SCHEDULING }`,
+    component: () => import('./pages/Scheduling.vue'),
+    meta:      { product: PRODUCT, category: 'scheduling' }
+  },
+
   // Blueprints list page
   {
     name:      `c-cluster-${ PRODUCT }-${ PAGE_TYPES.BLUEPRINTS }`,
